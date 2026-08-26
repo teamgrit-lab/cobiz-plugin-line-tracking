@@ -1,7 +1,8 @@
 import numpy as np
 
 from line_tracking.segmentation import SegmentationResult
-from tools.segment_video import render_segmentation_overlay, select_profile
+from line_tracking.vision import VisionConfig, YellowLineVision
+from tools.segment_video import render_opencv_overlay, render_segmentation_overlay, select_profile
 
 
 def test_auto_profile_matches_video_height():
@@ -34,3 +35,13 @@ def test_overlay_keeps_masks_visibly_distinct():
     assert line_pixel[1] > line_pixel[0]
     assert line_pixel[2] > line_pixel[0]
     assert output.shape == frame.shape
+
+
+def test_opencv_overlay_marks_yellow_mask_and_roi():
+    frame = np.zeros((40, 60, 3), dtype=np.uint8)
+    vision = YellowLineVision(VisionConfig())
+    result = vision.process(frame)
+    output = render_opencv_overlay(frame, result, show_legend=False)
+    assert output.shape == frame.shape
+    assert result.road_mask is None
+    assert result.raw_line_mask is None

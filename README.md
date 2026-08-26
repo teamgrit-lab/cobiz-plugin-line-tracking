@@ -115,6 +115,20 @@ PYTHONPATH=ros_ws/src/line_tracking python3 tools/segment_video.py \
 입력 영상의 오디오가 포함되지 않으며, OpenCV codec 문제로 출력이 열리지
 않으면 `--codec avc1` 또는 `--codec mp4v`를 시도합니다.
 
+AI 모델 없이 노란색만 확인하려면 OpenCV backend를 사용합니다. 이 모드는
+HSV와 LAB 색상 조건만 적용하며, 초록색 도로 mask는 생성하지 않습니다.
+
+```bash
+uv run python tools/segment_video.py \
+  --backend opencv \
+  --input /path/to/input.mp4 \
+  --output /path/to/output_opencv_yellow.mp4
+```
+
+OpenCV 결과의 노란색은 실제 색상 검출 mask이고, 흰색 선은 ROI 경계입니다.
+필요하면 `--hsv-lower H S V`, `--hsv-upper H S V`,
+`--lab-b-min N`, `--adaptive-lab-percentile N`으로 조정할 수 있습니다.
+
 다른 카메라/제어 토픽을 쓰는 경우 `.env`의 `IMAGE_TOPIC`과 `JOY_TOPIC`을
 명시적으로 바꿉니다. `CONTROL_TOPIC`은 `JOY_TOPIC`의 별칭입니다. 같은 설정은
 `ros_ws/src/line_tracking/config/line_tracking.yaml`의 `image_topic`과

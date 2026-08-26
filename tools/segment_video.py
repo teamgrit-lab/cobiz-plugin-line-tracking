@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a YOLOP road/line segmentation overlay video.
+"""Generate a YOLOP or OpenCV yellow-line overlay video.
 
 The output keeps the input video's frame size and frame rate.  It does not
 copy the input audio stream because OpenCV's ``VideoWriter`` only writes video
@@ -27,6 +27,7 @@ from line_tracking.segmentation import (  # noqa: E402
     YolopConfig,
     YolopSegmenter,
 )
+from line_tracking.vision import VisionConfig, VisionResult, YellowLineVision  # noqa: E402
 
 
 PROFILE_INPUTS = {
@@ -116,9 +117,51 @@ def render_segmentation_overlay(
     return output
 
 
+def render_opencv_overlay(
+    frame_bgr: np.ndarray,
+    result: VisionResult,
+    *,
+    show_legend: bool = True,
+) -> np.ndarray:
+    """Render the OpenCV-only yellow-color mask and configured ROI."""
+
+    output = frame_bgr.copy()
+    _paint_mask(output, result.mask, (0, 255, 255), 0.75)
+    if result.roi_polygon_px.size:
+        polygon = result.roi_polygon_px.reshape(-1, 1, 2).astype(np.int32)
+        cv2.polylines(output, [polygon], isClosed=True, color=(255, 255, 255), thickness=2)
+
+    if show_legend:
+        cv2.rectangle(output, (12, 12), (330, 92), (0, 0, 0), -1)
+        cv2.rectangle(output, (12, 12), (330, 92), (220, 220, 220), 1)
+        cv2.line(output, (25, 38), (50, 38), (0, 255, 255), 6)
+        cv2.putText(
+            output,
+            "OPENCV YELLOW MASK",
+            (62, 43),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.line(output, (25, 68), (50, 68), (255, 255, 255), 2)
+        cv2.putText(
+            output,
+            "ROI",
+            (62, 73),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+    return output
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run YOLOP road/lane segmentation over a video and save an overlay."
+        description="Run YOLOP or OpenCV yellow-line segmentation over a video."
     )
     parser.add_argument("--input", required=True, type=Path, help="input video path")
     parser.add_argument(
@@ -128,9 +171,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--model",
         "--model-path",
         dest="model_path",
-        required=True,
         type=Path,
-        help="YOLOP ONNX model path",
+        help="YOLOP ONNX model path; required for --backend yolop",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=("yolop", "opencv"),
+        default="yolop",
+        help="segmentation backend; opencv uses HSV/LAB color detection only",
     )
     parser.add_argument(
         "--profile",
@@ -160,17 +208,47 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not draw the color legend on output frames",
     )
+    parser.add_argument(
+        "--hsv-lower",
+        nargs=3,
+        type=int,
+        metavar=("H", "S", "V"),
+        default=(14, 45, 40),
+        help="OpenCV lower HSV threshold",
+    )
+    parser.add_argument(
+        "--hsv-upper",
+        nargs=3,
+        type=int,
+        metavar=("H", "S", "V"),
+        default=(42, 255, 255),
+        help="OpenCV upper HSV threshold",
+    )
+    parser.add_argument(
+        "--lab-b-min",
+        type=int,
+        default=135,
+        help="OpenCV minimum LAB b-channel threshold",
+    )
+    parser.add_argument(
+        "--adaptive-lab-percentile",
+        type=float,
+        default=85.0,
+        help="OpenCV adaptive LAB percentile; use 0 to disable it",
+    )
     return parser
 
 
 def run(args: argparse.Namespace) -> int:
     input_path = args.input.expanduser().resolve()
     output_path = args.output.expanduser().resolve()
-    model_path = args.model_path.expanduser().resolve()
+    model_path = args.model_path.expanduser().resolve() if args.model_path else None
 
     if not input_path.is_file():
         raise FileNotFoundError(f"input video does not exist: {input_path}")
-    if not model_path.is_file():
+    if args.backend == "yolop" and model_path is None:
+        raise ValueError("--model is required when --backend is yolop")
+    if args.backend == "yolop" and not model_path.is_file():
         raise FileNotFoundError(f"YOLOP model does not exist: {model_path}")
     if input_path == output_path:
         raise ValueError("--output must be different from --input")
@@ -190,19 +268,31 @@ def run(args: argparse.Namespace) -> int:
     if not np.isfinite(fps) or fps <= 0.0:
         fps = 30.0
 
-    profile, input_width, input_height = select_profile(
-        args.profile, frame_width, frame_height
-    )
-    segmenter = YolopSegmenter(
-        YolopConfig(
-            model_path=str(model_path),
-            input_width=input_width,
-            input_height=input_height,
-            road_threshold=args.road_threshold,
-            line_threshold=args.line_threshold,
-            road_gate_kernel=args.road_gate_kernel,
+    segmenter = None
+    vision = None
+    if args.backend == "yolop":
+        profile, input_width, input_height = select_profile(
+            args.profile, frame_width, frame_height
         )
-    )
+        segmenter = YolopSegmenter(
+            YolopConfig(
+                model_path=str(model_path),
+                input_width=input_width,
+                input_height=input_height,
+                road_threshold=args.road_threshold,
+                line_threshold=args.line_threshold,
+                road_gate_kernel=args.road_gate_kernel,
+            )
+        )
+    else:
+        vision = YellowLineVision(
+            VisionConfig(
+                hsv_lower=tuple(args.hsv_lower),
+                hsv_upper=tuple(args.hsv_upper),
+                lab_b_min=args.lab_b_min,
+                adaptive_lab_percentile=args.adaptive_lab_percentile,
+            )
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(
@@ -219,20 +309,30 @@ def run(args: argparse.Namespace) -> int:
 
     frame_count = 0
     try:
-        print(
+        backend_details = (
             f"profile={profile} model_input={input_width}x{input_height} "
+            if args.backend == "yolop"
+            else "opencv_color=HSV+LAB "
+        )
+        print(
+            f"backend={args.backend} {backend_details}"
             f"video={frame_width}x{frame_height} fps={fps:.3f}"
         )
         while True:
             ok, frame = capture.read()
             if not ok:
                 break
-            result = segmenter.segment(frame)
-            writer.write(
-                render_segmentation_overlay(
+            if args.backend == "yolop":
+                result = segmenter.segment(frame)
+                overlay = render_segmentation_overlay(
                     frame, result, show_legend=not args.no_legend
                 )
-            )
+            else:
+                result = vision.process(frame)
+                overlay = render_opencv_overlay(
+                    frame, result, show_legend=not args.no_legend
+                )
+            writer.write(overlay)
             frame_count += 1
             if frame_count % 100 == 0:
                 print(f"processed_frames={frame_count}")

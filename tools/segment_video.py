@@ -30,8 +30,11 @@ from line_tracking.segmentation import (  # noqa: E402
 
 
 PROFILE_INPUTS = {
-    "360p": (640, 360),
-    "720p": (1280, 720),
+    # YOLOP's skip connections require dimensions divisible by 32. The
+    # camera frames remain 640x360 or 1280x720; the extra rows are letterbox
+    # padding removed again when masks are restored to the camera frame.
+    "360p": (640, 384),
+    "720p": (1280, 736),
 }
 
 

@@ -48,8 +48,10 @@ def generate_launch_description() -> LaunchDescription:
 
     profile = _optional_env("CAMERA_PROFILE")
     profile_defaults = {
-        "360p": (640, 360, "/models/yolop-360-640.onnx"),
-        "720p": (1280, 720, "/models/yolop-720-1280.onnx"),
+        # YOLOP requires model dimensions divisible by 32. The model adds
+        # only bottom letterbox padding relative to the 16:9 camera frame.
+        "360p": (640, 384, "/models/yolop-360-640.onnx"),
+        "720p": (1280, 736, "/models/yolop-720-1280.onnx"),
     }
     if profile is not None:
         profile = profile.lower()

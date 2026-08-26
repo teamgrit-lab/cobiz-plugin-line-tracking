@@ -49,5 +49,5 @@ def test_test_mode_topics_and_resolution_profiles_are_exposed():
     assert "TEST_MODE" in compose
     assert "test_centerline_topic" in config
     assert "nav_msgs" in (ROOT / "ros_ws/src/line_tracking/package.xml").read_text()
-    assert '"360p": (640, 360' in launch
-    assert '"720p": (1280, 720' in launch
+    assert '"360p": (640, 384' in launch
+    assert '"720p": (1280, 736' in launch

@@ -5,8 +5,8 @@ from tools.segment_video import render_segmentation_overlay, select_profile
 
 
 def test_auto_profile_matches_video_height():
-    assert select_profile("auto", 1280, 720) == ("720p", 1280, 720)
-    assert select_profile("auto", 640, 360) == ("360p", 640, 360)
+    assert select_profile("auto", 1280, 720) == ("720p", 1280, 736)
+    assert select_profile("auto", 640, 360) == ("360p", 640, 384)
 
 
 def test_overlay_keeps_masks_visibly_distinct():

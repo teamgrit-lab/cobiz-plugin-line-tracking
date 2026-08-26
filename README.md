@@ -123,7 +123,7 @@ override합니다.
 
 카메라 해상도에 맞추려면 `.env`에서 `CAMERA_PROFILE=360p` 또는 `720p`를
 선택합니다. profile은 각각 `yolop-360-640.onnx`/`yolop-720-1280.onnx`와
-입력 크기를 함께 선택합니다. 모델 export와 파일 배치는
+입력 크기(각각 640x384/1280x736)를 함께 선택합니다. 모델 export와 파일 배치는
 `models/README.md`를 참고합니다.
 
 ## 보정과 튜닝

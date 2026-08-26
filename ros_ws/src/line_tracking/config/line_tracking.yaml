@@ -26,10 +26,12 @@ line_tracking:
     # One-model mode: official YOLOP ONNX emits drive-area and lane-line masks
     # in one forward pass. Set SEGMENTATION_MODEL_PATH in .env to enable it.
     # Empty keeps the color fallback available for bring-up without weights.
+    # Model inputs are 640x384 and 1280x736 because YOLOP requires dimensions
+    # divisible by 32; letterbox padding is removed before publishing masks.
     # For 360p use yolop-360-640.onnx; for 720p use yolop-720-1280.onnx.
     segmentation_model_path: ""
     segmentation_input_width: 640
-    segmentation_input_height: 360
+    segmentation_input_height: 384
     road_threshold: 0.50
     line_threshold: 0.50
     road_gate_kernel: 21

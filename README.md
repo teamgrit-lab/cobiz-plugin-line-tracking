@@ -96,6 +96,25 @@ ros2 topic echo /line_tracking/test/metrics
 docker compose down
 ```
 
+## 동영상 segmentation overlay 생성
+
+ROS2 카메라 토픽이 없어도 동영상 파일을 YOLOP에 넣어 도로와 선 mask를
+overlay한 새 동영상을 만들 수 있습니다. 입력 동영상이 1280x720이면
+`--profile 720p`, 640x360이면 `--profile 360p`를 사용합니다.
+
+```bash
+PYTHONPATH=ros_ws/src/line_tracking python3 tools/segment_video.py \
+  --input /path/to/input.mp4 \
+  --output /path/to/output_yolop_overlay.mp4 \
+  --model models/yolop-720-1280.onnx \
+  --profile 720p
+```
+
+출력 overlay 색상은 초록=도로 영역, 빨강=raw 선 segmentation,
+노랑=도로 mask로 gating된 최종 선 segmentation입니다. 기본 출력에는
+입력 영상의 오디오가 포함되지 않으며, OpenCV codec 문제로 출력이 열리지
+않으면 `--codec avc1` 또는 `--codec mp4v`를 시도합니다.
+
 다른 카메라/제어 토픽을 쓰는 경우 `.env`의 `IMAGE_TOPIC`과 `JOY_TOPIC`을
 명시적으로 바꿉니다. `CONTROL_TOPIC`은 `JOY_TOPIC`의 별칭입니다. 같은 설정은
 `ros_ws/src/line_tracking/config/line_tracking.yaml`의 `image_topic`과

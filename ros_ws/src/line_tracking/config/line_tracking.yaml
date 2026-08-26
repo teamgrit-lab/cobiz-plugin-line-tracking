@@ -1,0 +1,84 @@
+line_tracking:
+  ros__parameters:
+    image_topic: /a2/front_camera/image_raw
+    joy_topic: /a2_control
+    joy_frame_id: line_tracking
+    debug_image_topic: /line_tracking/debug_image
+    mask_topic: /line_tracking/mask
+    confidence_topic: /line_tracking/confidence
+    # Select 360p or 720p model/input settings. The launch file can override
+    # this profile with CAMERA_PROFILE from .env.
+    camera_profile: 360p
+    input_reliability: best_effort
+    input_qos_depth: 5
+    frame_timeout_sec: 0.5
+    publish_debug: true
+    test_mode: false
+    publish_control_in_test_mode: false
+    test_debug_image_topic: /line_tracking/test/debug_image
+    test_road_mask_topic: /line_tracking/test/road_mask
+    test_line_mask_topic: /line_tracking/test/line_mask
+    test_birdseye_mask_topic: /line_tracking/test/birdseye_mask
+    test_centerline_topic: /line_tracking/test/centerline
+    test_metrics_topic: /line_tracking/test/metrics
+    centerline_frame_id: base_link
+
+    # One-model mode: official YOLOP ONNX emits drive-area and lane-line masks
+    # in one forward pass. Set SEGMENTATION_MODEL_PATH in .env to enable it.
+    # Empty keeps the color fallback available for bring-up without weights.
+    # For 360p use yolop-360-640.onnx; for 720p use yolop-720-1280.onnx.
+    segmentation_model_path: ""
+    segmentation_input_width: 640
+    segmentation_input_height: 360
+    road_threshold: 0.50
+    line_threshold: 0.50
+    road_gate_kernel: 21
+
+    # Legacy fallback used only when segmentation_model_path is empty.
+    hsv_lower: [14, 45, 40]
+    hsv_upper: [42, 255, 255]
+    lab_b_min: 135
+    adaptive_lab_percentile: 85.0
+    clahe_clip_limit: 2.0
+    clahe_grid_size: 8
+    open_kernel: 3
+    close_kernel: 7
+    min_component_area_px: 80
+
+    # Four normalized (x, y) points in bottom-left, bottom-right,
+    # top-right, top-left order. Recalibrate for the physical camera mounting.
+    roi_polygon: [0.10, 1.00, 0.90, 1.00, 0.65, 0.45, 0.35, 0.45]
+    perspective_source: [0.10, 1.00, 0.90, 1.00, 0.65, 0.45, 0.35, 0.45]
+    birdseye_width: 400
+    birdseye_height: 600
+    near_distance_m: 0.30
+    far_distance_m: 2.00
+    half_width_m: 1.00
+
+    sample_rows: 7
+    sample_band_height_px: 30
+    min_pixels_per_band: 20
+    polynomial_degree: 2
+    max_fit_residual_m: 0.20
+    target_mask_ratio: 0.025
+
+    # x-forward/y-left/yaw-CCW command generation.
+    lookahead_min_m: 0.80
+    lookahead_speed_gain: 1.0
+    nominal_vx: 0.30
+    min_vx: 0.05
+    max_vx: 0.30
+    lateral_kp: 0.8
+    lateral_kd: 0.05
+    yaw_kp: 1.2
+    curvature_speed_gain: 2.0
+    lateral_speed_gain: 1.5
+    heading_speed_gain: 1.0
+    max_vy: 0.10
+    max_yaw_rate: 0.40
+    filter_alpha: 0.20
+    max_vx_rate: 0.30
+    max_vy_rate: 0.25
+    max_yaw_rate_change: 0.80
+    slow_confidence: 0.70
+    stop_confidence: 0.40

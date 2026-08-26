@@ -1,0 +1,41 @@
+services:
+  line-tracking:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-ros:humble-ros-base}
+    image: cobiz-plugin-line-tracking
+    container_name: cobiz-plugin-line-tracking
+    network_mode: host
+    ipc: host
+    volumes:
+      - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
+      - ./ros_ws/src/line_tracking/config/line_tracking.yaml:/ros_ws/install/line_tracking/share/line_tracking/config/line_tracking.yaml:ro
+      - ${MODEL_DIR:-./models}:/models:ro
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      # Empty defaults let line_tracking.yaml remain the source of truth when
+      # no .env override is provided.
+      IMAGE_TOPIC: ${IMAGE_TOPIC:-}
+      JOY_TOPIC: ${JOY_TOPIC:-}
+      CONTROL_TOPIC: ${CONTROL_TOPIC:-}
+      DEBUG_IMAGE_TOPIC: ${DEBUG_IMAGE_TOPIC:-}
+      MASK_TOPIC: ${MASK_TOPIC:-}
+      CONFIDENCE_TOPIC: ${CONFIDENCE_TOPIC:-}
+      INPUT_RELIABILITY: ${INPUT_RELIABILITY:-}
+      CAMERA_PROFILE: ${CAMERA_PROFILE:-}
+      SEGMENTATION_INPUT_WIDTH: ${SEGMENTATION_INPUT_WIDTH:-}
+      SEGMENTATION_INPUT_HEIGHT: ${SEGMENTATION_INPUT_HEIGHT:-}
+      SEGMENTATION_MODEL_PATH: ${SEGMENTATION_MODEL_PATH:-}
+      TEST_MODE: ${TEST_MODE:-}
+      PUBLISH_CONTROL_IN_TEST_MODE: ${PUBLISH_CONTROL_IN_TEST_MODE:-}
+      TEST_DEBUG_IMAGE_TOPIC: ${TEST_DEBUG_IMAGE_TOPIC:-}
+      TEST_ROAD_MASK_TOPIC: ${TEST_ROAD_MASK_TOPIC:-}
+      TEST_RAW_LINE_MASK_TOPIC: ${TEST_RAW_LINE_MASK_TOPIC:-}
+      TEST_LINE_MASK_TOPIC: ${TEST_LINE_MASK_TOPIC:-}
+      TEST_BIRDSEYE_MASK_TOPIC: ${TEST_BIRDSEYE_MASK_TOPIC:-}
+      TEST_CENTERLINE_TOPIC: ${TEST_CENTERLINE_TOPIC:-}
+      TEST_METRICS_TOPIC: ${TEST_METRICS_TOPIC:-}
+      CENTERLINE_FRAME_ID: ${CENTERLINE_FRAME_ID:-}
+    restart: unless-stopped

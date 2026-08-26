@@ -2,7 +2,12 @@ import numpy as np
 
 from line_tracking.segmentation import SegmentationResult
 from line_tracking.vision import VisionConfig, YellowLineVision
-from tools.segment_video import render_opencv_overlay, render_segmentation_overlay, select_profile
+from tools.segment_video import (
+    render_mix_overlay,
+    render_opencv_overlay,
+    render_segmentation_overlay,
+    select_profile,
+)
 
 
 def test_auto_profile_matches_video_height():
@@ -45,3 +50,28 @@ def test_opencv_overlay_marks_yellow_mask_and_roi():
     assert output.shape == frame.shape
     assert result.road_mask is None
     assert result.raw_line_mask is None
+
+
+def test_mix_overlay_marks_final_line_after_model_masks():
+    frame = np.zeros((40, 60, 3), dtype=np.uint8)
+    model_result = SegmentationResult(
+        road_mask=np.full((40, 60), 255, dtype=np.uint8),
+        raw_line_mask=np.zeros((40, 60), dtype=np.uint8),
+        line_mask=np.zeros((40, 60), dtype=np.uint8),
+    )
+    model_result.raw_line_mask[20:30, 28:32] = 255
+    model_result.line_mask[20:30, 28:32] = 255
+    mixed_result = YellowLineVision(VisionConfig()).process(frame)
+    mixed_result.mask[20:30, 29:31] = 255
+
+    output = render_mix_overlay(
+        frame,
+        model_result,
+        mixed_result,
+        show_legend=False,
+    )
+
+    final_pixel = output[24, 30]
+    assert final_pixel[1] > final_pixel[0]
+    assert final_pixel[2] > final_pixel[0]
+    assert output.shape == frame.shape

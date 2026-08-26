@@ -37,15 +37,28 @@ line_tracking:
     road_gate_kernel: 21
 
     # Legacy fallback used only when segmentation_model_path is empty.
-    hsv_lower: [14, 45, 40]
+    # The supplied camera has a magenta cast, so the yellow/orange centerline
+    # is also detected through signed BGR channel differences below.
+    hsv_lower: [0, 25, 35]
     hsv_upper: [42, 255, 255]
-    lab_b_min: 135
-    adaptive_lab_percentile: 85.0
+    lab_b_min: 110
+    adaptive_lab_percentile: 0.0
+    red_blue_min: -8
+    red_green_min: 25
+    warm_luminance_min: 145
+    prefer_warm_camera_mask: true
     clahe_clip_limit: 2.0
     clahe_grid_size: 8
     open_kernel: 3
     close_kernel: 7
+    line_close_kernel: 31
     min_component_area_px: 80
+    line_min_area_px: 250
+    line_min_span_px: 40
+    line_feature_enabled: true
+    line_min_elongation: 2.0
+    # Symmetric line-search ROI: bottom-left, bottom-right, top-right, top-left.
+    line_roi_polygon: [0.10, 1.00, 0.90, 1.00, 0.65, 0.45, 0.35, 0.45]
 
     # Four normalized (x, y) points in bottom-left, bottom-right,
     # top-right, top-left order. Recalibrate for the physical camera mounting.

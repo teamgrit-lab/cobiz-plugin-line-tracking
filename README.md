@@ -115,8 +115,27 @@ PYTHONPATH=ros_ws/src/line_tracking python3 tools/segment_video.py \
 입력 영상의 오디오가 포함되지 않으며, OpenCV codec 문제로 출력이 열리지
 않으면 `--codec avc1` 또는 `--codec mp4v`를 시도합니다.
 
-AI 모델 없이 노란색만 확인하려면 OpenCV backend를 사용합니다. 이 모드는
-HSV와 LAB 색상 조건만 적용하며, 초록색 도로 mask는 생성하지 않습니다.
+YOLOP의 도로·선 mask를 모두 사용한 뒤, 도로로 gating된 모델 선 안에서
+OpenCV 노란색·선 형태 검출을 한 번 더 적용하려면 `mix` backend를 사용합니다.
+
+```bash
+uv run python tools/segment_video.py \
+  --backend mix \
+  --input /path/to/input.mp4 \
+  --output /path/to/output_mix_overlay.mp4 \
+  --model models/yolop-720-1280.onnx \
+  --profile 720p
+```
+
+Mix overlay는 초록=YOLOP 도로, 빨강=YOLOP raw 선, 청록=도로로 제한된
+YOLOP 선, 노랑=OpenCV 색상·형태 조건까지 통과한 최종 선, 흰색=ROI입니다.
+최종 노란 mask는 항상 도로로 제한된 YOLOP 선 mask의 부분집합입니다.
+
+AI 모델 없이 원본 카메라 영상의 노란 중앙선을 확인하려면 OpenCV backend를
+사용합니다. 이 카메라는 보라색 색감이 강해 BGR의 R-B/R-G 채널 차이와
+LAB 조건, 중앙 도로 ROI, PCA 기반 선 형태(주축/부축 비율), 가장 큰 연속
+선 후보를 함께 사용합니다. 일반 HSV 검출은 warm-camera 후보가 없는
+프레임에서만 fallback으로 사용합니다.
 
 ```bash
 uv run python tools/segment_video.py \
@@ -125,9 +144,12 @@ uv run python tools/segment_video.py \
   --output /path/to/output_opencv_yellow.mp4
 ```
 
-OpenCV 결과의 노란색은 실제 색상 검출 mask이고, 흰색 선은 ROI 경계입니다.
-필요하면 `--hsv-lower H S V`, `--hsv-upper H S V`,
-`--lab-b-min N`, `--adaptive-lab-percentile N`으로 조정할 수 있습니다.
+OpenCV 결과의 노란색은 실제 중앙선 색상 검출 mask이고, 흰색 선은 좌우 대칭
+ROI 경계입니다. 필요하면 `--hsv-lower H S V`, `--hsv-upper H S V`,
+`--lab-b-min N`, `--red-blue-min N`, `--red-green-min N`으로 조정할 수
+있습니다. 선 형태 필터 기준은 `--line-min-elongation N`으로 조정하고,
+비교 테스트가 필요하면 `--no-line-feature`로 끌 수 있습니다. 다른 카메라는
+`line_roi_polygon`을 카메라에 맞게 보정해야 합니다.
 
 다른 카메라/제어 토픽을 쓰는 경우 `.env`의 `IMAGE_TOPIC`과 `JOY_TOPIC`을
 명시적으로 바꿉니다. `CONTROL_TOPIC`은 `JOY_TOPIC`의 별칭입니다. 같은 설정은

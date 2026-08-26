@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a YOLOP or OpenCV yellow-line overlay video.
+"""Generate a YOLOP, OpenCV, or mixed line-segmentation overlay video.
 
 The output keeps the input video's frame size and frame rate.  It does not
 copy the input audio stream because OpenCV's ``VideoWriter`` only writes video
@@ -127,8 +127,11 @@ def render_opencv_overlay(
 
     output = frame_bgr.copy()
     _paint_mask(output, result.mask, (0, 255, 255), 0.75)
-    if result.roi_polygon_px.size:
-        polygon = result.roi_polygon_px.reshape(-1, 1, 2).astype(np.int32)
+    roi_polygon = result.line_roi_polygon_px
+    if roi_polygon is None:
+        roi_polygon = result.roi_polygon_px
+    if roi_polygon.size:
+        polygon = roi_polygon.reshape(-1, 1, 2).astype(np.int32)
         cv2.polylines(output, [polygon], isClosed=True, color=(255, 255, 255), thickness=2)
 
     if show_legend:
@@ -159,9 +162,63 @@ def render_opencv_overlay(
     return output
 
 
+def render_mix_overlay(
+    frame_bgr: np.ndarray,
+    model_result: SegmentationResult,
+    mixed_result: VisionResult,
+    *,
+    show_legend: bool = True,
+) -> np.ndarray:
+    """Render every YOLOP-to-OpenCV stage used by the mixed backend."""
+
+    output = frame_bgr.copy()
+    _paint_mask(output, model_result.road_mask, (0, 180, 0), 0.22)
+    _paint_mask(output, model_result.raw_line_mask, (0, 0, 255), 0.42)
+    _paint_mask(output, model_result.line_mask, (255, 255, 0), 0.58)
+    _paint_mask(output, mixed_result.mask, (0, 255, 255), 0.90)
+
+    roi_polygon = mixed_result.line_roi_polygon_px
+    if roi_polygon is None:
+        roi_polygon = mixed_result.roi_polygon_px
+    if roi_polygon.size:
+        polygon = roi_polygon.reshape(-1, 1, 2).astype(np.int32)
+        cv2.polylines(
+            output,
+            [polygon],
+            isClosed=True,
+            color=(255, 255, 255),
+            thickness=2,
+        )
+
+    if show_legend:
+        legend = [
+            ("YOLOP ROAD", (0, 180, 0), 6),
+            ("YOLOP RAW LINE", (0, 0, 255), 6),
+            ("YOLOP ROAD-GATED LINE", (255, 255, 0), 6),
+            ("MIX FINAL LINE", (0, 255, 255), 6),
+            ("ROI", (255, 255, 255), 2),
+        ]
+        cv2.rectangle(output, (12, 12), (360, 162), (0, 0, 0), -1)
+        cv2.rectangle(output, (12, 12), (360, 162), (220, 220, 220), 1)
+        for index, (label, color, thickness) in enumerate(legend):
+            y = 38 + index * 27
+            cv2.line(output, (25, y - 5), (50, y - 5), color, thickness)
+            cv2.putText(
+                output,
+                label,
+                (62, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+    return output
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run YOLOP or OpenCV yellow-line segmentation over a video."
+        description="Run YOLOP, OpenCV, or mixed line segmentation over a video."
     )
     parser.add_argument("--input", required=True, type=Path, help="input video path")
     parser.add_argument(
@@ -172,13 +229,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--model-path",
         dest="model_path",
         type=Path,
-        help="YOLOP ONNX model path; required for --backend yolop",
+        help="YOLOP ONNX model path; required for --backend yolop or mix",
     )
     parser.add_argument(
         "--backend",
-        choices=("yolop", "opencv"),
+        choices=("yolop", "opencv", "mix"),
         default="yolop",
-        help="segmentation backend; opencv uses HSV/LAB color detection only",
+        help=(
+            "segmentation backend; mix applies OpenCV color/shape detection "
+            "inside YOLOP's road-gated lane mask"
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -213,7 +273,7 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs=3,
         type=int,
         metavar=("H", "S", "V"),
-        default=(14, 45, 40),
+        default=(0, 25, 35),
         help="OpenCV lower HSV threshold",
     )
     parser.add_argument(
@@ -227,14 +287,66 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lab-b-min",
         type=int,
-        default=135,
+        default=110,
         help="OpenCV minimum LAB b-channel threshold",
     )
     parser.add_argument(
         "--adaptive-lab-percentile",
         type=float,
-        default=85.0,
+        default=0.0,
         help="OpenCV adaptive LAB percentile; use 0 to disable it",
+    )
+    parser.add_argument(
+        "--red-blue-min",
+        type=int,
+        default=-8,
+        help="minimum signed R-B difference for warm-camera yellow detection",
+    )
+    parser.add_argument(
+        "--red-green-min",
+        type=int,
+        default=25,
+        help="minimum signed R-G difference for warm-camera yellow detection",
+    )
+    parser.add_argument(
+        "--warm-luminance-min",
+        type=int,
+        default=145,
+        help="minimum LAB luminance for warm-camera yellow detection",
+    )
+    parser.add_argument(
+        "--no-warm-camera-preference",
+        action="store_true",
+        help="disable the warm-camera mask preference and use HSV+LAB fallback",
+    )
+    parser.add_argument(
+        "--line-close-kernel",
+        type=int,
+        default=31,
+        help="close kernel used to join broken centerline pixels",
+    )
+    parser.add_argument(
+        "--line-min-area-px",
+        type=int,
+        default=250,
+        help="minimum dominant line component area at 1280px width",
+    )
+    parser.add_argument(
+        "--line-min-span-px",
+        type=int,
+        default=40,
+        help="minimum dominant line component span at 1280px width",
+    )
+    parser.add_argument(
+        "--line-min-elongation",
+        type=float,
+        default=2.0,
+        help="minimum PCA major/minor axis ratio for a line component",
+    )
+    parser.add_argument(
+        "--no-line-feature",
+        action="store_true",
+        help="disable the PCA line-shape filter and use color components only",
     )
     return parser
 
@@ -246,9 +358,10 @@ def run(args: argparse.Namespace) -> int:
 
     if not input_path.is_file():
         raise FileNotFoundError(f"input video does not exist: {input_path}")
-    if args.backend == "yolop" and model_path is None:
-        raise ValueError("--model is required when --backend is yolop")
-    if args.backend == "yolop" and not model_path.is_file():
+    model_required = args.backend in ("yolop", "mix")
+    if model_required and model_path is None:
+        raise ValueError(f"--model is required when --backend is {args.backend}")
+    if model_required and not model_path.is_file():
         raise FileNotFoundError(f"YOLOP model does not exist: {model_path}")
     if input_path == output_path:
         raise ValueError("--output must be different from --input")
@@ -270,7 +383,7 @@ def run(args: argparse.Namespace) -> int:
 
     segmenter = None
     vision = None
-    if args.backend == "yolop":
+    if model_required:
         profile, input_width, input_height = select_profile(
             args.profile, frame_width, frame_height
         )
@@ -284,13 +397,22 @@ def run(args: argparse.Namespace) -> int:
                 road_gate_kernel=args.road_gate_kernel,
             )
         )
-    else:
+    if args.backend in ("opencv", "mix"):
         vision = YellowLineVision(
             VisionConfig(
                 hsv_lower=tuple(args.hsv_lower),
                 hsv_upper=tuple(args.hsv_upper),
                 lab_b_min=args.lab_b_min,
                 adaptive_lab_percentile=args.adaptive_lab_percentile,
+                red_blue_min=args.red_blue_min,
+                red_green_min=args.red_green_min,
+                warm_luminance_min=args.warm_luminance_min,
+                prefer_warm_camera_mask=not args.no_warm_camera_preference,
+                line_close_kernel=args.line_close_kernel,
+                line_min_area_px=args.line_min_area_px,
+                line_min_span_px=args.line_min_span_px,
+                line_feature_enabled=not args.no_line_feature,
+                line_min_elongation=args.line_min_elongation,
             )
         )
 
@@ -309,11 +431,17 @@ def run(args: argparse.Namespace) -> int:
 
     frame_count = 0
     try:
-        backend_details = (
-            f"profile={profile} model_input={input_width}x{input_height} "
-            if args.backend == "yolop"
-            else "opencv_color=HSV+LAB "
-        )
+        if args.backend == "opencv":
+            backend_details = "opencv_color=warm-camera BGR+LAB "
+        elif args.backend == "mix":
+            backend_details = (
+                f"profile={profile} model_input={input_width}x{input_height} "
+                "opencv_gate=YOLOP-road-line "
+            )
+        else:
+            backend_details = (
+                f"profile={profile} model_input={input_width}x{input_height} "
+            )
         print(
             f"backend={args.backend} {backend_details}"
             f"video={frame_width}x{frame_height} fps={fps:.3f}"
@@ -326,6 +454,18 @@ def run(args: argparse.Namespace) -> int:
                 result = segmenter.segment(frame)
                 overlay = render_segmentation_overlay(
                     frame, result, show_legend=not args.no_legend
+                )
+            elif args.backend == "mix":
+                model_result = segmenter.segment(frame)
+                mixed_result = vision.process(
+                    frame,
+                    candidate_gate_mask=model_result.line_mask,
+                )
+                overlay = render_mix_overlay(
+                    frame,
+                    model_result,
+                    mixed_result,
+                    show_legend=not args.no_legend,
                 )
             else:
                 result = vision.process(frame)

@@ -131,6 +131,112 @@ Mix overlay는 초록=YOLOP 도로, 빨강=YOLOP raw 선, 청록=도로로 제�
 YOLOP 선, 노랑=OpenCV 색상·형태 조건까지 통과한 최종 선, 흰색=ROI입니다.
 최종 노란 mask는 항상 도로로 제한된 YOLOP 선 mask의 부분집합입니다.
 
+노란색과 흰색 차선만 색상으로 먼저 제한한 뒤 Canny와 HoughLinesP로 선분을
+검출하려면 `lane-only` backend를 사용합니다. 이 backend는 경로 fitting이나
+중앙선 선택을 하지 않고, 색상으로 지지되는 차선 선분만 출력합니다. 초록색·도로
+전체 mask는 사용하지 않으며, 노란색 선은 노랑, 흰색 선은 흰색으로 표시합니다.
+
+```bash
+uv run python tools/segment_video.py \
+  --backend lane-only \
+  --input /Users/kangminwoo/Downloads/roadline_test.mp4 \
+  --output /Users/kangminwoo/Downloads/lane_only_validation.mp4 \
+  --lane-min-length-px 60 \
+  --lane-draw-width-px 5
+```
+
+한 색상만 확인하려면 `--lane-color yellow` 또는 `--lane-color white`를
+추가합니다. 두 색상을 동시에 표시할 때 겹치는 Hough 선분은 빨간색
+(`OVERLAP`)으로 표시됩니다. `lane-only`는 원본 입력 영상에서 실행해야 하며, 이미 overlay가
+입혀진 결과 영상을 다시 입력으로 사용하면 overlay 자체가 검출 후보가 됩니다.
+
+처리 순서는 `노란색/흰색 HSV 후보 → 그레이스케일 Gaussian blur → Canny →
+대칭 하단 ROI → 색상 지지 HoughLinesP`입니다. 최소 선 길이는
+`--lane-min-length-px`, 선분 연결 간격은 `--lane-max-gap-px`, 선분 방향 조건은
+`--lane-min-vertical-ratio`, 색상 지지율은 `--lane-min-color-support-ratio`로
+조정할 수 있습니다. 현재 카메라의 색상 편향 때문에 노란색에는 별도의 hue wrap과
+BGR 채널 차이 조건도 적용합니다.
+흰색은 현재 카메라의 보라색 아스팔트가
+흰색 후보로 번지는 것을 줄이기 위해 기본적으로 `S<=40`, `V>=200`으로
+제한하며, 다른 카메라에서는 `--lane-white-saturation-max`와
+`--lane-white-value-min`으로 조정할 수 있습니다.
+
+선 구조를 먼저 찾고 그 선 후보 안에서 노란색을 segmentation하려면
+`line-first` backend를 사용합니다. 청록색은 Canny/Hough 선 후보 주변,
+노란색은 색상·형태 조건까지 통과한 최종 중앙선입니다.
+
+YOLOP 도로 영역 안에서 OpenCV 선 후보만 확인하려면 `road-lines` backend를
+사용합니다. 이 단계에서는 노란색 판정이나 중앙선 선택을 수행하지 않고,
+초록색으로 YOLOP 도로 전체 mask, 청록색으로 도로 mask 내부의 Canny/Hough
+선 후보만 표시합니다.
+
+```bash
+uv run python tools/segment_video.py \
+  --backend road-lines \
+  --input /Users/kangminwoo/Downloads/roadline_test.mp4 \
+  --output /Users/kangminwoo/Downloads/road_lines_only_validation.mp4 \
+  --model models/yolop-720-1280.onnx \
+  --profile 720p
+```
+
+YOLOP 없이 대칭 ROI 안의 회색 도로를 OpenCV로 먼저 mask하고, 그 mask 안에서
+선 후보만 찾으려면 `gray-road-lines` backend를 사용합니다. 카메라의 색상 편향을
+고려해 ROI 하단 중앙의 LAB 색도를 기준으로 회색 도로를 적응적으로 분리합니다.
+이 backend도 노란색 판정과 중앙선 선택은 수행하지 않습니다. 초록색은 OpenCV
+회색 도로 mask, 청록색은 그 mask 내부의 Canny/Hough 선 후보, 흰색은 ROI입니다.
+
+```bash
+uv run python tools/segment_video.py \
+  --backend gray-road-lines \
+  --input /path/to/input.mp4 \
+  --output /path/to/output_gray_road_lines.mp4
+```
+
+현재 검증 영상에서 최소 선 길이 60px, 표시 폭 7px로 실행하려면:
+
+```bash
+uv run python tools/segment_video.py \
+  --backend gray-road-lines \
+  --input /Users/kangminwoo/Downloads/roadline_test.mp4 \
+  --output /Users/kangminwoo/Downloads/gray_road_lines_validation.mp4 \
+  --road-line-min-length-px 60 \
+  --road-line-corridor-width-px 7
+```
+
+회색 도로 분리는 `--gray-road-lab-tolerance`, `--gray-road-min-luminance`,
+`--gray-road-max-luminance`, `--gray-road-top-y`로 조정하고, 선 검출은 `--road-line-min-length-px`,
+`--road-line-max-gap-px`, `--road-line-hough-threshold`로 조정합니다.
+
+OpenCV 도로 mask 안에서 `lane-only`처럼 노란색/흰색을 각각 색상 필터링한 뒤
+Canny와 HoughLinesP로 검출하려면 `gray-road-lane-only`를 사용합니다. 이 backend는
+YOLOP를 사용하지 않으며, 초록색은 OpenCV 도로 mask, 노란색/흰색은 해당 색상의
+선분, 빨간색은 두 선분이 겹친 부분입니다. `--lane-color yellow` 또는
+`--lane-color white`로 한 색상만 표시할 수 있습니다.
+
+```bash
+uv run python tools/segment_video.py \
+  --backend gray-road-lane-only \
+  --lane-color both \
+  --input /Users/kangminwoo/Downloads/roadline_test.mp4 \
+  --output /Users/kangminwoo/Downloads/gray_road_lane_validation.mp4 \
+  --lane-min-length-px 60 \
+  --lane-draw-width-px 5
+```
+
+```bash
+uv run python tools/segment_video.py \
+  --backend line-first \
+  --input /path/to/input.mp4 \
+  --output /path/to/output_line_first.mp4
+```
+
+검출 민감도는 `--line-first-canny-low`, `--line-first-canny-high`,
+`--line-first-hough-threshold`, `--line-first-min-length-px`,
+`--line-first-max-gap-px`, `--line-first-corridor-width-px`로 조정합니다.
+굵은 도색은 Hough로 찾은 양쪽 경계를 씨앗으로 사용해 전체 색상 영역을
+복원합니다. 복원 폭은 `--line-first-recovery-width-px`, 양쪽 경계를 하나의
+마스크로 합치는 폭은 `--line-first-band-close-kernel-px`로 조정합니다.
+
 ## MCAP 카메라 토픽을 MP4로 변환
 
 ROS 2 설치 없이 MCAP rosbag의 `sensor_msgs/msg/Image` 또는

@@ -20,6 +20,33 @@ def _yellow_line_frame() -> np.ndarray:
     return frame
 
 
+def _gray_road_frame() -> np.ndarray:
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    frame[:, :] = (45, 90, 45)
+    road_polygon = np.asarray(
+        [[64, 359], [575, 359], [415, 162], [223, 162]],
+        dtype=np.int32,
+    )
+    cv2.fillPoly(frame, [road_polygon], (110, 110, 110))
+    cv2.line(frame, (300, 350), (330, 205), (245, 245, 245), 6)
+    return frame
+
+
+def _colored_lane_frame() -> np.ndarray:
+    frame = np.full((360, 640, 3), (55, 55, 55), dtype=np.uint8)
+    yellow_points = np.asarray(
+        [[250, 359], [260, 320], [275, 280], [290, 240], [305, 200]],
+        dtype=np.int32,
+    )
+    white_points = np.asarray(
+        [[410, 359], [400, 320], [390, 280], [380, 240], [370, 200]],
+        dtype=np.int32,
+    )
+    cv2.polylines(frame, [yellow_points], False, (0, 255, 255), 12)
+    cv2.polylines(frame, [white_points], False, (255, 255, 255), 12)
+    return frame
+
+
 def test_detects_yellow_line_and_fits_metric_path():
     detector = YellowLineVision(VisionConfig(min_component_area_px=20))
 
@@ -116,3 +143,54 @@ def test_detects_warm_cast_yellow_centerline():
 
     assert np.count_nonzero(result.mask) > 0
     assert result.estimate is not None
+
+
+def test_adaptive_gray_road_mask_stays_inside_roi():
+    detector = YellowLineVision(VisionConfig())
+
+    mask = detector.detect_gray_road_mask(_gray_road_frame())
+
+    assert mask[350, 300] > 0
+    assert mask[190, 320] == 0
+    assert mask[100, 320] == 0
+    assert mask[350, 20] == 0
+
+
+def test_detects_lines_only_inside_gray_road_mask():
+    detector = YellowLineVision(VisionConfig())
+    frame = _gray_road_frame()
+    road_mask = detector.detect_gray_road_mask(frame)
+
+    line_mask = detector.detect_lines_in_mask(frame, road_mask)
+
+    assert np.count_nonzero(line_mask) > 0
+    assert np.count_nonzero(line_mask[road_mask == 0]) == 0
+
+
+def test_detects_yellow_and_white_lane_segments_without_path_fitting():
+    detector = YellowLineVision(VisionConfig())
+
+    result = detector.detect_lane_lines(_colored_lane_frame())
+
+    assert np.count_nonzero(result.yellow_color_mask) > 0
+    assert np.count_nonzero(result.white_color_mask) > 0
+    assert np.count_nonzero(result.yellow_line_mask) > 0
+    assert np.count_nonzero(result.white_line_mask) > 0
+    assert np.count_nonzero(result.yellow_line_mask & result.white_line_mask) == 0
+
+
+def test_lane_segments_are_gated_by_an_external_road_mask():
+    detector = YellowLineVision(VisionConfig())
+    frame = _colored_lane_frame()
+    road_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    road_polygon = np.asarray(
+        [[64, 359], [575, 359], [415, 162], [223, 162]],
+        dtype=np.int32,
+    )
+    cv2.fillPoly(road_mask, [road_polygon], 255)
+
+    result = detector.detect_lane_lines(frame, road_mask=road_mask)
+
+    detected = result.yellow_line_mask | result.white_line_mask
+    assert np.count_nonzero(detected) > 0
+    assert np.count_nonzero(detected[road_mask == 0]) == 0

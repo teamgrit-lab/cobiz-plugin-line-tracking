@@ -27,7 +27,12 @@ from line_tracking.segmentation import (  # noqa: E402
     YolopConfig,
     YolopSegmenter,
 )
-from line_tracking.vision import VisionConfig, VisionResult, YellowLineVision  # noqa: E402
+from line_tracking.vision import (  # noqa: E402
+    LaneLineResult,
+    VisionConfig,
+    VisionResult,
+    YellowLineVision,
+)
 
 
 PROFILE_INPUTS = {
@@ -162,6 +167,212 @@ def render_opencv_overlay(
     return output
 
 
+def render_line_first_overlay(
+    frame_bgr: np.ndarray,
+    result: VisionResult,
+    *,
+    show_legend: bool = True,
+) -> np.ndarray:
+    """Render Hough line corridors and their yellow-color intersection."""
+
+    output = frame_bgr.copy()
+    _paint_mask(output, result.line_feature_mask, (255, 255, 0), 0.42)
+    _paint_mask(output, result.mask, (0, 255, 255), 0.90)
+
+    roi_polygon = result.line_roi_polygon_px
+    if roi_polygon is None:
+        roi_polygon = result.roi_polygon_px
+    if roi_polygon.size:
+        polygon = roi_polygon.reshape(-1, 1, 2).astype(np.int32)
+        cv2.polylines(
+            output,
+            [polygon],
+            isClosed=True,
+            color=(255, 255, 255),
+            thickness=2,
+        )
+
+    if show_legend:
+        legend = [
+            ("HOUGH LINE CANDIDATES", (255, 255, 0), 6),
+            ("YELLOW LINE FINAL", (0, 255, 255), 6),
+            ("ROI", (255, 255, 255), 2),
+        ]
+        cv2.rectangle(output, (12, 12), (360, 112), (0, 0, 0), -1)
+        cv2.rectangle(output, (12, 12), (360, 112), (220, 220, 220), 1)
+        for index, (label, color, thickness) in enumerate(legend):
+            y = 38 + index * 30
+            cv2.line(output, (25, y - 5), (50, y - 5), color, thickness)
+            cv2.putText(
+                output,
+                label,
+                (62, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+    return output
+
+
+def render_road_lines_overlay(
+    frame_bgr: np.ndarray,
+    road_mask: np.ndarray,
+    road_line_mask: np.ndarray,
+    *,
+    show_legend: bool = True,
+) -> np.ndarray:
+    """Render YOLOP's full road mask and OpenCV lines inside that mask."""
+
+    output = frame_bgr.copy()
+    _paint_mask(output, road_mask, (0, 180, 0), 0.28)
+    _paint_mask(output, road_line_mask, (255, 255, 0), 0.90)
+
+    if show_legend:
+        legend = [
+            ("YOLOP ROAD MASK", (0, 180, 0), 6),
+            ("OPENCV ROAD LINES", (255, 255, 0), 6),
+        ]
+        cv2.rectangle(output, (12, 12), (360, 92), (0, 0, 0), -1)
+        cv2.rectangle(output, (12, 12), (360, 92), (220, 220, 220), 1)
+        for index, (label, color, thickness) in enumerate(legend):
+            y = 38 + index * 30
+            cv2.line(output, (25, y - 5), (50, y - 5), color, thickness)
+            cv2.putText(
+                output,
+                label,
+                (62, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+    return output
+
+
+def render_gray_road_lines_overlay(
+    frame_bgr: np.ndarray,
+    gray_road_mask: np.ndarray,
+    road_line_mask: np.ndarray,
+    roi_polygon_px: Optional[np.ndarray] = None,
+    *,
+    show_legend: bool = True,
+) -> np.ndarray:
+    """Render the OpenCV gray-road ROI mask and lines found inside it."""
+
+    output = frame_bgr.copy()
+    _paint_mask(output, gray_road_mask, (0, 180, 0), 0.28)
+    _paint_mask(output, road_line_mask, (255, 255, 0), 0.90)
+
+    if roi_polygon_px is not None and roi_polygon_px.size:
+        polygon = roi_polygon_px.reshape(-1, 1, 2).astype(np.int32)
+        cv2.polylines(
+            output,
+            [polygon],
+            isClosed=True,
+            color=(255, 255, 255),
+            thickness=2,
+        )
+
+    if show_legend:
+        legend = [
+            ("OPENCV GRAY ROAD", (0, 180, 0), 6),
+            ("OPENCV ROAD LINES", (255, 255, 0), 6),
+            ("ROI", (255, 255, 255), 2),
+        ]
+        cv2.rectangle(output, (12, 12), (360, 122), (0, 0, 0), -1)
+        cv2.rectangle(output, (12, 12), (360, 122), (220, 220, 220), 1)
+        for index, (label, color, thickness) in enumerate(legend):
+            y = 38 + index * 30
+            cv2.line(output, (25, y - 5), (50, y - 5), color, thickness)
+            cv2.putText(
+                output,
+                label,
+                (62, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+    return output
+
+
+def render_lane_only_overlay(
+    frame_bgr: np.ndarray,
+    result: LaneLineResult,
+    *,
+    lane_color: str = "both",
+    road_mask: Optional[np.ndarray] = None,
+    show_legend: bool = True,
+) -> np.ndarray:
+    """Render color-supported Hough lanes, optionally over a road mask."""
+
+    output = frame_bgr.copy()
+    if road_mask is not None:
+        _paint_mask(output, road_mask, (0, 180, 0), 0.28)
+    yellow_mask = result.yellow_line_mask > 0
+    white_mask = result.white_line_mask > 0
+    if lane_color == "both":
+        overlap_mask = (yellow_mask & white_mask).astype(np.uint8) * 255
+        yellow_only_mask = (yellow_mask & ~white_mask).astype(np.uint8) * 255
+        white_only_mask = (white_mask & ~yellow_mask).astype(np.uint8) * 255
+        _paint_mask(output, yellow_only_mask, (0, 255, 255), 0.95)
+        _paint_mask(output, white_only_mask, (255, 255, 255), 0.95)
+        _paint_mask(output, overlap_mask, (0, 0, 255), 0.95)
+    elif lane_color == "yellow":
+        _paint_mask(output, result.yellow_line_mask, (0, 255, 255), 0.95)
+    elif lane_color == "white":
+        _paint_mask(output, result.white_line_mask, (255, 255, 255), 0.95)
+
+    if result.roi_polygon_px.size:
+        polygon = result.roi_polygon_px.reshape(-1, 1, 2).astype(np.int32)
+        cv2.polylines(
+            output,
+            [polygon],
+            isClosed=True,
+            color=(180, 180, 180),
+            thickness=2,
+        )
+
+    if show_legend:
+        legend = []
+        if road_mask is not None:
+            legend.append(("OPENCV GRAY ROAD", (0, 180, 0), 6))
+        if lane_color in ("both", "yellow"):
+            legend.append(("YELLOW LANE LINES", (0, 255, 255), 5))
+        if lane_color in ("both", "white"):
+            legend.append(("WHITE LANE LINES", (255, 255, 255), 5))
+        if lane_color == "both":
+            legend.append(("OVERLAP", (0, 0, 255), 5))
+        legend.append(("ROI", (180, 180, 180), 2))
+        legend_bottom = 12 + 20 + len(legend) * 30
+        cv2.rectangle(output, (12, 12), (360, legend_bottom), (0, 0, 0), -1)
+        cv2.rectangle(
+            output,
+            (12, 12),
+            (360, legend_bottom),
+            (220, 220, 220),
+            1,
+        )
+        for index, (label, color, thickness) in enumerate(legend):
+            y = 38 + index * 30
+            cv2.line(output, (25, y - 5), (50, y - 5), color, thickness)
+            cv2.putText(
+                output,
+                label,
+                (62, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+    return output
+
+
 def render_mix_overlay(
     frame_bgr: np.ndarray,
     model_result: SegmentationResult,
@@ -229,15 +440,29 @@ def _build_parser() -> argparse.ArgumentParser:
         "--model-path",
         dest="model_path",
         type=Path,
-        help="YOLOP ONNX model path; required for --backend yolop or mix",
+        help="YOLOP ONNX model path; required for --backend yolop, road-lines, or mix",
     )
     parser.add_argument(
         "--backend",
-        choices=("yolop", "opencv", "mix"),
+        choices=(
+            "yolop",
+            "opencv",
+            "line-first",
+            "lane-only",
+            "road-lines",
+            "gray-road-lines",
+            "gray-road-lane-only",
+            "mix",
+        ),
         default="yolop",
         help=(
             "segmentation backend; mix applies OpenCV color/shape detection "
-            "inside YOLOP's road-gated lane mask"
+            "inside YOLOP's road-gated lane mask; line-first runs Hough "
+            "before yellow-color segmentation; road-lines runs Hough only "
+            "inside YOLOP's road mask; gray-road-lines builds an adaptive "
+            "LAB gray-road mask before Hough; gray-road-lane-only gates "
+            "lane-only by that OpenCV road mask; lane-only filters "
+            "yellow/white paint before Canny/Hough"
         ),
     )
     parser.add_argument(
@@ -348,6 +573,250 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="disable the PCA line-shape filter and use color components only",
     )
+    parser.add_argument(
+        "--line-first-canny-low",
+        type=int,
+        default=40,
+        help="lower Canny threshold for the line-first backend",
+    )
+    parser.add_argument(
+        "--line-first-canny-high",
+        type=int,
+        default=120,
+        help="upper Canny threshold for the line-first backend",
+    )
+    parser.add_argument(
+        "--line-first-hough-threshold",
+        type=int,
+        default=24,
+        help="minimum Hough votes for a line-first segment",
+    )
+    parser.add_argument(
+        "--line-first-min-length-px",
+        type=int,
+        default=35,
+        help="minimum Hough line length at 1280px width",
+    )
+    parser.add_argument(
+        "--line-first-max-gap-px",
+        type=int,
+        default=24,
+        help="maximum gap joined by Hough at 1280px width",
+    )
+    parser.add_argument(
+        "--line-first-corridor-width-px",
+        type=int,
+        default=31,
+        help="width around Hough segments searched for yellow pixels",
+    )
+    parser.add_argument(
+        "--line-first-recovery-width-px",
+        type=int,
+        default=81,
+        help="width used to recover the full yellow region around line seeds",
+    )
+    parser.add_argument(
+        "--line-first-band-close-kernel-px",
+        type=int,
+        default=61,
+        help="closing kernel used to join both edges of a thick painted line",
+    )
+    parser.add_argument(
+        "--road-line-canny-low",
+        type=int,
+        default=40,
+        help="lower Canny threshold for road-lines and gray-road-lines backends",
+    )
+    parser.add_argument(
+        "--road-line-canny-high",
+        type=int,
+        default=120,
+        help="upper Canny threshold for road-lines and gray-road-lines backends",
+    )
+    parser.add_argument(
+        "--road-line-hough-threshold",
+        type=int,
+        default=35,
+        help="minimum Hough votes for road-lines and gray-road-lines backends",
+    )
+    parser.add_argument(
+        "--road-line-min-length-px",
+        type=int,
+        default=45,
+        help="minimum road-line Hough segment length at 1280px width",
+    )
+    parser.add_argument(
+        "--road-line-max-gap-px",
+        type=int,
+        default=18,
+        help="maximum gap joined by road-line Hough at 1280px width",
+    )
+    parser.add_argument(
+        "--road-line-corridor-width-px",
+        type=int,
+        default=7,
+        help="draw width for OpenCV road-line candidates",
+    )
+    parser.add_argument(
+        "--gray-road-lab-tolerance",
+        type=float,
+        default=24.0,
+        help="adaptive LAB chroma distance allowed for gray-road pixels",
+    )
+    parser.add_argument(
+        "--gray-road-min-luminance",
+        type=int,
+        default=35,
+        help="minimum LAB luminance for gray-road pixels",
+    )
+    parser.add_argument(
+        "--gray-road-max-luminance",
+        type=int,
+        default=230,
+        help="maximum LAB luminance for gray-road pixels",
+    )
+    parser.add_argument(
+        "--gray-road-top-y",
+        type=float,
+        default=0.58,
+        help="normalized top y of the conservative gray-road gate",
+    )
+    parser.add_argument(
+        "--gray-road-open-kernel",
+        type=int,
+        default=3,
+        help="odd morphology opening kernel for gray-road mask",
+    )
+    parser.add_argument(
+        "--gray-road-close-kernel",
+        type=int,
+        default=21,
+        help="odd morphology closing kernel for gray-road mask",
+    )
+    parser.add_argument(
+        "--gray-road-min-component-area-px",
+        type=int,
+        default=1000,
+        help="minimum bottom-connected gray-road component area",
+    )
+    parser.add_argument(
+        "--lane-yellow-hsv-lower",
+        nargs=3,
+        type=int,
+        metavar=("H", "S", "V"),
+        default=(15, 70, 80),
+        help="lower HSV threshold for balanced-camera yellow lane paint",
+    )
+    parser.add_argument(
+        "--lane-yellow-hsv-upper",
+        nargs=3,
+        type=int,
+        metavar=("H", "S", "V"),
+        default=(42, 255, 255),
+        help="upper HSV threshold for balanced-camera yellow lane paint",
+    )
+    parser.add_argument(
+        "--lane-cast-yellow-hue-margin",
+        type=int,
+        default=12,
+        help="hue margin around 0/179 for warm-camera yellow paint",
+    )
+    parser.add_argument(
+        "--lane-cast-yellow-saturation-min",
+        type=int,
+        default=45,
+        help="minimum saturation for warm-camera yellow paint",
+    )
+    parser.add_argument(
+        "--lane-cast-yellow-value-min",
+        type=int,
+        default=120,
+        help="minimum value for warm-camera yellow paint",
+    )
+    parser.add_argument(
+        "--lane-yellow-red-blue-min",
+        type=int,
+        default=20,
+        help="minimum R-B difference for warm-camera yellow paint",
+    )
+    parser.add_argument(
+        "--lane-yellow-red-green-min",
+        type=int,
+        default=25,
+        help="minimum R-G difference for warm-camera yellow paint",
+    )
+    parser.add_argument(
+        "--lane-white-saturation-max",
+        type=int,
+        default=40,
+        help="maximum saturation for white lane paint",
+    )
+    parser.add_argument(
+        "--lane-white-value-min",
+        type=int,
+        default=200,
+        help="minimum value for white lane paint",
+    )
+    parser.add_argument(
+        "--lane-color",
+        choices=("both", "yellow", "white"),
+        default="both",
+        help="lane-only overlay color to render",
+    )
+    parser.add_argument(
+        "--lane-color-close-kernel",
+        type=int,
+        default=5,
+        help="odd closing kernel for color lane candidates",
+    )
+    parser.add_argument(
+        "--lane-canny-low",
+        type=int,
+        default=40,
+        help="lower Canny threshold for lane-only",
+    )
+    parser.add_argument(
+        "--lane-canny-high",
+        type=int,
+        default=120,
+        help="upper Canny threshold for lane-only",
+    )
+    parser.add_argument(
+        "--lane-hough-threshold",
+        type=int,
+        default=30,
+        help="minimum Hough votes for lane-only",
+    )
+    parser.add_argument(
+        "--lane-min-length-px",
+        type=int,
+        default=60,
+        help="minimum lane Hough segment length at 1280px width",
+    )
+    parser.add_argument(
+        "--lane-max-gap-px",
+        type=int,
+        default=20,
+        help="maximum gap joined by Hough for lane-only",
+    )
+    parser.add_argument(
+        "--lane-draw-width-px",
+        type=int,
+        default=5,
+        help="render width of accepted lane segments",
+    )
+    parser.add_argument(
+        "--lane-min-vertical-ratio",
+        type=float,
+        default=0.15,
+        help="minimum absolute vertical component / segment length",
+    )
+    parser.add_argument(
+        "--lane-min-color-support-ratio",
+        type=float,
+        default=0.60,
+        help="minimum fraction of a Hough segment supported by lane color",
+    )
     return parser
 
 
@@ -358,7 +827,7 @@ def run(args: argparse.Namespace) -> int:
 
     if not input_path.is_file():
         raise FileNotFoundError(f"input video does not exist: {input_path}")
-    model_required = args.backend in ("yolop", "mix")
+    model_required = args.backend in ("yolop", "road-lines", "mix")
     if model_required and model_path is None:
         raise ValueError(f"--model is required when --backend is {args.backend}")
     if model_required and not model_path.is_file():
@@ -397,7 +866,15 @@ def run(args: argparse.Namespace) -> int:
                 road_gate_kernel=args.road_gate_kernel,
             )
         )
-    if args.backend in ("opencv", "mix"):
+    if args.backend in (
+        "opencv",
+        "line-first",
+        "lane-only",
+        "road-lines",
+        "gray-road-lines",
+        "gray-road-lane-only",
+        "mix",
+    ):
         vision = YellowLineVision(
             VisionConfig(
                 hsv_lower=tuple(args.hsv_lower),
@@ -413,6 +890,51 @@ def run(args: argparse.Namespace) -> int:
                 line_min_span_px=args.line_min_span_px,
                 line_feature_enabled=not args.no_line_feature,
                 line_min_elongation=args.line_min_elongation,
+                line_first_canny_low=args.line_first_canny_low,
+                line_first_canny_high=args.line_first_canny_high,
+                line_first_hough_threshold=args.line_first_hough_threshold,
+                line_first_min_length_px=args.line_first_min_length_px,
+                line_first_max_gap_px=args.line_first_max_gap_px,
+                line_first_corridor_width_px=args.line_first_corridor_width_px,
+                line_first_recovery_width_px=args.line_first_recovery_width_px,
+                line_first_band_close_kernel_px=(
+                    args.line_first_band_close_kernel_px
+                ),
+                road_line_canny_low=args.road_line_canny_low,
+                road_line_canny_high=args.road_line_canny_high,
+                road_line_hough_threshold=args.road_line_hough_threshold,
+                road_line_min_length_px=args.road_line_min_length_px,
+                road_line_max_gap_px=args.road_line_max_gap_px,
+                road_line_corridor_width_px=args.road_line_corridor_width_px,
+                gray_road_lab_tolerance=args.gray_road_lab_tolerance,
+                gray_road_min_luminance=args.gray_road_min_luminance,
+                gray_road_max_luminance=args.gray_road_max_luminance,
+                gray_road_top_y=args.gray_road_top_y,
+                gray_road_open_kernel=args.gray_road_open_kernel,
+                gray_road_close_kernel=args.gray_road_close_kernel,
+                gray_road_min_component_area_px=(
+                    args.gray_road_min_component_area_px
+                ),
+                lane_yellow_hsv_lower=tuple(args.lane_yellow_hsv_lower),
+                lane_yellow_hsv_upper=tuple(args.lane_yellow_hsv_upper),
+                lane_cast_yellow_hue_margin=args.lane_cast_yellow_hue_margin,
+                lane_cast_yellow_saturation_min=(
+                    args.lane_cast_yellow_saturation_min
+                ),
+                lane_cast_yellow_value_min=args.lane_cast_yellow_value_min,
+                lane_yellow_red_blue_min=args.lane_yellow_red_blue_min,
+                lane_yellow_red_green_min=args.lane_yellow_red_green_min,
+                lane_white_saturation_max=args.lane_white_saturation_max,
+                lane_white_value_min=args.lane_white_value_min,
+                lane_color_close_kernel=args.lane_color_close_kernel,
+                lane_canny_low=args.lane_canny_low,
+                lane_canny_high=args.lane_canny_high,
+                lane_hough_threshold=args.lane_hough_threshold,
+                lane_min_length_px=args.lane_min_length_px,
+                lane_max_gap_px=args.lane_max_gap_px,
+                lane_draw_width_px=args.lane_draw_width_px,
+                lane_min_vertical_ratio=args.lane_min_vertical_ratio,
+                lane_min_color_support_ratio=args.lane_min_color_support_ratio,
             )
         )
 
@@ -433,6 +955,21 @@ def run(args: argparse.Namespace) -> int:
     try:
         if args.backend == "opencv":
             backend_details = "opencv_color=warm-camera BGR+LAB "
+        elif args.backend == "line-first":
+            backend_details = "opencv_order=Canny-Hough-then-yellow "
+        elif args.backend == "lane-only":
+            backend_details = "opencv_order=color-Canny-Hough-yellow+white "
+        elif args.backend == "road-lines":
+            backend_details = (
+                f"profile={profile} model_input={input_width}x{input_height} "
+                "opencv_gate=YOLOP-road "
+            )
+        elif args.backend == "gray-road-lines":
+            backend_details = "opencv_gate=adaptive-LAB-gray-road "
+        elif args.backend == "gray-road-lane-only":
+            backend_details = (
+                "opencv_order=adaptive-LAB-road-mask-then-color-Canny-Hough "
+            )
         elif args.backend == "mix":
             backend_details = (
                 f"profile={profile} model_input={input_width}x{input_height} "
@@ -465,6 +1002,64 @@ def run(args: argparse.Namespace) -> int:
                     frame,
                     model_result,
                     mixed_result,
+                    show_legend=not args.no_legend,
+                )
+            elif args.backend == "line-first":
+                result = vision.process(frame, line_first=True)
+                overlay = render_line_first_overlay(
+                    frame,
+                    result,
+                    show_legend=not args.no_legend,
+                )
+            elif args.backend == "lane-only":
+                lane_result = vision.detect_lane_lines(frame)
+                overlay = render_lane_only_overlay(
+                    frame,
+                    lane_result,
+                    lane_color=args.lane_color,
+                    show_legend=not args.no_legend,
+                )
+            elif args.backend == "road-lines":
+                model_result = segmenter.segment(frame)
+                road_line_mask = vision.detect_lines_in_road_mask(
+                    frame,
+                    model_result.road_mask,
+                )
+                overlay = render_road_lines_overlay(
+                    frame,
+                    model_result.road_mask,
+                    road_line_mask,
+                    show_legend=not args.no_legend,
+                )
+            elif args.backend == "gray-road-lines":
+                gray_road_mask = vision.detect_gray_road_mask(frame)
+                road_line_mask = vision.detect_lines_in_mask(
+                    frame,
+                    gray_road_mask,
+                )
+                roi_polygon = vision._normalized_points(
+                    vision.config.line_roi_polygon,
+                    frame.shape[1],
+                    frame.shape[0],
+                )
+                overlay = render_gray_road_lines_overlay(
+                    frame,
+                    gray_road_mask,
+                    road_line_mask,
+                    roi_polygon,
+                    show_legend=not args.no_legend,
+                )
+            elif args.backend == "gray-road-lane-only":
+                gray_road_mask = vision.detect_gray_road_mask(frame)
+                lane_result = vision.detect_lane_lines(
+                    frame,
+                    road_mask=gray_road_mask,
+                )
+                overlay = render_lane_only_overlay(
+                    frame,
+                    lane_result,
+                    lane_color=args.lane_color,
+                    road_mask=gray_road_mask,
                     show_legend=not args.no_legend,
                 )
             else:

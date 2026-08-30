@@ -60,6 +60,56 @@ class VisionConfig:
     line_min_span_px: int = 40
     line_feature_enabled: bool = True
     line_min_elongation: float = 2.0
+    line_first_canny_low: int = 40
+    line_first_canny_high: int = 120
+    line_first_hough_threshold: int = 24
+    line_first_min_length_px: int = 35
+    line_first_max_gap_px: int = 24
+    line_first_corridor_width_px: int = 31
+    line_first_recovery_width_px: int = 81
+    line_first_band_close_kernel_px: int = 61
+    road_line_canny_low: int = 40
+    road_line_canny_high: int = 120
+    road_line_hough_threshold: int = 35
+    road_line_min_length_px: int = 45
+    road_line_max_gap_px: int = 18
+    road_line_corridor_width_px: int = 7
+    # The camera applies a strong color cast, so gray-road segmentation uses
+    # the road's adaptive LAB chroma rather than a fixed HSV gray threshold.
+    gray_road_lab_tolerance: float = 24.0
+    gray_road_min_luminance: int = 35
+    gray_road_max_luminance: int = 230
+    # The far end of this fisheye view contains shoulder/grass with a similar
+    # color to the pavement. Keep the road estimate conservative for tracking
+    # by starting it below the uncertain horizon band.
+    gray_road_top_y: float = 0.58
+    gray_road_open_kernel: int = 3
+    gray_road_close_kernel: int = 21
+    gray_road_min_component_area_px: int = 1000
+    # Dedicated OpenCV lane-line backend. The standard HSV range handles
+    # balanced cameras; the wrap-around range and signed channel differences
+    # handle this camera's peach/magenta rendering of yellow paint.
+    lane_yellow_hsv_lower: Tuple[int, int, int] = (15, 70, 80)
+    lane_yellow_hsv_upper: Tuple[int, int, int] = (42, 255, 255)
+    lane_cast_yellow_hue_margin: int = 12
+    lane_cast_yellow_saturation_min: int = 45
+    lane_cast_yellow_value_min: int = 120
+    lane_yellow_red_blue_min: int = 20
+    lane_yellow_red_green_min: int = 25
+    # The supplied camera renders asphalt as bright, low-saturation purple.
+    # A stricter white gate prevents that road texture from becoming a white
+    # lane candidate; other cameras can widen it through the CLI options.
+    lane_white_saturation_max: int = 40
+    lane_white_value_min: int = 200
+    lane_color_close_kernel: int = 5
+    lane_canny_low: int = 40
+    lane_canny_high: int = 120
+    lane_hough_threshold: int = 30
+    lane_min_length_px: int = 60
+    lane_max_gap_px: int = 20
+    lane_draw_width_px: int = 5
+    lane_min_vertical_ratio: float = 0.15
+    lane_min_color_support_ratio: float = 0.60
     # A symmetric search polygon limits the line search to the road while
     # keeping the same left/right camera margin. The values are normalized
     # x/y pairs in bottom-left, bottom-right, top-right, top-left order.
@@ -107,6 +157,80 @@ class VisionConfig:
             raise ValueError("line component limits must be positive")
         if self.line_min_elongation < 1.0:
             raise ValueError("line_min_elongation must be at least 1.0")
+        if not 0 <= self.line_first_canny_low < self.line_first_canny_high <= 255:
+            raise ValueError("line-first Canny thresholds must satisfy 0 <= low < high <= 255")
+        if (
+            self.line_first_hough_threshold <= 0
+            or self.line_first_min_length_px <= 0
+            or self.line_first_max_gap_px < 0
+            or self.line_first_corridor_width_px <= 0
+            or self.line_first_recovery_width_px <= 0
+            or self.line_first_band_close_kernel_px <= 0
+        ):
+            raise ValueError("line-first Hough parameters must be positive")
+        if not 0 <= self.road_line_canny_low < self.road_line_canny_high <= 255:
+            raise ValueError("road-line Canny thresholds must satisfy 0 <= low < high <= 255")
+        if (
+            self.road_line_hough_threshold <= 0
+            or self.road_line_min_length_px <= 0
+            or self.road_line_max_gap_px < 0
+            or self.road_line_corridor_width_px <= 0
+        ):
+            raise ValueError("road-line Hough parameters must be positive")
+        if self.gray_road_lab_tolerance <= 0.0:
+            raise ValueError("gray_road_lab_tolerance must be positive")
+        if not 0 <= self.gray_road_min_luminance < self.gray_road_max_luminance <= 255:
+            raise ValueError(
+                "gray-road luminance limits must satisfy 0 <= min < max <= 255"
+            )
+        if not 0.0 < self.gray_road_top_y < 1.0:
+            raise ValueError("gray_road_top_y must be in (0, 1)")
+        if (
+            self.gray_road_open_kernel <= 0
+            or self.gray_road_open_kernel % 2 == 0
+            or self.gray_road_close_kernel <= 0
+            or self.gray_road_close_kernel % 2 == 0
+            or self.gray_road_min_component_area_px <= 0
+        ):
+            raise ValueError("gray-road morphology parameters must be positive odd values")
+        if not all(
+            0 <= lower <= upper <= limit
+            for lower, upper, limit in zip(
+                self.lane_yellow_hsv_lower,
+                self.lane_yellow_hsv_upper,
+                (179, 255, 255),
+            )
+        ):
+            raise ValueError("lane yellow HSV limits are invalid")
+        if not 0 <= self.lane_cast_yellow_hue_margin <= 89:
+            raise ValueError("lane_cast_yellow_hue_margin must be in [0, 89]")
+        if not 0 <= self.lane_cast_yellow_saturation_min <= 255:
+            raise ValueError("lane_cast_yellow_saturation_min must be in [0, 255]")
+        if not 0 <= self.lane_cast_yellow_value_min <= 255:
+            raise ValueError("lane_cast_yellow_value_min must be in [0, 255]")
+        if not -255 <= self.lane_yellow_red_blue_min <= 255:
+            raise ValueError("lane_yellow_red_blue_min must be in [-255, 255]")
+        if not -255 <= self.lane_yellow_red_green_min <= 255:
+            raise ValueError("lane_yellow_red_green_min must be in [-255, 255]")
+        if not 0 <= self.lane_white_saturation_max <= 255:
+            raise ValueError("lane_white_saturation_max must be in [0, 255]")
+        if not 0 <= self.lane_white_value_min <= 255:
+            raise ValueError("lane_white_value_min must be in [0, 255]")
+        if self.lane_color_close_kernel <= 0 or self.lane_color_close_kernel % 2 == 0:
+            raise ValueError("lane_color_close_kernel must be a positive odd value")
+        if not 0 <= self.lane_canny_low < self.lane_canny_high <= 255:
+            raise ValueError("lane Canny thresholds must satisfy 0 <= low < high <= 255")
+        if (
+            self.lane_hough_threshold <= 0
+            or self.lane_min_length_px <= 0
+            or self.lane_max_gap_px < 0
+            or self.lane_draw_width_px <= 0
+        ):
+            raise ValueError("lane Hough parameters must be positive")
+        if not 0.0 <= self.lane_min_vertical_ratio <= 1.0:
+            raise ValueError("lane_min_vertical_ratio must be in [0, 1]")
+        if not 0.0 <= self.lane_min_color_support_ratio <= 1.0:
+            raise ValueError("lane_min_color_support_ratio must be in [0, 1]")
         if not -128 <= self.red_blue_min <= 255 or not 0 <= self.red_green_min <= 255:
             raise ValueError("warm-color channel differences must be in valid byte range")
         if not 0 <= self.warm_luminance_min <= 255:
@@ -148,9 +272,21 @@ class VisionResult:
     line_roi_polygon_px: Optional[np.ndarray] = None
     road_mask: Optional[np.ndarray] = None
     raw_line_mask: Optional[np.ndarray] = None
+    line_feature_mask: Optional[np.ndarray] = None
     centerline_points_px: np.ndarray = field(
         default_factory=lambda: np.empty((0, 2), dtype=np.float32)
     )
+
+
+@dataclass(frozen=True)
+class LaneLineResult:
+    """Color-gated Hough lane segments in camera-image coordinates."""
+
+    yellow_line_mask: np.ndarray
+    white_line_mask: np.ndarray
+    yellow_color_mask: np.ndarray
+    white_color_mask: np.ndarray
+    roi_polygon_px: np.ndarray
 
 
 class YellowLineVision:
@@ -172,12 +308,15 @@ class YellowLineVision:
         scale = np.asarray([max(width - 1, 1), max(height - 1, 1)], dtype=np.float32)
         return points * scale
 
-    def _color_mask(
+    def _yellow_color_candidates(
         self,
         frame_bgr: np.ndarray,
         roi_mask: np.ndarray,
         candidate_gate_mask: Optional[np.ndarray] = None,
+        restrict_to_candidate_gate: bool = True,
     ) -> np.ndarray:
+        """Build a yellow mask, optionally selected by a line-first gate."""
+
         lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
         luminance, channel_a, channel_b = cv2.split(lab)
 
@@ -217,8 +356,32 @@ class YellowLineVision:
             & (luminance >= self.config.warm_luminance_min)
         ).astype(np.uint8) * 255
 
+        height, width = roi_mask.shape
+        line_polygon = self._normalized_points(
+            self.config.line_roi_polygon,
+            width,
+            height,
+        ).astype(np.int32)
+        line_roi_mask = np.zeros_like(roi_mask)
+        cv2.fillPoly(line_roi_mask, [line_polygon], 255)
+        color_gate = cv2.bitwise_and(roi_mask, line_roi_mask)
+        selection_gate = color_gate
+        if candidate_gate_mask is not None:
+            if candidate_gate_mask.shape != roi_mask.shape:
+                raise ValueError(
+                    "candidate_gate_mask must match the input frame dimensions"
+                )
+            external_gate = np.where(candidate_gate_mask > 0, 255, 0).astype(
+                np.uint8
+            )
+            selection_gate = cv2.bitwise_and(color_gate, external_gate)
+
         warm_lab_mask = cv2.bitwise_and(warm_mask, lab_mask)
-        if self.config.prefer_warm_camera_mask and np.any(warm_lab_mask):
+        warm_lab_mask = cv2.bitwise_and(warm_lab_mask, color_gate)
+        hsv_lab_mask = cv2.bitwise_and(hsv_mask, lab_mask)
+        hsv_lab_mask = cv2.bitwise_and(hsv_lab_mask, color_gate)
+        selected_warm_mask = cv2.bitwise_and(warm_lab_mask, selection_gate)
+        if self.config.prefer_warm_camera_mask and np.any(selected_warm_mask):
             # Prefer the cast-aware mask whenever this frame contains a warm
             # candidate.  The broad HSV mask otherwise treats the magenta
             # road and indoor floor as yellow and can win over the real line.
@@ -226,18 +389,18 @@ class YellowLineVision:
         else:
             # Keep a conventional HSV fallback for balanced-camera frames
             # and for synthetic/unit-test images with ordinary yellow paint.
-            mask = cv2.bitwise_and(hsv_mask, lab_mask)
-        mask = cv2.bitwise_and(mask, roi_mask)
+            mask = hsv_lab_mask
+        if candidate_gate_mask is not None and restrict_to_candidate_gate:
+            mask = cv2.bitwise_and(mask, selection_gate)
+        return mask
 
-        height, width = mask.shape
-        line_polygon = self._normalized_points(
-            self.config.line_roi_polygon,
-            width,
-            height,
-        ).astype(np.int32)
-        line_roi_mask = np.zeros_like(mask)
-        cv2.fillPoly(line_roi_mask, [line_polygon], 255)
-        mask = cv2.bitwise_and(mask, line_roi_mask)
+
+    def _finish_color_mask(
+        self,
+        mask: np.ndarray,
+        candidate_gate_mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Clean color pixels and keep the dominant line-shaped component."""
 
         candidate_gate = None
         if candidate_gate_mask is not None:
@@ -248,11 +411,12 @@ class YellowLineVision:
             candidate_gate = np.where(candidate_gate_mask > 0, 255, 0).astype(
                 np.uint8
             )
-            # In mixed mode this is YOLOP's road-gated lane mask. Apply it
-            # before component selection so a larger warm sidewalk component
-            # cannot win and erase the valid model-supported centerline.
+            # This can be YOLOP's road-gated lane mask or a Hough corridor.
+            # Apply it before component selection so an unrelated warm
+            # component cannot win and erase the supported centerline.
             mask = cv2.bitwise_and(mask, candidate_gate)
 
+        _, width = mask.shape
         open_kernel = cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE,
             (self.config.open_kernel, self.config.open_kernel),
@@ -280,6 +444,467 @@ class YellowLineVision:
             mask = cv2.bitwise_and(mask, candidate_gate)
         mask = self._remove_small_components(mask)
         return self._keep_dominant_line(mask, width)
+
+    def _color_mask(
+        self,
+        frame_bgr: np.ndarray,
+        roi_mask: np.ndarray,
+        candidate_gate_mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        candidates = self._yellow_color_candidates(
+            frame_bgr,
+            roi_mask,
+            candidate_gate_mask=candidate_gate_mask,
+        )
+        return self._finish_color_mask(
+            candidates,
+            candidate_gate_mask=candidate_gate_mask,
+        )
+
+    def _line_feature_mask(
+        self,
+        frame_bgr: np.ndarray,
+        roi_mask: np.ndarray,
+    ) -> np.ndarray:
+        """Detect geometric line corridors before considering their color."""
+
+        height, width = roi_mask.shape
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(
+            clipLimit=self.config.clahe_clip_limit,
+            tileGridSize=(self.config.clahe_grid_size, self.config.clahe_grid_size),
+        )
+        enhanced = clahe.apply(gray)
+        blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        edges = cv2.Canny(
+            blurred,
+            self.config.line_first_canny_low,
+            self.config.line_first_canny_high,
+        )
+
+        line_polygon = self._normalized_points(
+            self.config.line_roi_polygon,
+            width,
+            height,
+        ).astype(np.int32)
+        line_roi_mask = np.zeros_like(roi_mask)
+        cv2.fillPoly(line_roi_mask, [line_polygon], 255)
+        edges = cv2.bitwise_and(edges, roi_mask)
+        edges = cv2.bitwise_and(edges, line_roi_mask)
+
+        scale = max(width / 1280.0, 0.5)
+        segments = cv2.HoughLinesP(
+            edges,
+            rho=1.0,
+            theta=np.pi / 180.0,
+            threshold=max(5, int(round(self.config.line_first_hough_threshold * scale))),
+            minLineLength=max(8, int(round(self.config.line_first_min_length_px * scale))),
+            maxLineGap=max(0, int(round(self.config.line_first_max_gap_px * scale))),
+        )
+
+        feature_mask = np.zeros_like(roi_mask)
+        if segments is not None:
+            corridor_width = max(
+                3,
+                int(round(self.config.line_first_corridor_width_px * scale)),
+            )
+            if corridor_width % 2 == 0:
+                corridor_width += 1
+            for segment in segments.reshape(-1, 4):
+                x1, y1, x2, y2 = (int(value) for value in segment)
+                cv2.line(
+                    feature_mask,
+                    (x1, y1),
+                    (x2, y2),
+                    255,
+                    corridor_width,
+                    cv2.LINE_AA,
+                )
+
+        feature_mask = cv2.bitwise_and(feature_mask, roi_mask)
+        return cv2.bitwise_and(feature_mask, line_roi_mask)
+
+    def detect_gray_road_mask(self, frame_bgr: np.ndarray) -> np.ndarray:
+        """Estimate a gray pavement mask inside the symmetric line ROI.
+
+        The supplied camera has a magenta cast, so the road is not close to
+        zero HSV saturation. Instead, use the median LAB ``a/b`` chroma in
+        the lower, center part of the ROI as an adaptive road-color reference.
+        This keeps the method independent of YOLOP and does not classify the
+        line by yellow color.
+        """
+
+        if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
+            raise ValueError("frame_bgr must be an HxWx3 image")
+        height, width = frame_bgr.shape[:2]
+        polygon = self._normalized_points(
+            self.config.line_roi_polygon,
+            width,
+            height,
+        ).astype(np.int32)
+        # Do not classify the uncertain far-horizon band as pavement. Crop the
+        # original ROI at the requested y instead of rebuilding its sides:
+        # this changes only the height and preserves the original left/right
+        # ROI geometry and width.
+        road_polygon = polygon.copy()
+        top_y_px = int(round(height * self.config.gray_road_top_y))
+        original_top_y_px = int(round(float(polygon[2, 1])))
+        if top_y_px > original_top_y_px:
+            original_bottom_y_px = int(round(float(polygon[0, 1])))
+            denominator = max(original_bottom_y_px - original_top_y_px, 1)
+            side_fraction = (top_y_px - original_top_y_px) / denominator
+            right_x = polygon[2, 0] + side_fraction * (
+                polygon[1, 0] - polygon[2, 0]
+            )
+            left_x = polygon[3, 0] + side_fraction * (
+                polygon[0, 0] - polygon[3, 0]
+            )
+            road_polygon[2] = (int(round(right_x)), top_y_px)
+            road_polygon[3] = (int(round(left_x)), top_y_px)
+        roi_mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillPoly(roi_mask, [road_polygon], 255)
+
+        lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+        luminance = lab[:, :, 0]
+        chroma = lab[:, :, 1:3].astype(np.float32)
+        yy, xx = np.indices((height, width))
+        reference_region = (
+            (roi_mask > 0)
+            & (yy >= int(round(height * 0.68)))
+            & (xx >= int(round(width * 0.25)))
+            & (xx <= int(round(width * 0.75)))
+        )
+        reference_pixels = chroma[reference_region]
+        if reference_pixels.size == 0:
+            return np.zeros((height, width), dtype=np.uint8)
+        reference = np.median(reference_pixels, axis=0)
+        chroma_distance = np.linalg.norm(chroma - reference, axis=2)
+        candidate = (
+            (roi_mask > 0)
+            & (luminance >= self.config.gray_road_min_luminance)
+            & (luminance <= self.config.gray_road_max_luminance)
+            & (chroma_distance <= self.config.gray_road_lab_tolerance)
+        ).astype(np.uint8) * 255
+
+        open_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (self.config.gray_road_open_kernel, self.config.gray_road_open_kernel),
+        )
+        close_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (self.config.gray_road_close_kernel, self.config.gray_road_close_kernel),
+        )
+        candidate = cv2.morphologyEx(candidate, cv2.MORPH_OPEN, open_kernel)
+        candidate = cv2.morphologyEx(candidate, cv2.MORPH_CLOSE, close_kernel)
+
+        # The pavement should touch the bottom of this camera ROI. Retain all
+        # sufficiently large bottom-connected pieces so a painted line or a
+        # small illumination change cannot split the two road sides away.
+        anchor_start = int(round(height * 0.90))
+        labels_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            candidate,
+            connectivity=8,
+        )
+        anchor_labels = set(np.unique(labels[anchor_start:])) - {0}
+        filtered = np.zeros_like(candidate)
+        for label in anchor_labels:
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            if area >= self.config.gray_road_min_component_area_px:
+                filtered[labels == label] = 255
+        if np.any(filtered):
+            return filtered
+        return candidate
+
+    def detect_lines_in_mask(
+        self,
+        frame_bgr: np.ndarray,
+        mask: np.ndarray,
+    ) -> np.ndarray:
+        """Detect geometric line candidates only inside a supplied mask.
+
+        This deliberately does not inspect HSV/LAB or any other color cue.
+        The output means only that an OpenCV Canny/Hough line was found inside
+        the supplied road-area mask.
+        """
+
+        if mask.shape != frame_bgr.shape[:2]:
+            raise ValueError("mask must match the input frame dimensions")
+        height, width = mask.shape
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(
+            clipLimit=self.config.clahe_clip_limit,
+            tileGridSize=(self.config.clahe_grid_size, self.config.clahe_grid_size),
+        )
+        enhanced = clahe.apply(gray)
+        blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        edges = cv2.Canny(
+            blurred,
+            self.config.road_line_canny_low,
+            self.config.road_line_canny_high,
+        )
+        line_gate = np.where(mask > 0, 255, 0).astype(np.uint8)
+        edges = cv2.bitwise_and(edges, line_gate)
+
+        scale = max(width / 1280.0, 0.5)
+        segments = cv2.HoughLinesP(
+            edges,
+            rho=1.0,
+            theta=np.pi / 180.0,
+            threshold=max(
+                5,
+                int(round(self.config.road_line_hough_threshold * scale)),
+            ),
+            minLineLength=max(
+                8,
+                int(round(self.config.road_line_min_length_px * scale)),
+            ),
+            maxLineGap=max(
+                0,
+                int(round(self.config.road_line_max_gap_px * scale)),
+            ),
+        )
+        line_mask = np.zeros_like(line_gate)
+        if segments is not None:
+            line_width = max(
+                1,
+                int(round(self.config.road_line_corridor_width_px * scale)),
+            )
+            for segment in segments.reshape(-1, 4):
+                x1, y1, x2, y2 = (int(value) for value in segment)
+                cv2.line(
+                    line_mask,
+                    (x1, y1),
+                    (x2, y2),
+                    255,
+                    line_width,
+                    cv2.LINE_AA,
+                )
+        return cv2.bitwise_and(line_mask, line_gate)
+
+    def detect_lines_in_road_mask(
+        self,
+        frame_bgr: np.ndarray,
+        road_mask: np.ndarray,
+    ) -> np.ndarray:
+        """Backward-compatible YOLOP-road wrapper around mask-gated Hough."""
+
+        return self.detect_lines_in_mask(frame_bgr, road_mask)
+
+    def _lane_color_masks(
+        self,
+        frame_bgr: np.ndarray,
+        roi_mask: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Return strict yellow and white lane-paint candidates in the ROI."""
+
+        hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+        hue, saturation, value = cv2.split(hsv)
+        standard_yellow = cv2.inRange(
+            hsv,
+            np.asarray(self.config.lane_yellow_hsv_lower, dtype=np.uint8),
+            np.asarray(self.config.lane_yellow_hsv_upper, dtype=np.uint8),
+        )
+
+        # Yellow paint in the supplied video is peach-colored and straddles
+        # OpenCV hue 0/179. Signed channel differences keep purple asphalt and
+        # low-luminance vegetation out of this camera-specific branch.
+        hue_margin = self.config.lane_cast_yellow_hue_margin
+        wraparound_hue = (hue <= hue_margin) | (hue >= 180 - hue_margin)
+        frame_signed = frame_bgr.astype(np.int16)
+        blue, green, red = cv2.split(frame_signed)
+        cast_yellow = (
+            wraparound_hue
+            & (saturation >= self.config.lane_cast_yellow_saturation_min)
+            & (value >= self.config.lane_cast_yellow_value_min)
+            & (red - blue >= self.config.lane_yellow_red_blue_min)
+            & (red - green >= self.config.lane_yellow_red_green_min)
+        ).astype(np.uint8) * 255
+        yellow_mask = cv2.bitwise_or(standard_yellow, cast_yellow)
+
+        white_mask = (
+            (saturation <= self.config.lane_white_saturation_max)
+            & (value >= self.config.lane_white_value_min)
+        ).astype(np.uint8) * 255
+        yellow_mask = cv2.bitwise_and(yellow_mask, roi_mask)
+        white_mask = cv2.bitwise_and(white_mask, roi_mask)
+
+        close_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (
+                self.config.lane_color_close_kernel,
+                self.config.lane_color_close_kernel,
+            ),
+        )
+        yellow_mask = cv2.morphologyEx(
+            yellow_mask,
+            cv2.MORPH_CLOSE,
+            close_kernel,
+        )
+        white_mask = cv2.morphologyEx(
+            white_mask,
+            cv2.MORPH_CLOSE,
+            close_kernel,
+        )
+        return yellow_mask, white_mask
+
+    def _hough_lane_segments(
+        self,
+        edges: np.ndarray,
+        color_mask: np.ndarray,
+    ) -> np.ndarray:
+        """Find thin, color-supported, forward-oriented Hough line segments."""
+
+        height, width = color_mask.shape
+        scale = max(width / 1280.0, 0.5)
+        gate_size = max(3, int(round(5 * scale)))
+        if gate_size % 2 == 0:
+            gate_size += 1
+        color_gate = cv2.dilate(
+            color_mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (gate_size, gate_size)),
+        )
+        color_edges = cv2.bitwise_and(edges, color_gate)
+        segments = cv2.HoughLinesP(
+            color_edges,
+            rho=1.0,
+            theta=np.pi / 180.0,
+            threshold=max(5, int(round(self.config.lane_hough_threshold * scale))),
+            minLineLength=max(8, int(round(self.config.lane_min_length_px * scale))),
+            maxLineGap=max(0, int(round(self.config.lane_max_gap_px * scale))),
+        )
+
+        line_mask = np.zeros((height, width), dtype=np.uint8)
+        if segments is None:
+            return line_mask
+        draw_width = max(1, int(round(self.config.lane_draw_width_px * scale)))
+        for segment in segments.reshape(-1, 4):
+            x1, y1, x2, y2 = (int(value) for value in segment)
+            length = float(np.hypot(x2 - x1, y2 - y1))
+            if length <= 0.0:
+                continue
+            vertical_ratio = abs(y2 - y1) / length
+            if vertical_ratio < self.config.lane_min_vertical_ratio:
+                continue
+
+            sample_count = max(2, int(np.ceil(length / 4.0)))
+            sample_x = np.rint(np.linspace(x1, x2, sample_count)).astype(np.int32)
+            sample_y = np.rint(np.linspace(y1, y2, sample_count)).astype(np.int32)
+            sample_x = np.clip(sample_x, 0, width - 1)
+            sample_y = np.clip(sample_y, 0, height - 1)
+            support_ratio = float(np.mean(color_gate[sample_y, sample_x] > 0))
+            if support_ratio < self.config.lane_min_color_support_ratio:
+                continue
+            cv2.line(
+                line_mask,
+                (x1, y1),
+                (x2, y2),
+                255,
+                draw_width,
+                cv2.LINE_AA,
+            )
+        return line_mask
+
+    def detect_lane_lines(
+        self,
+        frame_bgr: np.ndarray,
+        road_mask: Optional[np.ndarray] = None,
+    ) -> LaneLineResult:
+        """Detect color-supported lane segments, optionally inside a road mask."""
+
+        if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
+            raise ValueError("frame_bgr must be an HxWx3 image")
+        height, width = frame_bgr.shape[:2]
+        roi_polygon = self._normalized_points(
+            self.config.line_roi_polygon,
+            width,
+            height,
+        ).astype(np.int32)
+        roi_mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillPoly(roi_mask, [roi_polygon], 255)
+        if road_mask is not None:
+            if road_mask.shape != (height, width):
+                raise ValueError("road_mask must match the input frame dimensions")
+            road_gate = np.where(road_mask > 0, 255, 0).astype(np.uint8)
+            roi_mask = cv2.bitwise_and(roi_mask, road_gate)
+        yellow_color_mask, white_color_mask = self._lane_color_masks(
+            frame_bgr,
+            roi_mask,
+        )
+
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(
+            blurred,
+            self.config.lane_canny_low,
+            self.config.lane_canny_high,
+        )
+        edges = cv2.bitwise_and(edges, roi_mask)
+        yellow_line_mask = self._hough_lane_segments(edges, yellow_color_mask)
+        white_line_mask = self._hough_lane_segments(edges, white_color_mask)
+        return LaneLineResult(
+            yellow_line_mask=yellow_line_mask,
+            white_line_mask=white_line_mask,
+            yellow_color_mask=yellow_color_mask,
+            white_color_mask=white_color_mask,
+            roi_polygon_px=roi_polygon,
+        )
+
+    def _line_first_mask(
+        self,
+        frame_bgr: np.ndarray,
+        roi_mask: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        feature_mask = self._line_feature_mask(frame_bgr, roi_mask)
+
+        # Hough normally finds both edges of a thick painted stripe. Keeping
+        # only a narrow corridor around those edges can therefore split one
+        # centerline into two branches. Use the line/color intersection as a
+        # seed, then recover the full nearby color region before selecting the
+        # dominant component.
+        seed_mask = self._yellow_color_candidates(
+            frame_bgr,
+            roi_mask,
+            candidate_gate_mask=feature_mask,
+        )
+        full_color_mask = self._yellow_color_candidates(
+            frame_bgr,
+            roi_mask,
+            candidate_gate_mask=feature_mask,
+            restrict_to_candidate_gate=False,
+        )
+
+        _, width = roi_mask.shape
+        scale = max(width / 1280.0, 0.5)
+        recovery_width = max(
+            3,
+            int(round(self.config.line_first_recovery_width_px * scale)),
+        )
+        if recovery_width % 2 == 0:
+            recovery_width += 1
+        recovery_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (recovery_width, recovery_width),
+        )
+        recovery_region = cv2.dilate(seed_mask, recovery_kernel)
+        recovered_mask = cv2.bitwise_and(full_color_mask, recovery_region)
+
+        band_close_size = max(
+            3,
+            int(round(self.config.line_first_band_close_kernel_px * scale)),
+        )
+        if band_close_size % 2 == 0:
+            band_close_size += 1
+        band_close_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (band_close_size, band_close_size),
+        )
+        recovered_mask = cv2.morphologyEx(
+            recovered_mask,
+            cv2.MORPH_CLOSE,
+            band_close_kernel,
+        )
+        final_mask = self._finish_color_mask(recovered_mask)
+        return final_mask, feature_mask
 
     def _model_mask(
         self, frame_bgr: np.ndarray, roi_mask: np.ndarray
@@ -505,6 +1130,7 @@ class YellowLineVision:
         frame_bgr: np.ndarray,
         *,
         candidate_gate_mask: Optional[np.ndarray] = None,
+        line_first: bool = False,
     ) -> VisionResult:
         if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
             raise ValueError("frame_bgr must be an HxWx3 image")
@@ -522,15 +1148,23 @@ class YellowLineVision:
         roi_mask = np.zeros((height, width), dtype=np.uint8)
         cv2.fillPoly(roi_mask, [roi_polygon], 255)
 
+        line_feature_mask = None
         if self._segmenter is None:
             # Kept as an explicit development fallback so the node can still
             # start before a field-trained ONNX model is mounted.  Production
             # deployments should set segmentation_model_path to YOLOP ONNX.
-            mask = self._color_mask(
-                frame_bgr,
-                roi_mask,
-                candidate_gate_mask=candidate_gate_mask,
-            )
+            if line_first:
+                if candidate_gate_mask is not None:
+                    raise ValueError(
+                        "line_first and candidate_gate_mask cannot be used together"
+                    )
+                mask, line_feature_mask = self._line_first_mask(frame_bgr, roi_mask)
+            else:
+                mask = self._color_mask(
+                    frame_bgr,
+                    roi_mask,
+                    candidate_gate_mask=candidate_gate_mask,
+                )
             road_mask = None
             raw_line_mask = None
         else:
@@ -548,5 +1182,6 @@ class YellowLineVision:
             line_roi_polygon_px=line_polygon,
             road_mask=road_mask,
             raw_line_mask=raw_line_mask,
+            line_feature_mask=line_feature_mask,
             centerline_points_px=centerline_points_px,
         )

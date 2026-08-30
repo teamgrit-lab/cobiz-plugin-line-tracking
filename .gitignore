@@ -16,3 +16,6 @@ ros_ws/log/
 models/*.onnx
 models/*.engine
 models/*.pth
+
+# Local rosbag conversion and inspection artifacts.
+rosbag-results/

@@ -131,6 +131,26 @@ Mix overlay는 초록=YOLOP 도로, 빨강=YOLOP raw 선, 청록=도로로 제�
 YOLOP 선, 노랑=OpenCV 색상·형태 조건까지 통과한 최종 선, 흰색=ROI입니다.
 최종 노란 mask는 항상 도로로 제한된 YOLOP 선 mask의 부분집합입니다.
 
+## MCAP 카메라 토픽을 MP4로 변환
+
+ROS 2 설치 없이 MCAP rosbag의 `sensor_msgs/msg/Image` 또는
+`sensor_msgs/msg/CompressedImage` 카메라 토픽을 MP4로 변환할 수 있습니다.
+입력 bag은 read-only로 열며, FPS를 생략하면 메시지 timestamp의 중앙값 간격으로
+자동 계산합니다. FFmpeg와 Python 패키지 `mcap`, `mcap-ros2-support`가 필요합니다.
+
+```bash
+uv run --with mcap --with mcap-ros2-support \
+  python tools/rosbag_mcap_to_mp4.py \
+    --input "$HOME/Downloads/20260827_063215_teamgrit_rosbag" \
+    --topic /a2/front_camera/res_360p/image_raw \
+    --output rosbag-results/20260827_063215_camera.mp4
+```
+
+`--input`에는 rosbag 디렉터리 또는 단일 `.mcap` 파일을 줄 수 있습니다. 긴 bag의
+일부만 확인하려면 `--max-frames 100`, 용량과 처리 시간을 줄이려면
+`--frame-step 2`를 사용합니다. 기존 출력 파일을 교체하려면 `--overwrite`를
+명시해야 합니다.
+
 AI 모델 없이 원본 카메라 영상의 노란 중앙선을 확인하려면 OpenCV backend를
 사용합니다. 이 카메라는 보라색 색감이 강해 BGR의 R-B/R-G 채널 차이와
 LAB 조건, 중앙 도로 ROI, PCA 기반 선 형태(주축/부축 비율), 가장 큰 연속

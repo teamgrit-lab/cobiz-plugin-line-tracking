@@ -45,11 +45,13 @@ import cv2
 import numpy as np
 import torch
 from best_so_far_runtime import (
+    DEFAULT_EVALUATION_SIZE,
+    DEFAULT_PROFILE,
+    PROFILE_NAMES,
     BestSoFarConfig,
     BestSoFarResult,
     BestSoFarSegmenter,
 )
-from evaluate_mapillary_temporal import EVALUATION_SIZE, MODEL_ID, MODEL_REVISION
 
 RAW_IMAGE_TYPE = "sensor_msgs/msg/Image"
 DEFAULT_TOPIC = "/a2/front_camera/res_360p/image_raw"
@@ -250,9 +252,7 @@ class BenchmarkStats:
                 },
                 "mask_summary": {
                     "mean_hysteresis_hold_ratio": (
-                        statistics.fmean(self.hold_ratios)
-                        if self.hold_ratios
-                        else None
+                        statistics.fmean(self.hold_ratios) if self.hold_ratios else None
                     ),
                     "mean_road_area_ratio": (
                         statistics.fmean(self.road_area_ratios)
@@ -600,7 +600,7 @@ def run_mcap(args: argparse.Namespace, segmenter: BestSoFarSegmenter) -> dict[st
             )
             snapshot_dir = args.snapshot_dir.expanduser().resolve()
             snapshot_dir.mkdir(parents=True, exist_ok=True)
-            snapshot_path = snapshot_dir / f"{path.stem}-best-so-far.jpg"
+            snapshot_path = snapshot_dir / f"{path.stem}-{segmenter.profile.name}.jpg"
             if not cv2.imwrite(str(snapshot_path), overlay):
                 raise RuntimeError(f"could not write snapshot: {snapshot_path}")
             report["snapshot"] = str(snapshot_path)
@@ -684,16 +684,13 @@ def run_ros2(args: argparse.Namespace, segmenter: BestSoFarSegmenter) -> dict[st
         def on_image(self, message: Any) -> None:
             arrival = time.perf_counter()
             try:
-                frame_bgr = self.bridge.imgmsg_to_cv2(
-                    message, desired_encoding="bgr8"
-                )
+                frame_bgr = self.bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
             except Exception as error:  # noqa: BLE001 - cv_bridge error boundary.
                 stats.record_error()
                 self.get_logger().error(f"image conversion failed: {error}")
                 return
-            source_ns = (
-                int(message.header.stamp.sec) * 1_000_000_000
-                + int(message.header.stamp.nanosec)
+            source_ns = int(message.header.stamp.sec) * 1_000_000_000 + int(
+                message.header.stamp.nanosec
             )
             packet = FramePacket(
                 frame_bgr=np.ascontiguousarray(frame_bgr),
@@ -818,14 +815,31 @@ def run_ros2(args: argparse.Namespace, segmenter: BestSoFarSegmenter) -> dict[st
 
 
 def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--model-id", default=MODEL_ID)
-    parser.add_argument("--model-revision", default=MODEL_REVISION)
+    parser.add_argument(
+        "--profile",
+        choices=PROFILE_NAMES,
+        default=DEFAULT_PROFILE,
+        help=(
+            "named runtime profile; use swin-l-best-so-far to restore the "
+            "retained quality baseline"
+        ),
+    )
+    parser.add_argument(
+        "--model-id",
+        default=None,
+        help="optional checkpoint override for the selected profile family",
+    )
+    parser.add_argument(
+        "--model-revision",
+        default=None,
+        help="optional pinned revision override",
+    )
     parser.add_argument(
         "--evaluation-size",
         type=int,
         nargs=2,
         metavar=("HEIGHT", "WIDTH"),
-        default=EVALUATION_SIZE,
+        default=DEFAULT_EVALUATION_SIZE,
     )
     parser.add_argument("--temporal-alpha", type=float, default=0.62)
     parser.add_argument("--temporal-hysteresis-margin", type=float, default=0.07)
@@ -939,6 +953,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     config = BestSoFarConfig(
+        profile=args.profile,
         model_id=args.model_id,
         model_revision=args.model_revision,
         evaluation_height=args.evaluation_size[0],
@@ -948,7 +963,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         device=args.device,
     )
     print(
-        f"MODEL_LOAD_START profile=best-so-far requested_device={args.device}",
+        f"MODEL_LOAD_START profile={args.profile} requested_device={args.device}",
         flush=True,
     )
     segmenter = BestSoFarSegmenter(config)

@@ -337,14 +337,48 @@ python3 -m pytest \
 docker compose config --quiet
 ```
 
-## best-so-far 실시간 Hz 벤치마크
+## Mapillary segmentation profile 전환과 Swin-L 복구
 
-현재 `best-so-far` profile은 full-video renderer와 동일한 다음 설정을 사용합니다.
+실시간 기본 profile은 `r50-fp16-640x360`입니다. 기존에 가장 안정적으로 보였던
+Swin-L 결과는 `swin-l-best-so-far`로 고정해 두었으므로 모델 실험 후에도 아래
+옵션 하나로 즉시 복구할 수 있습니다.
 
-- `facebook/mask2former-swin-large-mapillary-vistas-semantic`의 고정 revision
+```bash
+# 기존 Swin-L best-so-far 설정으로 복구
+uv run tools/benchmark_best_so_far.py mcap \
+  --profile swin-l-best-so-far \
+  --input /path/to/input.mcap \
+  --output-report rosbag-results/benchmarks/swin-l-restored.json
+```
+
+`swin-l-best-so-far`의 고정 계약은 다음과 같습니다.
+
+- model: `facebook/mask2former-swin-large-mapillary-vistas-semantic`
+- revision: `4772b6bf101d91f2534c106dc524d906aeb3c68a`
+- model input: `384x384`, score map: `640x360`, precision: FP32
+- temporal alpha `0.62`, hysteresis margin `0.07`
 - Road/Bike Lane/Crosswalk/Parking/Service Lane/Lane Marking을 Road로 통합
 - Sidewalk/Pedestrian Area/Curb Cut을 Sidewalk로 통합
-- 640x360 score map, temporal alpha `0.62`, hysteresis margin `0.07`
+
+새 기본 `r50-fp16-640x360`은 같은 label aggregation과 temporal 설정을 유지하면서
+다음 실행 계약을 사용합니다.
+
+- model: `facebook/maskformer-resnet50-vistas`
+- revision: `ae4b8c2590c0a090fc32d5c217d78738a2dd4b19`
+- native `640x360` input, FP16 on MPS/CUDA, `640x360` score map
+- CPU에서는 호환성을 위해 FP32로 자동 fallback
+
+두 profile의 같은 프레임 결과와 속도를 직접 비교하려면:
+
+```bash
+uv run tools/compare_segmentation_profiles.py \
+  --input /path/to/camera.mp4 \
+  --start-frame 0 \
+  --max-frames 200 \
+  --output-dir rosbag-results/profile-comparisons
+```
+
+## best-so-far 실시간 Hz 벤치마크
 
 첨부 rosbag에서 확인한 카메라 계약은
 `/a2/front_camera/res_360p/image_raw`, `sensor_msgs/msg/Image`, RGB8,
@@ -352,6 +386,7 @@ docker compose config --quiet
 
 ```bash
 uv run tools/benchmark_best_so_far.py mcap \
+  --profile r50-fp16-640x360 \
   --input /Users/kangminwoo/Downloads/20260827_062352_teamgrit_rosbag_0-001.mcap \
   --topic /a2/front_camera/res_360p/image_raw \
   --playback-mode realtime \
@@ -372,6 +407,7 @@ report의 `overwritten_frames`, `drop_ratio`, `effective_output`이 라이브 �
 
 ```bash
 uv run tools/benchmark_best_so_far.py mcap \
+  --profile r50-fp16-640x360 \
   --input \
     /path/to/first.mcap \
     /path/to/second.mcap \

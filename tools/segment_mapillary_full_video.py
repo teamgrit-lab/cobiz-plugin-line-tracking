@@ -11,12 +11,11 @@
 #   "transformers==5.16.1",
 # ]
 # ///
-"""Render full-length Road/Sidewalk overlays with the retained Mapillary profile."""
+"""Render full-length Road/Sidewalk overlays with a named Mapillary profile."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import signal
 import time
@@ -25,39 +24,34 @@ from typing import Any
 
 import cv2
 import numpy as np
-import torch
-from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
 
-from evaluate_mapillary_label_aggregation import ROAD_LABELS, SIDEWALK_LABELS, resolve_ids
-from evaluate_mapillary_temporal import (
-    MODEL_ID,
-    MODEL_REVISION,
-    EVALUATION_SIZE,
-    aggregated_selected_mask,
-    upscale_mask,
+from best_so_far_runtime import (
+    DEFAULT_EVALUATION_SIZE,
+    DEFAULT_PROFILE,
+    PROFILE_NAMES,
+    BestSoFarConfig,
+    BestSoFarSegmenter,
 )
-from evaluate_sidewalk_road_temporal import binary_iou, remove_small_components
-from segment_sidewalk_road import (
-    VIDEO_EXTENSIONS,
-    atomic_write_json,
-    choose_device,
-    discover_videos,
-    render_overlay,
-    utc_now,
-)
+from evaluate_sidewalk_road_temporal import binary_iou
+from segment_sidewalk_road import atomic_write_json, discover_videos, utc_now
 
 
 def parse_args() -> argparse.Namespace:
     repository = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-dir", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--input", type=Path, nargs="+")
+    source.add_argument("--input-dir", type=Path)
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=repository / "rosbag-results" / "sidewalk-road-results" / "full-three-video",
+        default=(
+            repository / "rosbag-results" / "sidewalk-road-results" / "full-three-video"
+        ),
     )
-    parser.add_argument("--model-id", default=MODEL_ID)
-    parser.add_argument("--model-revision", default=MODEL_REVISION)
+    parser.add_argument("--profile", choices=PROFILE_NAMES, default=DEFAULT_PROFILE)
+    parser.add_argument("--model-id", default=None)
+    parser.add_argument("--model-revision", default=None)
     parser.add_argument("--temporal-alpha", type=float, default=0.62)
     parser.add_argument("--temporal-hysteresis-margin", type=float, default=0.07)
     parser.add_argument(
@@ -65,7 +59,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         nargs=2,
         metavar=("HEIGHT", "WIDTH"),
-        default=EVALUATION_SIZE,
+        default=DEFAULT_EVALUATION_SIZE,
     )
     parser.add_argument(
         "--output-size",
@@ -75,7 +69,12 @@ def parse_args() -> argparse.Namespace:
         default=(960, 540),
     )
     parser.add_argument("--device", default="auto")
-    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="compatibility option; stateful temporal inference remains sequential",
+    )
     parser.add_argument("--progress-every", type=int, default=100)
     parser.add_argument(
         "--max-frames",
@@ -103,37 +102,26 @@ def validate_args(args: argparse.Namespace) -> None:
         )
 
 
-def semantic_scores_batch(
-    processor: AutoImageProcessor,
-    model: Mask2FormerForUniversalSegmentation,
-    frames_bgr: list[np.ndarray],
-    device: torch.device,
-    target_size: tuple[int, int],
-) -> list[torch.Tensor]:
-    frames_rgb = [cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) for frame in frames_bgr]
-    inputs = processor(images=frames_rgb, return_tensors="pt")
-    inputs = {name: value.to(device) for name, value in inputs.items()}
-    with torch.inference_mode():
-        outputs = model(**inputs)
-        processed = processor.post_process_semantic_segmentation(
-            outputs,
-            target_sizes=[target_size] * len(frames_bgr),
-            return_segmentation_scores=True,
-        )
-    return [item["segmentation_scores"].detach().float().cpu() for item in processed]
+def resolve_videos(args: argparse.Namespace) -> list[Path]:
+    if args.input is not None:
+        videos = [path.expanduser().resolve() for path in args.input]
+        missing = [path for path in videos if not path.is_file()]
+        if missing:
+            raise FileNotFoundError(f"input video does not exist: {missing[0]}")
+        return videos
+    return discover_videos(args.input_dir.expanduser().resolve())
 
 
 def main() -> int:
     args = parse_args()
     validate_args(args)
-    input_dir = args.input_dir.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     staging_dir = output_dir / ".staging"
     staging_dir.mkdir(parents=True, exist_ok=True)
-    videos = discover_videos(input_dir)
+    videos = resolve_videos(args)
     if not videos:
-        raise RuntimeError(f"no videos found under {input_dir}")
+        raise RuntimeError("no videos found")
 
     stop_requested = False
 
@@ -144,18 +132,28 @@ def main() -> int:
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
 
-    device = choose_device(args.device)
-    print(f"MODEL_LOAD_START device={device}", flush=True)
-    processor = AutoImageProcessor.from_pretrained(
-        args.model_id, revision=args.model_revision
+    config = BestSoFarConfig(
+        profile=args.profile,
+        model_id=args.model_id,
+        model_revision=args.model_revision,
+        evaluation_height=args.evaluation_size[0],
+        evaluation_width=args.evaluation_size[1],
+        temporal_alpha=args.temporal_alpha,
+        temporal_hysteresis_margin=args.temporal_hysteresis_margin,
+        device=args.device,
     )
-    model = Mask2FormerForUniversalSegmentation.from_pretrained(
-        args.model_id, revision=args.model_revision
-    ).to(device)
-    model.eval()
-    road_ids = resolve_ids(model.config.id2label, ROAD_LABELS)
-    sidewalk_ids = resolve_ids(model.config.id2label, SIDEWALK_LABELS)
-    print("MODEL_LOAD_COMPLETE", flush=True)
+    print(
+        f"MODEL_LOAD_START profile={args.profile} requested_device={args.device}",
+        flush=True,
+    )
+    segmenter = BestSoFarSegmenter(config)
+    print(
+        f"MODEL_LOAD_COMPLETE profile={segmenter.profile.name} "
+        f"device={segmenter.device} precision="
+        f"{'fp16' if segmenter.use_fp16 else 'fp32'} "
+        f"elapsed_seconds={segmenter.model_load_seconds:.3f}",
+        flush=True,
+    )
 
     report_path = output_dir / "full-video-report.json"
     run_start = time.perf_counter()
@@ -165,9 +163,12 @@ def main() -> int:
     for video_number, input_path in enumerate(videos, start=1):
         if stop_requested:
             break
-        input_path = Path(input_path).resolve()
-        output_path = output_dir / f"{input_path.stem}-segmented-full.mp4"
-        staging_path = staging_dir / f"{input_path.stem}-segmented-full.tmp.mp4"
+        segmenter.reset()
+        output_path = (
+            output_dir
+            / f"{input_path.stem}-{segmenter.profile.name}-segmented-full.mp4"
+        )
+        staging_path = staging_dir / f"{output_path.stem}.tmp.mp4"
         staging_path.unlink(missing_ok=True)
         capture = cv2.VideoCapture(str(input_path))
         if not capture.isOpened():
@@ -176,6 +177,8 @@ def main() -> int:
         if not np.isfinite(fps) or fps <= 0.0:
             fps = 20.0
         expected_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        if args.max_frames:
+            expected_frames = min(expected_frames, args.max_frames)
         writer = cv2.VideoWriter(
             str(staging_path),
             cv2.VideoWriter_fourcc(*"mp4v"),
@@ -193,7 +196,6 @@ def main() -> int:
         )
         video_start = time.perf_counter()
         processed = 0
-        previous_scores: torch.Tensor | None = None
         previous_selected: np.ndarray | None = None
         change_ratios: list[float] = []
         road_ious: list[float] = []
@@ -201,110 +203,56 @@ def main() -> int:
         hold_fractions: list[float] = []
         road_areas: list[float] = []
         sidewalk_areas: list[float] = []
+        inference_seconds: list[float] = []
+        postprocess_seconds: list[float] = []
         try:
             while not stop_requested:
-                frame_batch: list[np.ndarray] = []
-                while len(frame_batch) < args.batch_size:
-                    if args.max_frames and processed + len(frame_batch) >= args.max_frames:
-                        break
-                    ok, frame_bgr = capture.read()
-                    if not ok:
-                        break
-                    frame_batch.append(frame_bgr)
-                if not frame_batch:
+                if args.max_frames and processed >= args.max_frames:
                     break
-                score_batch = semantic_scores_batch(
-                    processor,
-                    model,
-                    frame_batch,
-                    device,
-                    tuple(args.evaluation_size),
-                )
-                for frame_bgr, scores in zip(frame_batch, score_batch, strict=True):
-                    if stop_requested:
-                        break
-                    if previous_scores is None:
-                        smooth_scores = scores
-                    else:
-                        smooth_scores = (
-                            args.temporal_alpha * scores
-                            + (1.0 - args.temporal_alpha) * previous_scores
-                        )
-                    previous_scores = smooth_scores
-                    smooth_map = smooth_scores.argmax(dim=0).numpy()
-                    minimum_area = max(48, int(smooth_map.size * 0.00035))
-                    road_confidence = (
-                        smooth_scores[road_ids].max(dim=0).values.numpy()
+                ok, frame_bgr = capture.read()
+                if not ok:
+                    break
+                result = segmenter.segment(frame_bgr)
+                selected = result.selected_mask
+                if previous_selected is not None:
+                    change_ratios.append(float(np.mean(selected != previous_selected)))
+                    road_ious.append(binary_iou(selected == 1, previous_selected == 1))
+                    sidewalk_ious.append(
+                        binary_iou(selected == 2, previous_selected == 2)
                     )
-                    sidewalk_confidence = (
-                        smooth_scores[sidewalk_ids].max(dim=0).values.numpy()
-                    )
-                    selected = aggregated_selected_mask(
-                        smooth_map,
-                        road_ids=road_ids,
-                        sidewalk_ids=sidewalk_ids,
-                        road_confidence=road_confidence,
-                        sidewalk_confidence=sidewalk_confidence,
-                        minimum_area=minimum_area,
-                    )
-                    if previous_selected is not None:
-                        top_scores = torch.topk(smooth_scores, k=2, dim=0).values.numpy()
-                        score_margin = top_scores[0] - top_scores[1]
-                        hold_mask = (
-                            (selected != previous_selected)
-                            & (score_margin < args.temporal_hysteresis_margin)
-                        )
-                        selected = selected.copy()
-                        selected[hold_mask] = previous_selected[hold_mask]
-                        retained_road = remove_small_components(
-                            selected == 1, minimum_area
-                        )
-                        retained_sidewalk = remove_small_components(
-                            selected == 2, minimum_area
-                        )
-                        selected.fill(0)
-                        selected[retained_road] = 1
-                        selected[retained_sidewalk] = 2
-                        change_ratios.append(
-                            float(np.mean(selected != previous_selected))
-                        )
-                        road_ious.append(
-                            binary_iou(selected == 1, previous_selected == 1)
-                        )
-                        sidewalk_ious.append(
-                            binary_iou(selected == 2, previous_selected == 2)
-                        )
-                        hold_fractions.append(float(np.mean(hold_mask)))
-                    else:
-                        hold_fractions.append(0.0)
-                    previous_selected = selected
-                    road_areas.append(float(np.mean(selected == 1)))
-                    sidewalk_areas.append(float(np.mean(selected == 2)))
+                previous_selected = selected.copy()
+                hold_fractions.append(result.hysteresis_hold_ratio)
+                road_areas.append(result.road_area_ratio)
+                sidewalk_areas.append(result.sidewalk_area_ratio)
+                inference_seconds.append(result.inference_seconds)
+                postprocess_seconds.append(result.postprocess_seconds)
 
-                    overlay = render_overlay(
-                        frame_bgr,
-                        upscale_mask(selected, frame_bgr),
-                        frame_index=processed,
-                        fps=fps,
+                overlay = segmenter.render_overlay(
+                    frame_bgr,
+                    selected,
+                    frame_index=processed,
+                    fps=fps,
+                )
+                overlay = cv2.resize(
+                    overlay,
+                    tuple(args.output_size),
+                    interpolation=cv2.INTER_AREA,
+                )
+                writer.write(overlay)
+                processed += 1
+                total_frames += 1
+                if processed % args.progress_every == 0:
+                    elapsed = time.perf_counter() - video_start
+                    rate = processed / elapsed if elapsed else 0.0
+                    remaining = (
+                        max(expected_frames - processed, 0) / rate if rate else 0.0
                     )
-                    overlay = cv2.resize(
-                        overlay, tuple(args.output_size), interpolation=cv2.INTER_AREA
+                    print(
+                        f"VIDEO_PROGRESS index={video_number}/{len(videos)} "
+                        f"frames={processed}/{expected_frames} rate={rate:.3f}fps "
+                        f"eta_seconds={remaining:.1f}",
+                        flush=True,
                     )
-                    writer.write(overlay)
-                    processed += 1
-                    total_frames += 1
-                    if processed % args.progress_every == 0:
-                        elapsed = time.perf_counter() - video_start
-                        rate = processed / elapsed if elapsed else 0.0
-                        remaining = (
-                            max(expected_frames - processed, 0) / rate if rate else 0.0
-                        )
-                        print(
-                            f"VIDEO_PROGRESS index={video_number}/{len(videos)} "
-                            f"frames={processed}/{expected_frames} rate={rate:.3f}fps "
-                            f"eta_seconds={remaining:.1f}",
-                            flush=True,
-                        )
         finally:
             capture.release()
             writer.release()
@@ -325,6 +273,8 @@ def main() -> int:
             "input_fps": fps,
             "elapsed_seconds": elapsed,
             "processing_fps": processed / elapsed,
+            "mean_inference_ms": mean(inference_seconds) * 1000.0,
+            "mean_postprocess_ms": mean(postprocess_seconds) * 1000.0,
             "mean_selected_label_change_ratio": mean(change_ratios),
             "mean_road_adjacent_iou": mean(road_ious),
             "mean_sidewalk_adjacent_iou": mean(sidewalk_ious),
@@ -333,22 +283,15 @@ def main() -> int:
             "mean_sidewalk_area_ratio": mean(sidewalk_areas),
         }
         video_reports.append(video_report)
+        runtime = segmenter.metadata()
         atomic_write_json(
             report_path,
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "status": "running" if video_number < len(videos) else "complete",
                 "updated_at": utc_now(),
-                "model": {"id": args.model_id, "revision": args.model_revision},
-                "settings": {
-                    "profile": "surface-aggregate",
-                    "temporal_alpha": args.temporal_alpha,
-                    "temporal_hysteresis_margin": args.temporal_hysteresis_margin,
-                    "evaluation_size": list(args.evaluation_size),
-                    "output_size": list(args.output_size),
-                    "road_labels": list(ROAD_LABELS),
-                    "sidewalk_labels": list(SIDEWALK_LABELS),
-                },
+                "runtime": runtime,
+                "output_size": list(args.output_size),
                 "videos": video_reports,
                 "processed_frames": total_frames,
                 "elapsed_seconds": time.perf_counter() - run_start,
@@ -362,19 +305,11 @@ def main() -> int:
 
     status = "interrupted" if stop_requested else "complete"
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": status,
         "updated_at": utc_now(),
-        "model": {"id": args.model_id, "revision": args.model_revision},
-        "settings": {
-            "profile": "surface-aggregate",
-            "temporal_alpha": args.temporal_alpha,
-            "temporal_hysteresis_margin": args.temporal_hysteresis_margin,
-            "evaluation_size": list(args.evaluation_size),
-            "output_size": list(args.output_size),
-            "road_labels": list(ROAD_LABELS),
-            "sidewalk_labels": list(SIDEWALK_LABELS),
-        },
+        "runtime": segmenter.metadata(),
+        "output_size": list(args.output_size),
         "videos": video_reports,
         "processed_frames": total_frames,
         "elapsed_seconds": time.perf_counter() - run_start,

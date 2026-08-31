@@ -145,6 +145,26 @@ uv run python tools/segment_video.py \
   --lane-draw-width-px 5
 ```
 
+Colab의 Advanced-Lane-Lines 흐름처럼 자동차 도로의 좌·우 차선을 함께 검출하고
+그 사이 주행 영역을 표시하려면 `advanced-lane` 테스트 backend를 사용합니다.
+기존 `lane-only`의 노란색/흰색 후보를 재사용한 뒤 `bird's-eye 변환 → sliding
+window → 좌우 2차 곡선 fitting → 역원근 overlay`를 수행합니다. 초록색은 주행
+영역, 노란색/흰색은 좌·우 차선, 청록색은 차선 중심입니다. 곡률과 차량의 차선
+중심 이탈량도 영상 왼쪽 위에 표시됩니다.
+
+```bash
+uv run python tools/segment_video.py \
+  --backend advanced-lane \
+  --input /path/to/driving_video.mp4 \
+  --output /path/to/advanced_lane_overlay.mp4
+```
+
+실차 영상에서는 카메라 장착 상태에 맞게 `VisionConfig.perspective_source`를 먼저
+보정해야 합니다. 차선 폭·가시 거리는 각각 `--advanced-lane-width-m`,
+`--advanced-lane-visible-distance-m`으로 맞출 수 있으며, 검출이 끊기면
+`--advanced-lane-margin-px`와 `--advanced-lane-min-points`를 조정합니다. 이
+backend는 테스트 영상용이며 ROS의 기존 단일 중앙선 제어 출력은 변경하지 않습니다.
+
 한 색상만 확인하려면 `--lane-color yellow` 또는 `--lane-color white`를
 추가합니다. 두 색상을 동시에 표시할 때 겹치는 Hough 선분은 빨간색
 (`OVERLAP`)으로 표시됩니다. `lane-only`는 원본 입력 영상에서 실행해야 하며, 이미 overlay가

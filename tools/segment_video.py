@@ -29,6 +29,7 @@ from line_tracking.segmentation import (  # noqa: E402
 )
 from line_tracking.vision import (  # noqa: E402
     LaneLineResult,
+    RoadLaneResult,
     VisionConfig,
     VisionResult,
     YellowLineVision,
@@ -373,6 +374,110 @@ def render_lane_only_overlay(
     return output
 
 
+def render_advanced_lane_overlay(
+    frame_bgr: np.ndarray,
+    result: RoadLaneResult,
+    *,
+    show_legend: bool = True,
+) -> np.ndarray:
+    """Render a fitted left/right lane pair and the corridor between them."""
+
+    output = frame_bgr.copy()
+    if result.detected:
+        lane_mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
+        polygon = np.rint(result.lane_polygon_px).astype(np.int32)
+        cv2.fillPoly(lane_mask, [polygon], 255)
+        _paint_mask(output, lane_mask, (0, 180, 0), 0.34)
+        cv2.polylines(
+            output,
+            [np.rint(result.left_curve_px).astype(np.int32)],
+            isClosed=False,
+            color=(0, 255, 255),
+            thickness=5,
+            lineType=cv2.LINE_AA,
+        )
+        cv2.polylines(
+            output,
+            [np.rint(result.right_curve_px).astype(np.int32)],
+            isClosed=False,
+            color=(255, 255, 255),
+            thickness=5,
+            lineType=cv2.LINE_AA,
+        )
+        cv2.polylines(
+            output,
+            [np.rint(result.centerline_points_px).astype(np.int32)],
+            isClosed=False,
+            color=(255, 255, 0),
+            thickness=3,
+            lineType=cv2.LINE_AA,
+        )
+
+    if show_legend:
+        panel_width = min(max(frame_bgr.shape[1] - 24, 240), 430)
+        cv2.rectangle(output, (12, 12), (panel_width, 128), (0, 0, 0), -1)
+        cv2.rectangle(
+            output,
+            (12, 12),
+            (panel_width, 128),
+            (220, 220, 220),
+            1,
+        )
+        status = "LANE PAIR DETECTED" if result.detected else "LANE PAIR NOT DETECTED"
+        status_color = (80, 255, 80) if result.detected else (80, 80, 255)
+        cv2.putText(
+            output,
+            status,
+            (24, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            status_color,
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            output,
+            f"confidence={result.confidence:.2f}",
+            (24, 66),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        curvature = (
+            f"{result.curvature_m:.1f} m"
+            if result.curvature_m is not None
+            else "n/a"
+        )
+        cv2.putText(
+            output,
+            f"curvature={curvature}",
+            (24, 91),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        offset = (
+            f"{result.center_offset_m:+.2f} m"
+            if result.center_offset_m is not None
+            else "n/a"
+        )
+        cv2.putText(
+            output,
+            f"vehicle_offset={offset} (right +)",
+            (24, 116),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+    return output
+
+
 def render_mix_overlay(
     frame_bgr: np.ndarray,
     model_result: SegmentationResult,
@@ -449,6 +554,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "opencv",
             "line-first",
             "lane-only",
+            "advanced-lane",
             "road-lines",
             "gray-road-lines",
             "gray-road-lane-only",
@@ -462,7 +568,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "inside YOLOP's road mask; gray-road-lines builds an adaptive "
             "LAB gray-road mask before Hough; gray-road-lane-only gates "
             "lane-only by that OpenCV road mask; lane-only filters "
-            "yellow/white paint before Canny/Hough"
+            "yellow/white paint before Canny/Hough; advanced-lane fits a "
+            "bird's-eye quadratic left/right lane pair and road corridor"
         ),
     )
     parser.add_argument(
@@ -817,6 +924,66 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0.60,
         help="minimum fraction of a Hough segment supported by lane color",
     )
+    parser.add_argument(
+        "--advanced-lane-windows",
+        type=int,
+        default=9,
+        help="number of bird's-eye sliding windows",
+    )
+    parser.add_argument(
+        "--advanced-lane-margin-px",
+        type=int,
+        default=45,
+        help="half-width of each lane search window in bird's-eye pixels",
+    )
+    parser.add_argument(
+        "--advanced-lane-min-pixels",
+        type=int,
+        default=25,
+        help="pixels needed to recenter one sliding window",
+    )
+    parser.add_argument(
+        "--advanced-lane-min-points",
+        type=int,
+        default=120,
+        help="minimum pixels needed to fit each lane curve",
+    )
+    parser.add_argument(
+        "--advanced-lane-min-width-ratio",
+        type=float,
+        default=0.35,
+        help="minimum lane width divided by bird's-eye image width",
+    )
+    parser.add_argument(
+        "--advanced-lane-max-width-ratio",
+        type=float,
+        default=1.05,
+        help="maximum lane width divided by bird's-eye image width",
+    )
+    parser.add_argument(
+        "--advanced-lane-max-width-std-ratio",
+        type=float,
+        default=0.20,
+        help="maximum lane-width standard deviation divided by median width",
+    )
+    parser.add_argument(
+        "--advanced-lane-width-m",
+        type=float,
+        default=3.70,
+        help="real lane width used for curvature and offset metrics",
+    )
+    parser.add_argument(
+        "--advanced-lane-visible-distance-m",
+        type=float,
+        default=30.0,
+        help="road distance represented by the bird's-eye image",
+    )
+    parser.add_argument(
+        "--advanced-lane-smoothing-alpha",
+        type=float,
+        default=0.35,
+        help="new-frame weight for temporal polynomial smoothing",
+    )
     return parser
 
 
@@ -870,6 +1037,7 @@ def run(args: argparse.Namespace) -> int:
         "opencv",
         "line-first",
         "lane-only",
+        "advanced-lane",
         "road-lines",
         "gray-road-lines",
         "gray-road-lane-only",
@@ -935,6 +1103,26 @@ def run(args: argparse.Namespace) -> int:
                 lane_draw_width_px=args.lane_draw_width_px,
                 lane_min_vertical_ratio=args.lane_min_vertical_ratio,
                 lane_min_color_support_ratio=args.lane_min_color_support_ratio,
+                advanced_lane_windows=args.advanced_lane_windows,
+                advanced_lane_margin_px=args.advanced_lane_margin_px,
+                advanced_lane_min_pixels=args.advanced_lane_min_pixels,
+                advanced_lane_min_points=args.advanced_lane_min_points,
+                advanced_lane_min_width_ratio=(
+                    args.advanced_lane_min_width_ratio
+                ),
+                advanced_lane_max_width_ratio=(
+                    args.advanced_lane_max_width_ratio
+                ),
+                advanced_lane_max_width_std_ratio=(
+                    args.advanced_lane_max_width_std_ratio
+                ),
+                advanced_lane_width_m=args.advanced_lane_width_m,
+                advanced_lane_visible_distance_m=(
+                    args.advanced_lane_visible_distance_m
+                ),
+                advanced_lane_smoothing_alpha=(
+                    args.advanced_lane_smoothing_alpha
+                ),
             )
         )
 
@@ -959,6 +1147,10 @@ def run(args: argparse.Namespace) -> int:
             backend_details = "opencv_order=Canny-Hough-then-yellow "
         elif args.backend == "lane-only":
             backend_details = "opencv_order=color-Canny-Hough-yellow+white "
+        elif args.backend == "advanced-lane":
+            backend_details = (
+                "opencv_order=color-perspective-sliding-window-quadratic "
+            )
         elif args.backend == "road-lines":
             backend_details = (
                 f"profile={profile} model_input={input_width}x{input_height} "
@@ -1017,6 +1209,13 @@ def run(args: argparse.Namespace) -> int:
                     frame,
                     lane_result,
                     lane_color=args.lane_color,
+                    show_legend=not args.no_legend,
+                )
+            elif args.backend == "advanced-lane":
+                road_lane_result = vision.detect_advanced_lanes(frame)
+                overlay = render_advanced_lane_overlay(
+                    frame,
+                    road_lane_result,
                     show_legend=not args.no_legend,
                 )
             elif args.backend == "road-lines":

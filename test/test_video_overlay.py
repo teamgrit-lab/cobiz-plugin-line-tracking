@@ -1,8 +1,10 @@
 import numpy as np
 
 from line_tracking.segmentation import SegmentationResult
-from line_tracking.vision import VisionConfig, YellowLineVision
+from line_tracking.vision import RoadLaneResult, VisionConfig, YellowLineVision
 from tools.segment_video import (
+    _build_parser,
+    render_advanced_lane_overlay,
     render_mix_overlay,
     render_opencv_overlay,
     render_segmentation_overlay,
@@ -75,3 +77,36 @@ def test_mix_overlay_marks_final_line_after_model_masks():
     assert final_pixel[1] > final_pixel[0]
     assert final_pixel[2] > final_pixel[0]
     assert output.shape == frame.shape
+
+
+def test_advanced_lane_overlay_marks_corridor_and_curves():
+    frame = np.zeros((120, 200, 3), dtype=np.uint8)
+    left = np.asarray([[50, 119], [75, 50]], dtype=np.float32)
+    right = np.asarray([[150, 119], [125, 50]], dtype=np.float32)
+    center = np.asarray([[100, 119], [100, 50]], dtype=np.float32)
+    result = RoadLaneResult(
+        binary_mask=np.zeros((120, 200), dtype=np.uint8),
+        birdseye_mask=np.zeros((600, 400), dtype=np.uint8),
+        left_curve_px=left,
+        right_curve_px=right,
+        centerline_points_px=center,
+        lane_polygon_px=np.concatenate((left, right[::-1]), axis=0),
+        confidence=0.9,
+        curvature_m=250.0,
+        center_offset_m=0.05,
+    )
+
+    output = render_advanced_lane_overlay(frame, result, show_legend=False)
+
+    assert output.shape == frame.shape
+    assert output[90, 100, 1] > output[90, 100, 2]
+    assert np.count_nonzero(output) > 0
+
+
+def test_advanced_lane_backend_is_available_without_model_argument():
+    args = _build_parser().parse_args(
+        ["--backend", "advanced-lane", "--input", "in.mp4", "--output", "out.mp4"]
+    )
+
+    assert args.backend == "advanced-lane"
+    assert args.model_path is None

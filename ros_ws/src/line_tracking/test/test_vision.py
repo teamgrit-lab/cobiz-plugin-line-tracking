@@ -47,6 +47,23 @@ def _colored_lane_frame() -> np.ndarray:
     return frame
 
 
+def _road_lane_frame() -> np.ndarray:
+    """Synthetic perspective road with a yellow left and white right lane."""
+
+    frame = np.full((360, 640, 3), (55, 55, 55), dtype=np.uint8)
+    left_points = np.asarray(
+        [[110, 359], [145, 320], [185, 275], [225, 225], [265, 162]],
+        dtype=np.int32,
+    )
+    right_points = np.asarray(
+        [[530, 359], [495, 320], [455, 275], [415, 225], [375, 162]],
+        dtype=np.int32,
+    )
+    cv2.polylines(frame, [left_points], False, (0, 255, 255), 14)
+    cv2.polylines(frame, [right_points], False, (255, 255, 255), 14)
+    return frame
+
+
 def test_detects_yellow_line_and_fits_metric_path():
     detector = YellowLineVision(VisionConfig(min_component_area_px=20))
 
@@ -194,3 +211,32 @@ def test_lane_segments_are_gated_by_an_external_road_mask():
     detected = result.yellow_line_mask | result.white_line_mask
     assert np.count_nonzero(detected) > 0
     assert np.count_nonzero(detected[road_mask == 0]) == 0
+
+
+def test_advanced_lane_backend_fits_both_lanes_and_road_corridor():
+    detector = YellowLineVision(VisionConfig())
+
+    result = detector.detect_advanced_lanes(_road_lane_frame())
+
+    assert result.detected
+    assert result.confidence >= 0.70
+    assert result.left_curve_px.shape[1] == 2
+    assert result.right_curve_px.shape[1] == 2
+    assert result.centerline_points_px.shape[1] == 2
+    assert len(result.lane_polygon_px) >= 4
+    assert result.center_offset_m is not None
+    assert abs(result.center_offset_m) < 0.25
+    assert np.count_nonzero(result.binary_mask) > 0
+    assert np.count_nonzero(result.birdseye_mask) > 0
+
+
+def test_advanced_lane_backend_rejects_frame_without_lane_pair():
+    detector = YellowLineVision(VisionConfig())
+    frame = np.full((360, 640, 3), (55, 55, 55), dtype=np.uint8)
+
+    result = detector.detect_advanced_lanes(frame)
+
+    assert not result.detected
+    assert result.confidence == 0.0
+    assert result.curvature_m is None
+    assert result.center_offset_m is None

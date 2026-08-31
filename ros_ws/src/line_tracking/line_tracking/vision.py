@@ -110,6 +110,19 @@ class VisionConfig:
     lane_draw_width_px: int = 5
     lane_min_vertical_ratio: float = 0.15
     lane_min_color_support_ratio: float = 0.60
+    # Advanced-Lane-Lines style test backend. Color thresholding is shared
+    # with ``detect_lane_lines``; these parameters control bird's-eye sliding
+    # windows and the quadratic left/right lane fit used for road vehicles.
+    advanced_lane_windows: int = 9
+    advanced_lane_margin_px: int = 45
+    advanced_lane_min_pixels: int = 25
+    advanced_lane_min_points: int = 120
+    advanced_lane_min_width_ratio: float = 0.35
+    advanced_lane_max_width_ratio: float = 1.05
+    advanced_lane_max_width_std_ratio: float = 0.20
+    advanced_lane_width_m: float = 3.70
+    advanced_lane_visible_distance_m: float = 30.0
+    advanced_lane_smoothing_alpha: float = 0.35
     # A symmetric search polygon limits the line search to the road while
     # keeping the same left/right camera margin. The values are normalized
     # x/y pairs in bottom-left, bottom-right, top-right, top-left order.
@@ -231,6 +244,28 @@ class VisionConfig:
             raise ValueError("lane_min_vertical_ratio must be in [0, 1]")
         if not 0.0 <= self.lane_min_color_support_ratio <= 1.0:
             raise ValueError("lane_min_color_support_ratio must be in [0, 1]")
+        if (
+            self.advanced_lane_windows <= 0
+            or self.advanced_lane_margin_px <= 0
+            or self.advanced_lane_min_pixels <= 0
+            or self.advanced_lane_min_points <= 0
+        ):
+            raise ValueError("advanced-lane sliding-window parameters must be positive")
+        if not (
+            0.0
+            < self.advanced_lane_min_width_ratio
+            < self.advanced_lane_max_width_ratio
+        ):
+            raise ValueError("advanced-lane width ratios must be ordered and positive")
+        if self.advanced_lane_max_width_std_ratio <= 0.0:
+            raise ValueError("advanced_lane_max_width_std_ratio must be positive")
+        if (
+            self.advanced_lane_width_m <= 0.0
+            or self.advanced_lane_visible_distance_m <= 0.0
+        ):
+            raise ValueError("advanced-lane metric dimensions must be positive")
+        if not 0.0 < self.advanced_lane_smoothing_alpha <= 1.0:
+            raise ValueError("advanced_lane_smoothing_alpha must be in (0, 1]")
         if not -128 <= self.red_blue_min <= 255 or not 0 <= self.red_green_min <= 255:
             raise ValueError("warm-color channel differences must be in valid byte range")
         if not 0 <= self.warm_luminance_min <= 255:
@@ -289,6 +324,33 @@ class LaneLineResult:
     roi_polygon_px: np.ndarray
 
 
+@dataclass(frozen=True)
+class RoadLaneResult:
+    """Left/right road-lane fit and its projection into the camera image."""
+
+    binary_mask: np.ndarray
+    birdseye_mask: np.ndarray
+    left_curve_px: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 2), dtype=np.float32)
+    )
+    right_curve_px: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 2), dtype=np.float32)
+    )
+    centerline_points_px: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 2), dtype=np.float32)
+    )
+    lane_polygon_px: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 2), dtype=np.float32)
+    )
+    confidence: float = 0.0
+    curvature_m: Optional[float] = None
+    center_offset_m: Optional[float] = None
+
+    @property
+    def detected(self) -> bool:
+        return len(self.left_curve_px) >= 2 and len(self.right_curve_px) >= 2
+
+
 class YellowLineVision:
     """Segment a yellow guide line and fit its centerline in ground coordinates."""
 
@@ -299,6 +361,8 @@ class YellowLineVision:
         self.config = config
         self._segmenter = segmenter
         self._previous_near_lateral: Optional[float] = None
+        self._previous_left_lane_fit: Optional[np.ndarray] = None
+        self._previous_right_lane_fit: Optional[np.ndarray] = None
 
     @staticmethod
     def _normalized_points(
@@ -849,6 +913,335 @@ class YellowLineVision:
             roi_polygon_px=roi_polygon,
         )
 
+    def _perspective_transforms(
+        self,
+        image_shape: Tuple[int, int],
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Return camera-to-bird's-eye and inverse perspective matrices."""
+
+        height, width = image_shape
+        source = self._normalized_points(
+            self.config.perspective_source,
+            width,
+            height,
+        )
+        destination = np.asarray(
+            [
+                [0, self.config.birdseye_height - 1],
+                [self.config.birdseye_width - 1, self.config.birdseye_height - 1],
+                [self.config.birdseye_width - 1, 0],
+                [0, 0],
+            ],
+            dtype=np.float32,
+        )
+        return (
+            cv2.getPerspectiveTransform(source, destination),
+            cv2.getPerspectiveTransform(destination, source),
+        )
+
+    def _sliding_window_lane_indices(
+        self,
+        birdseye_mask: np.ndarray,
+        nonzero_x: np.ndarray,
+        nonzero_y: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Collect left/right lane pixels using histogram-seeded windows."""
+
+        height, width = birdseye_mask.shape
+        histogram = np.sum(birdseye_mask[height // 2 :, :] > 0, axis=0)
+        midpoint = width // 2
+        if not np.any(histogram[:midpoint]) or not np.any(histogram[midpoint:]):
+            empty = np.empty(0, dtype=np.int64)
+            return empty, empty
+
+        left_current = int(np.argmax(histogram[:midpoint]))
+        right_current = int(np.argmax(histogram[midpoint:]) + midpoint)
+        window_height = max(1, height // self.config.advanced_lane_windows)
+        margin = self.config.advanced_lane_margin_px
+        left_indices = []
+        right_indices = []
+
+        for window in range(self.config.advanced_lane_windows):
+            y_high = height - window * window_height
+            y_low = max(0, height - (window + 1) * window_height)
+            within_y = (nonzero_y >= y_low) & (nonzero_y < y_high)
+            left_window = np.flatnonzero(
+                within_y
+                & (nonzero_x >= left_current - margin)
+                & (nonzero_x < left_current + margin)
+            )
+            right_window = np.flatnonzero(
+                within_y
+                & (nonzero_x >= right_current - margin)
+                & (nonzero_x < right_current + margin)
+            )
+            left_indices.append(left_window)
+            right_indices.append(right_window)
+            if left_window.size >= self.config.advanced_lane_min_pixels:
+                left_current = int(np.mean(nonzero_x[left_window]))
+            if right_window.size >= self.config.advanced_lane_min_pixels:
+                right_current = int(np.mean(nonzero_x[right_window]))
+
+        return np.concatenate(left_indices), np.concatenate(right_indices)
+
+    def _advanced_lane_pixel_indices(
+        self,
+        birdseye_mask: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Find lane pixels near the previous fit or with sliding windows."""
+
+        nonzero_y, nonzero_x = np.nonzero(birdseye_mask)
+        margin = self.config.advanced_lane_margin_px
+        if (
+            self._previous_left_lane_fit is not None
+            and self._previous_right_lane_fit is not None
+        ):
+            left_center = np.polyval(self._previous_left_lane_fit, nonzero_y)
+            right_center = np.polyval(self._previous_right_lane_fit, nonzero_y)
+            left_indices = np.flatnonzero(np.abs(nonzero_x - left_center) <= margin)
+            right_indices = np.flatnonzero(np.abs(nonzero_x - right_center) <= margin)
+            if (
+                left_indices.size >= self.config.advanced_lane_min_points
+                and right_indices.size >= self.config.advanced_lane_min_points
+            ):
+                return nonzero_x, nonzero_y, left_indices, right_indices
+
+        left_indices, right_indices = self._sliding_window_lane_indices(
+            birdseye_mask,
+            nonzero_x,
+            nonzero_y,
+        )
+        return nonzero_x, nonzero_y, left_indices, right_indices
+
+    def _lane_fit_is_valid(
+        self,
+        left_fit: np.ndarray,
+        right_fit: np.ndarray,
+        birdseye_shape: Tuple[int, int],
+    ) -> Tuple[bool, np.ndarray, np.ndarray, float]:
+        """Validate ordering, width and parallelism of a candidate lane pair."""
+
+        height, width = birdseye_shape
+        plot_y = np.linspace(0, height - 1, height, dtype=np.float64)
+        left_x = np.polyval(left_fit, plot_y)
+        right_x = np.polyval(right_fit, plot_y)
+        lane_width = right_x - left_x
+        median_width = float(np.median(lane_width))
+        if median_width <= 0.0:
+            return False, left_x, right_x, median_width
+        minimum_width = self.config.advanced_lane_min_width_ratio * width
+        maximum_width = self.config.advanced_lane_max_width_ratio * width
+        width_std_ratio = float(np.std(lane_width)) / median_width
+        valid = bool(
+            np.all(np.isfinite(left_x))
+            and np.all(np.isfinite(right_x))
+            and np.all(lane_width >= minimum_width)
+            and np.all(lane_width <= maximum_width)
+            and width_std_ratio <= self.config.advanced_lane_max_width_std_ratio
+        )
+        return valid, left_x, right_x, median_width
+
+    def _fit_advanced_lane_pair(
+        self,
+        birdseye_mask: np.ndarray,
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]]:
+        """Fit and temporally smooth quadratic x(y) curves for both lanes."""
+
+        nonzero_x, nonzero_y, left_indices, right_indices = (
+            self._advanced_lane_pixel_indices(birdseye_mask)
+        )
+        if (
+            left_indices.size < self.config.advanced_lane_min_points
+            or right_indices.size < self.config.advanced_lane_min_points
+        ):
+            self._previous_left_lane_fit = None
+            self._previous_right_lane_fit = None
+            return None
+
+        left_fit = np.polyfit(
+            nonzero_y[left_indices],
+            nonzero_x[left_indices],
+            2,
+        )
+        right_fit = np.polyfit(
+            nonzero_y[right_indices],
+            nonzero_x[right_indices],
+            2,
+        )
+        valid, left_x, right_x, median_width = self._lane_fit_is_valid(
+            left_fit,
+            right_fit,
+            birdseye_mask.shape,
+        )
+        if not valid:
+            self._previous_left_lane_fit = None
+            self._previous_right_lane_fit = None
+            return None
+
+        alpha = self.config.advanced_lane_smoothing_alpha
+        if self._previous_left_lane_fit is not None:
+            left_fit = alpha * left_fit + (1.0 - alpha) * self._previous_left_lane_fit
+        if self._previous_right_lane_fit is not None:
+            right_fit = (
+                alpha * right_fit + (1.0 - alpha) * self._previous_right_lane_fit
+            )
+        valid, left_x, right_x, median_width = self._lane_fit_is_valid(
+            left_fit,
+            right_fit,
+            birdseye_mask.shape,
+        )
+        if not valid:
+            self._previous_left_lane_fit = None
+            self._previous_right_lane_fit = None
+            return None
+
+        self._previous_left_lane_fit = left_fit
+        self._previous_right_lane_fit = right_fit
+
+        height = birdseye_mask.shape[0]
+        left_coverage = float(np.ptp(nonzero_y[left_indices])) / max(height - 1, 1)
+        right_coverage = float(np.ptp(nonzero_y[right_indices])) / max(height - 1, 1)
+        coverage_confidence = min(1.0, left_coverage, right_coverage)
+        point_confidence = min(
+            1.0,
+            min(left_indices.size, right_indices.size)
+            / float(self.config.advanced_lane_min_points * 4),
+        )
+        width_std_ratio = float(np.std(right_x - left_x)) / median_width
+        width_confidence = float(
+            np.exp(
+                -width_std_ratio
+                / max(self.config.advanced_lane_max_width_std_ratio, 1.0e-6)
+            )
+        )
+        confidence = float(
+            np.clip(
+                0.45 * coverage_confidence
+                + 0.30 * point_confidence
+                + 0.25 * width_confidence,
+                0.0,
+                1.0,
+            )
+        )
+        return left_fit, right_fit, left_x, right_x, confidence
+
+    def _advanced_lane_metrics(
+        self,
+        left_fit: np.ndarray,
+        right_fit: np.ndarray,
+        median_lane_width_px: float,
+        birdseye_shape: Tuple[int, int],
+    ) -> Tuple[Optional[float], float]:
+        """Estimate mean curvature and signed vehicle offset in metres."""
+
+        height, width = birdseye_shape
+        metres_per_y = self.config.advanced_lane_visible_distance_m / max(height, 1)
+        metres_per_x = self.config.advanced_lane_width_m / max(
+            median_lane_width_px,
+            1.0,
+        )
+        plot_y = np.linspace(0, height - 1, height, dtype=np.float64)
+        y_metres = plot_y * metres_per_y
+        curvatures = []
+        for fit in (left_fit, right_fit):
+            x_metres = np.polyval(fit, plot_y) * metres_per_x
+            fit_metres = np.polyfit(y_metres, x_metres, 2)
+            denominator = abs(2.0 * fit_metres[0])
+            if denominator > 1.0e-9:
+                y_eval = (height - 1) * metres_per_y
+                curvature = (
+                    (1.0 + (2.0 * fit_metres[0] * y_eval + fit_metres[1]) ** 2)
+                    ** 1.5
+                ) / denominator
+                if np.isfinite(curvature):
+                    curvatures.append(float(curvature))
+
+        bottom_y = height - 1
+        lane_center = 0.5 * (
+            float(np.polyval(left_fit, bottom_y))
+            + float(np.polyval(right_fit, bottom_y))
+        )
+        # Positive means that the camera/vehicle is right of the lane centre.
+        center_offset = (0.5 * width - lane_center) * metres_per_x
+        mean_curvature = float(np.mean(curvatures)) if curvatures else None
+        return mean_curvature, float(center_offset)
+
+    def detect_advanced_lanes(self, frame_bgr: np.ndarray) -> RoadLaneResult:
+        """Detect a road vehicle's left/right lane pair and drivable corridor.
+
+        This follows the Advanced-Lane-Lines/Colab flow while reusing this
+        package's camera-aware yellow and white thresholds:
+        threshold -> perspective warp -> sliding windows -> quadratic fit ->
+        inverse perspective projection.
+        """
+
+        if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
+            raise ValueError("frame_bgr must be an HxWx3 image")
+        lane_candidates = self.detect_lane_lines(frame_bgr)
+        binary_mask = cv2.bitwise_or(
+            lane_candidates.yellow_color_mask,
+            lane_candidates.white_color_mask,
+        )
+        transform, inverse = self._perspective_transforms(frame_bgr.shape[:2])
+        birdseye_mask = cv2.warpPerspective(
+            binary_mask,
+            transform,
+            (self.config.birdseye_width, self.config.birdseye_height),
+            flags=cv2.INTER_NEAREST,
+        )
+        fitted = self._fit_advanced_lane_pair(birdseye_mask)
+        if fitted is None:
+            return RoadLaneResult(
+                binary_mask=binary_mask,
+                birdseye_mask=birdseye_mask,
+            )
+
+        left_fit, right_fit, left_x, right_x, confidence = fitted
+        height = self.config.birdseye_height
+        sample_y = np.linspace(0, height - 1, min(height, 96), dtype=np.float32)
+        left_birdseye = np.column_stack(
+            (np.polyval(left_fit, sample_y), sample_y)
+        ).astype(np.float32)
+        right_birdseye = np.column_stack(
+            (np.polyval(right_fit, sample_y), sample_y)
+        ).astype(np.float32)
+        center_birdseye = np.column_stack(
+            (
+                0.5
+                * (
+                    np.polyval(left_fit, sample_y)
+                    + np.polyval(right_fit, sample_y)
+                ),
+                sample_y,
+            )
+        ).astype(np.float32)
+
+        def project(points: np.ndarray) -> np.ndarray:
+            return cv2.perspectiveTransform(points[None, ...], inverse)[0]
+
+        left_curve = project(left_birdseye)
+        right_curve = project(right_birdseye)
+        center_curve = project(center_birdseye)
+        lane_polygon = np.concatenate((left_curve, right_curve[::-1]), axis=0)
+        median_width = float(np.median(right_x - left_x))
+        curvature_m, center_offset_m = self._advanced_lane_metrics(
+            left_fit,
+            right_fit,
+            median_width,
+            birdseye_mask.shape,
+        )
+        return RoadLaneResult(
+            binary_mask=binary_mask,
+            birdseye_mask=birdseye_mask,
+            left_curve_px=left_curve,
+            right_curve_px=right_curve,
+            centerline_points_px=center_curve,
+            lane_polygon_px=lane_polygon,
+            confidence=confidence,
+            curvature_m=curvature_m,
+            center_offset_m=center_offset_m,
+        )
+
     def _line_first_mask(
         self,
         frame_bgr: np.ndarray,
@@ -983,22 +1376,7 @@ class YellowLineVision:
         return np.where(labels == best_label, 255, 0).astype(np.uint8)
 
     def _birdseye(self, mask: np.ndarray) -> np.ndarray:
-        height, width = mask.shape
-        source = self._normalized_points(
-            self.config.perspective_source,
-            width,
-            height,
-        )
-        destination = np.asarray(
-            [
-                [0, self.config.birdseye_height - 1],
-                [self.config.birdseye_width - 1, self.config.birdseye_height - 1],
-                [self.config.birdseye_width - 1, 0],
-                [0, 0],
-            ],
-            dtype=np.float32,
-        )
-        transform = cv2.getPerspectiveTransform(source, destination)
+        transform, _ = self._perspective_transforms(mask.shape)
         return cv2.warpPerspective(
             mask,
             transform,
@@ -1108,21 +1486,7 @@ class YellowLineVision:
             ]
         ).astype(np.float32)
 
-        source = self._normalized_points(
-            self.config.perspective_source,
-            image_shape[1],
-            image_shape[0],
-        )
-        destination = np.asarray(
-            [
-                [0, self.config.birdseye_height - 1],
-                [self.config.birdseye_width - 1, self.config.birdseye_height - 1],
-                [self.config.birdseye_width - 1, 0],
-                [0, 0],
-            ],
-            dtype=np.float32,
-        )
-        inverse = cv2.getPerspectiveTransform(destination, source)
+        _, inverse = self._perspective_transforms(image_shape)
         return cv2.perspectiveTransform(birdseye_points[None, ...], inverse)[0]
 
     def process(

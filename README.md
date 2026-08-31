@@ -336,3 +336,66 @@ python3 -m pytest \
   test
 docker compose config --quiet
 ```
+
+## best-so-far 실시간 Hz 벤치마크
+
+현재 `best-so-far` profile은 full-video renderer와 동일한 다음 설정을 사용합니다.
+
+- `facebook/mask2former-swin-large-mapillary-vistas-semantic`의 고정 revision
+- Road/Bike Lane/Crosswalk/Parking/Service Lane/Lane Marking을 Road로 통합
+- Sidewalk/Pedestrian Area/Curb Cut을 Sidewalk로 통합
+- 640x360 score map, temporal alpha `0.62`, hysteresis margin `0.07`
+
+첨부 rosbag에서 확인한 카메라 계약은
+`/a2/front_camera/res_360p/image_raw`, `sensor_msgs/msg/Image`, RGB8,
+640x360, 약 20 Hz입니다. ROS 2 없이 MCAP에서 바로 실시간 조건을 모사하려면:
+
+```bash
+uv run tools/benchmark_best_so_far.py mcap \
+  --input /Users/kangminwoo/Downloads/20260827_062352_teamgrit_rosbag_0-001.mcap \
+  --topic /a2/front_camera/res_360p/image_raw \
+  --playback-mode realtime \
+  --max-frames 200 \
+  --snapshot-dir rosbag-results/benchmarks/snapshots \
+  --output-report rosbag-results/benchmarks/best-so-far-realtime.json
+```
+
+`realtime`은 bag timestamp에 맞춰 입력을 재생하고 depth-1 최신 프레임 큐를
+사용합니다. 따라서 모델이 20 Hz보다 느리면 오래된 프레임을 쌓지 않고 교체하며,
+report의 `overwritten_frames`, `drop_ratio`, `effective_output`이 라이브 동작에
+가까운 값을 보여줍니다. 순수 최대 처리 성능은 `--playback-mode throughput`으로
+측정합니다. 모델 다운로드/로딩 시간은 `model_load_seconds`로 따로 기록되고 Hz
+계산에서는 제외됩니다.
+
+여러 MCAP을 한 번에 각각 측정할 수도 있습니다. `--max-frames`는 파일마다
+적용되고 temporal history는 파일 경계에서 초기화됩니다.
+
+```bash
+uv run tools/benchmark_best_so_far.py mcap \
+  --input \
+    /path/to/first.mcap \
+    /path/to/second.mcap \
+  --playback-mode throughput \
+  --max-frames 50 \
+  --output-report rosbag-results/benchmarks/best-so-far-throughput.json
+```
+
+라이브 ROS 2 토픽은 ROS 환경의 `rclpy`와 `cv_bridge`를 사용해야 하므로 ROS를
+source한 Python 환경에서 실행합니다. 그 환경에는 위 스크립트 상단에 명시된
+PyTorch/Transformers 의존성도 설치되어 있어야 합니다.
+
+```bash
+source /opt/ros/humble/setup.bash
+python3 tools/benchmark_best_so_far.py ros2 \
+  --topic /a2/front_camera/res_360p/image_raw \
+  --duration 30 \
+  --expected-input-hz 20 \
+  --output-report rosbag-results/benchmarks/best-so-far-live.json
+```
+
+라이브 overlay는 `/best_so_far/benchmark/overlay`, 진행 metrics JSON은
+`/best_so_far/benchmark/metrics`에 발행됩니다. overlay 발행 비용까지 피한 순수
+추론 측정은 `--overlay-topic ''`을 사용합니다. `rates_hz.segmentation_compute`는
+segmentation 자체의 지속 가능 Hz, `rates_hz.effective_output`은 큐 대기와 실제
+출력 간격을 반영한 Hz, `verdict.can_keep_up`은 입력 약 20 Hz를 따라갈 수 있는지
+나타냅니다.

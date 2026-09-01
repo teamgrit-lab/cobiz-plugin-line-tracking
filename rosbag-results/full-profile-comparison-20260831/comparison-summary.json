@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "completed_at": "2026-09-01T00:25:23+09:00",
+  "input_directory": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/rosbag-results/full",
+  "video_count": 8,
+  "expected_output_frames": 54992,
+  "tail_cloned_frames": 2,
+  "settings": {
+    "r50_current": {
+      "profile": "r50-fp16-640x360",
+      "temporal_alpha": 0.62,
+      "temporal_hysteresis_margin": 0.07
+    },
+    "r50_candidate_005": {
+      "profile": "r50-fp16-640x360",
+      "temporal_alpha": 0.5,
+      "temporal_hysteresis_margin": 0.3
+    },
+    "swin_l_reference": {
+      "profile": "swin-l-best-so-far",
+      "temporal_alpha": 0.62,
+      "temporal_hysteresis_margin": 0.07
+    }
+  },
+  "full_video_metrics": {
+    "r50_current": {
+      "processed_frames": 54990,
+      "processing_fps": 12.231747556885104,
+      "same_run_seven_video_processing_fps": 12.545765881384094,
+      "mean_selected_label_change_ratio": 0.01601947695508429,
+      "mean_road_adjacent_iou": 0.8324045002760213,
+      "mean_sidewalk_adjacent_iou": 0.9024421607267469
+    },
+    "r50_candidate_005": {
+      "processed_frames": 54990,
+      "processing_fps": 12.517713492684852,
+      "same_run_seven_video_processing_fps": 12.461382565948417,
+      "same_run_speed_delta_percent": -0.6726039385199112,
+      "mean_selected_label_change_ratio": 0.0035870989912355155,
+      "mean_road_adjacent_iou": 0.9645494688509549,
+      "mean_sidewalk_adjacent_iou": 0.9794114487711904
+    }
+  },
+  "sampled_swin_l_comparison": {
+    "sampling": "start, middle, and end; nominally 50 frames per clip",
+    "clip_count_per_r50_setting": 24,
+    "decoded_frames_per_r50_setting": 1197,
+    "r50_current": {
+      "processing_fps": 14.231275105045272,
+      "selected_label_agreement": 0.9131794123079197,
+      "road_inter_profile_iou": 0.4530358870316944,
+      "sidewalk_inter_profile_iou": 0.6660751616188911,
+      "road_adjacent_iou": 0.8810551127185041,
+      "sidewalk_adjacent_iou": 0.9269531898959086
+    },
+    "r50_candidate_005": {
+      "processing_fps": 14.215925021077341,
+      "selected_label_agreement": 0.9098959100577472,
+      "road_inter_profile_iou": 0.43588526721400017,
+      "sidewalk_inter_profile_iou": 0.6618365917891708,
+      "road_adjacent_iou": 0.9662521728679024,
+      "sidewalk_adjacent_iou": 0.9763953050195885
+    }
+  },
+  "conclusion": {
+    "recommended_setting": "r50_current",
+    "reason": "Candidate 005 substantially improves temporal stability but is slightly slower in the fair seven-video comparison and is less similar to Swin-L on agreement, Road IoU, and Sidewalk IoU.",
+    "candidate_14_46_fps_reproduced_on_full_video": false
+  },
+  "artifacts": {
+    "r50_current_directory": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/rosbag-results/full-profile-comparison-20260831/r50-current",
+    "r50_candidate_005_directory": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/rosbag-results/full-profile-comparison-20260831/r50-candidate-005",
+    "swin_l_reference_directory": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/rosbag-results/full-profile-comparison-20260831/swin-l-reference",
+    "full_comparison_directory": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/rosbag-results/full-profile-comparison-20260831/comparison",
+    "sampled_validation_directory": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/rosbag-results/full-profile-comparison-20260831/sampled-validation",
+    "full_comparison_contact_sheet": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/rosbag-results/full-profile-comparison-20260831/comparison/full-comparison-contact-sheet.jpg",
+    "sampled_swin_contact_sheet": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/rosbag-results/full-profile-comparison-20260831/sampled-validation/sampled-swin-comparison-contact-sheet.jpg"
+  }
+}

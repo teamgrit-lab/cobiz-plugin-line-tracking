@@ -841,8 +841,8 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
         metavar=("HEIGHT", "WIDTH"),
         default=DEFAULT_EVALUATION_SIZE,
     )
-    parser.add_argument("--temporal-alpha", type=float, default=0.62)
-    parser.add_argument("--temporal-hysteresis-margin", type=float, default=0.07)
+    parser.add_argument("--temporal-alpha", type=float, default=None)
+    parser.add_argument("--temporal-hysteresis-margin", type=float, default=None)
     parser.add_argument(
         "--device",
         default="auto",

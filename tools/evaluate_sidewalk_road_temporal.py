@@ -101,11 +101,9 @@ def collect_bursts(
 def remove_small_components(mask: np.ndarray, minimum_area: int) -> np.ndarray:
     binary = mask.astype(np.uint8)
     count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-    cleaned = np.zeros_like(binary)
-    for label in range(1, count):
-        if int(stats[label, cv2.CC_STAT_AREA]) >= minimum_area:
-            cleaned[labels == label] = 1
-    return cleaned.astype(bool)
+    retained = stats[:, cv2.CC_STAT_AREA] >= minimum_area
+    retained[0] = False
+    return retained[labels]
 
 
 def selected_mask(

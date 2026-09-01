@@ -52,8 +52,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile", choices=PROFILE_NAMES, default=DEFAULT_PROFILE)
     parser.add_argument("--model-id", default=None)
     parser.add_argument("--model-revision", default=None)
-    parser.add_argument("--temporal-alpha", type=float, default=0.62)
-    parser.add_argument("--temporal-hysteresis-margin", type=float, default=0.07)
+    parser.add_argument("--temporal-alpha", type=float, default=None)
+    parser.add_argument("--temporal-hysteresis-margin", type=float, default=None)
     parser.add_argument(
         "--evaluation-size",
         type=int,
@@ -90,9 +90,12 @@ def mean(values: list[float]) -> float:
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    if not 0.5 <= args.temporal_alpha <= 1.0:
+    if args.temporal_alpha is not None and not 0.5 <= args.temporal_alpha <= 1.0:
         raise ValueError("--temporal-alpha must be in [0.5, 1.0]")
-    if not 0.0 <= args.temporal_hysteresis_margin <= 1.0:
+    if (
+        args.temporal_hysteresis_margin is not None
+        and not 0.0 <= args.temporal_hysteresis_margin <= 1.0
+    ):
         raise ValueError("--temporal-hysteresis-margin must be in [0, 1]")
     if any(value <= 0 for value in (*args.evaluation_size, *args.output_size)):
         raise ValueError("evaluation and output dimensions must be positive")

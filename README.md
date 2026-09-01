@@ -360,6 +360,131 @@ uv run tools/benchmark_best_so_far.py mcap \
 - Road/Bike Lane/Crosswalk/Parking/Service Lane/Lane Marking을 Road로 통합
 - Sidewalk/Pedestrian Area/Curb Cut을 Sidewalk로 통합
 
+## Swin-L 인도 중심 local path 디버그
+
+`tools/swin_l_local_path_debug.py`는 위 Swin-L profile의 `Sidewalk` mask를
+카메라 전방 3~8m의 metric bird's-eye grid로 옮긴 뒤, 각 거리에서 인도 영역의
+중심을 추출해 `base_link` 기준 `nav_msgs/Path`로 만든다. 매 프레임마다 경로를
+갈아끼우지 않고 최신 카메라 프레임만 유지하는 depth-1 큐, Swin-L 4Hz 기본 추론,
+0.8초 EMA, 0.9초 경로 hold를 사용한다. LiDAR가 오래되었거나 path corridor 안에
+3m 이내의 점이 3개 이상 있으면 `safety_stop` 디버그 토픽이 `true`가 된다.
+이 프로세스는 `/a2_control`을 발행하지 않으므로 기존 제어 노드와 분리된 검사
+용이다.
+
+첨부 rosbag에서 확인된 토픽을 기본값으로 사용한다.
+
+| 방향 | `.env` 변수 | 기본값 |
+|---|---|---|
+| 입력 영상 | `SWIN_L_IMAGE_TOPIC` | `/a2/front_camera/res_360p/image_raw` |
+| 입력 LiDAR | `SWIN_L_LIDAR_TOPIC` | `/unitree/slam_lidar/points2` |
+| 출력 overlay | `SWIN_L_OVERLAY_TOPIC` | `/line_tracking/swin_l/overlay` |
+| 출력 경로 | `SWIN_L_LOCAL_PATH_TOPIC` | `/line_tracking/swin_l/local_path` |
+| 안전 상태 | `SWIN_L_SAFETY_STOP_TOPIC` | `/line_tracking/swin_l/safety_stop` |
+
+`SWIN_L_ROI_POLYGON`과 `SWIN_L_GROUND_HALF_WIDTH_M`은 카메라 pitch와 장착 위치에
+따라 반드시 현장에서 보정해야 한다. Rosbag에는 `CameraInfo`는 있지만
+camera-to-base extrinsic/TF가 없으므로 기본 homography는 초기 디버그값이다.
+LiDAR는 bag의 `hesai_lidar` frame에서 x=전방, y=왼쪽으로 정렬되어 있다고 가정하며,
+실차에서는 extrinsic을 확인한 뒤 `SWIN_L_LIDAR_Z_*`, corridor 폭과 stop 거리를
+조정해야 한다.
+
+ROS 2 토픽으로 실행하려면 Jetson의 ROS 2 환경과 JetPack 호환 PyTorch/Transformers를
+설치하고 `scipy`도 함께 준비한 뒤 다음처럼 실행한다.
+
+```bash
+cd /path/to/cobiz-plugin-line-tracking
+cp .env.example .env  # 필요하면 SWIN_L_* 값을 수정
+set -a; source .env; set +a
+source /opt/ros/humble/setup.bash
+python3 tools/swin_l_local_path_debug.py ros2
+
+# 확인
+ros2 topic echo /line_tracking/swin_l/local_path
+ros2 topic echo /line_tracking/swin_l/safety_stop
+rqt_image_view /line_tracking/swin_l/overlay
+```
+
+ROS 2 없이 같은 rosbag을 동영상 overlay로 확인할 수도 있다. 아래 모드는 camera
+20Hz 출력 프레임을 유지하면서 Swin-L update만 기본 4Hz로 실행하고 LiDAR 상태와
+raw/평활 경로를 overlay한다.
+
+```bash
+uv run tools/swin_l_local_path_debug.py mcap \
+  --input /Users/kangminwoo/Downloads/20260827_062352_teamgrit_rosbag_0.mcap \
+  --output rosbag-results/swin-l-local-path.mp4 \
+  --report rosbag-results/swin-l-local-path.json \
+  --max-frames 400
+```
+
+Overlay에서 마젠타는 Swin-L 인도, 주황색은 최신 raw 중심선, 흰색은 평활된
+local path이며, 왼쪽 위 패널에서 LiDAR 안전 상태를 확인할 수 있다. 이 코드는
+디버깅용이므로 경로를 실제 보행 제어기에 연결하기 전 homography, LiDAR frame
+정렬, 장애물 z 범위를 검증해야 한다.
+
+## Docker debug 컨테이너
+
+주행용 `line-tracking` 서비스와 분리해서 local path만 확인하려면 다음 서비스를
+명시적으로 실행한다. `debugging-swin-l`은 `/a2_control`을 발행하지 않는다.
+
+```bash
+cd /path/to/cobiz-plugin-line-tracking
+cp .env.example .env
+
+# Jetson에서는 SWIN_L_BASE_IMAGE를 ROS 2 Humble + JetPack 호환 CUDA PyTorch가
+# 함께 들어 있고 torch/torchvision 버전이 서로 호환되는 arm64 이미지로
+# 바꿔야 한다. ros:humble-ros-base는
+# PyTorch가 없는 placeholder이므로 그대로 실행하면 preflight에서 종료된다.
+nano .env
+
+docker compose up -d --build debugging-swin-l
+docker compose logs -f debugging-swin-l
+```
+
+Compose profile을 명시하고 싶다면 같은 작업을 다음처럼 실행할 수 있다.
+
+```bash
+docker compose --profile debug up -d --build debugging-swin-l
+```
+
+컨테이너는 다음 토픽만 디버깅용으로 발행한다.
+
+```text
+/line_tracking/swin_l/overlay
+/line_tracking/swin_l/local_path
+/line_tracking/swin_l/safety_stop
+/line_tracking/swin_l/clearance_m
+/line_tracking/swin_l/metrics
+```
+
+호스트에서 결과를 확인한다.
+
+```bash
+ros2 topic echo /line_tracking/swin_l/local_path
+ros2 topic echo /line_tracking/swin_l/safety_stop
+rqt_image_view /line_tracking/swin_l/overlay
+rviz2  # Fixed Frame=base_link, Path topic=/line_tracking/swin_l/local_path
+```
+
+모델은 `${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}`에 캐시되어 다음
+컨테이너 재생성 때 재사용된다. 처음 실행할 때는 Swin-L checkpoint 다운로드로
+시간이 걸릴 수 있다. 컨테이너를 종료할 때는 다음 명령을 사용한다.
+
+```bash
+docker compose stop debugging-swin-l
+docker compose rm -f debugging-swin-l
+```
+
+주의: 일반 `docker compose up -d`는 기존 주행용 `line-tracking` 서비스만
+시작하며 `/a2_control`을 발행할 수 있다. Swin-L local path만 확인하고 실제
+주행을 막으려는 경우에는 반드시 `docker compose up -d --build
+debugging-swin-l`처럼 서비스 이름을 명시한다. 두 서비스를 동시에 실행하지
+않도록 `line-tracking`을 먼저 내린다.
+
+```bash
+docker compose stop line-tracking
+docker compose up -d --build debugging-swin-l
+```
+
 새 기본 `r50-fp16-640x360`은 같은 label aggregation과 temporal 설정을 유지하면서
 다음 실행 계약을 사용합니다.
 

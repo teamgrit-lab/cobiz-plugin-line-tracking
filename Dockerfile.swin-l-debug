@@ -1,0 +1,42 @@
+ARG SWIN_L_BASE_IMAGE=ros:humble-ros-base
+FROM ${SWIN_L_BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/root/.cache/huggingface
+SHELL ["/bin/bash", "-c"]
+
+# The selected base image must provide JetPack-compatible CUDA PyTorch and
+# torchvision on Jetson.  ROS is installed here when the base image is a plain
+# ROS image; using a custom ROS+PyTorch+torchvision base is required for the
+# actual Jetson build.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3-pip \
+        python3-venv \
+        python3-numpy \
+        python3-opencv \
+        ros-humble-cv-bridge \
+        ros-humble-geometry-msgs \
+        ros-humble-nav-msgs \
+        ros-humble-sensor-msgs \
+        ros-humble-std-msgs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Keep ROS's system Python visible so rclpy/cv_bridge remain available while
+# installing the model-side Python packages in an isolated environment.
+RUN python3 -m venv --system-site-packages /opt/swin-l-venv \
+    && /opt/swin-l-venv/bin/python -m pip install --no-cache-dir \
+        "pillow>=10,<14" \
+        "scipy>=1.10,<2" \
+        "transformers==5.16.1" \
+        "mcap==1.4.0" \
+        "mcap-ros2-support==0.5.7"
+
+ENV PATH=/opt/swin-l-venv/bin:${PATH}
+WORKDIR /workspace
+COPY tools /workspace/tools
+COPY docker/swin_l_debug_entrypoint.sh /entrypoint-swin-l-debug.sh
+RUN chmod +x /entrypoint-swin-l-debug.sh
+
+ENTRYPOINT ["/entrypoint-swin-l-debug.sh"]

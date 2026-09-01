@@ -38,4 +38,65 @@ services:
       TEST_CENTERLINE_TOPIC: ${TEST_CENTERLINE_TOPIC:-}
       TEST_METRICS_TOPIC: ${TEST_METRICS_TOPIC:-}
       CENTERLINE_FRAME_ID: ${CENTERLINE_FRAME_ID:-}
+      SWIN_L_PROFILE: ${SWIN_L_PROFILE:-}
+      SWIN_L_MODEL_ID: ${SWIN_L_MODEL_ID:-}
+      SWIN_L_MODEL_REVISION: ${SWIN_L_MODEL_REVISION:-}
+      SWIN_L_DEVICE: ${SWIN_L_DEVICE:-}
+      SWIN_L_EVALUATION_HEIGHT: ${SWIN_L_EVALUATION_HEIGHT:-}
+      SWIN_L_EVALUATION_WIDTH: ${SWIN_L_EVALUATION_WIDTH:-}
+      SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-}
+      SWIN_L_LIDAR_TOPIC: ${SWIN_L_LIDAR_TOPIC:-}
+      SWIN_L_OVERLAY_TOPIC: ${SWIN_L_OVERLAY_TOPIC:-}
+      SWIN_L_LOCAL_PATH_TOPIC: ${SWIN_L_LOCAL_PATH_TOPIC:-}
+      SWIN_L_SAFETY_STOP_TOPIC: ${SWIN_L_SAFETY_STOP_TOPIC:-}
+      SWIN_L_CLEARANCE_TOPIC: ${SWIN_L_CLEARANCE_TOPIC:-}
+      SWIN_L_METRICS_TOPIC: ${SWIN_L_METRICS_TOPIC:-}
+      SWIN_L_PATH_FRAME_ID: ${SWIN_L_PATH_FRAME_ID:-}
+      SWIN_L_INPUT_RELIABILITY: ${SWIN_L_INPUT_RELIABILITY:-}
+      SWIN_L_NEAR_DISTANCE_M: ${SWIN_L_NEAR_DISTANCE_M:-}
+      SWIN_L_FAR_DISTANCE_M: ${SWIN_L_FAR_DISTANCE_M:-}
+      SWIN_L_GROUND_HALF_WIDTH_M: ${SWIN_L_GROUND_HALF_WIDTH_M:-}
+      SWIN_L_SEARCH_HALF_WIDTH_M: ${SWIN_L_SEARCH_HALF_WIDTH_M:-}
+      SWIN_L_ROI_POLYGON: ${SWIN_L_ROI_POLYGON:-}
+      SWIN_L_PATH_POINTS: ${SWIN_L_PATH_POINTS:-}
+      SWIN_L_PATH_DURATION_SEC: ${SWIN_L_PATH_DURATION_SEC:-}
+      SWIN_L_INFERENCE_HZ: ${SWIN_L_INFERENCE_HZ:-}
+      SWIN_L_OUTPUT_HZ: ${SWIN_L_OUTPUT_HZ:-}
+      SWIN_L_SMOOTHING_TIME_CONSTANT_SEC: ${SWIN_L_SMOOTHING_TIME_CONSTANT_SEC:-}
+      SWIN_L_MAX_LATERAL_UPDATE_M: ${SWIN_L_MAX_LATERAL_UPDATE_M:-}
+      SWIN_L_PATH_HOLD_SEC: ${SWIN_L_PATH_HOLD_SEC:-}
+      SWIN_L_OBSTACLE_DISTANCE_M: ${SWIN_L_OBSTACLE_DISTANCE_M:-}
+      SWIN_L_STOP_DISTANCE_M: ${SWIN_L_STOP_DISTANCE_M:-}
+      SWIN_L_CORRIDOR_HALF_WIDTH_M: ${SWIN_L_CORRIDOR_HALF_WIDTH_M:-}
+      SWIN_L_LIDAR_TIMEOUT_SEC: ${SWIN_L_LIDAR_TIMEOUT_SEC:-}
+      SWIN_L_LIDAR_Z_MIN_M: ${SWIN_L_LIDAR_Z_MIN_M:-}
+      SWIN_L_LIDAR_Z_MAX_M: ${SWIN_L_LIDAR_Z_MAX_M:-}
+      SWIN_L_MIN_OBSTACLE_POINTS: ${SWIN_L_MIN_OBSTACLE_POINTS:-}
+    restart: unless-stopped
+
+  # Safe inspection-only process. It publishes local path/debug topics and
+  # never publishes /a2_control. Start it explicitly with:
+  # docker compose up -d --build debugging-swin-l
+  debugging-swin-l:
+    profiles: [debug]
+    build:
+      context: .
+      dockerfile: Dockerfile.swin-l-debug
+      args:
+        SWIN_L_BASE_IMAGE: ${SWIN_L_BASE_IMAGE:-ros:humble-ros-base}
+    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+    container_name: cobiz-plugin-line-tracking-debugging-swin-l
+    network_mode: host
+    ipc: host
+    runtime: nvidia
+    shm_size: "2gb"
+    volumes:
+      - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
+      - ./.env:/workspace/.env:ro
+      - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      ROS_DISTRO: ${ROS_DISTRO:-humble}
+      SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
+      HF_HOME: /root/.cache/huggingface
     restart: unless-stopped

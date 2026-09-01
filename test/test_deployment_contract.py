@@ -51,3 +51,18 @@ def test_test_mode_topics_and_resolution_profiles_are_exposed():
     assert "nav_msgs" in (ROOT / "ros_ws/src/line_tracking/package.xml").read_text()
     assert '"360p": (640, 384' in launch
     assert '"720p": (1280, 736' in launch
+
+
+def test_swin_l_debug_service_is_explicit_and_has_no_drive_contract():
+    compose = (ROOT / "docker-compose.yml").read_text()
+    entrypoint = (ROOT / "docker" / "swin_l_debug_entrypoint.sh").read_text()
+
+    assert "debugging-swin-l:" in compose
+    assert "profiles: [debug]" in compose
+    assert "Dockerfile.swin-l-debug" in compose
+    assert "runtime: nvidia" in compose
+    debug_service = compose.split("debugging-swin-l:", maxsplit=1)[1]
+    assert "JOY_TOPIC:" not in debug_service
+    assert "/a2_control" not in debug_service
+    assert "swin_l_local_path_debug.py ros2" in entrypoint
+    assert "/workspace/tools" in entrypoint

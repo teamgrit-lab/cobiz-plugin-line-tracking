@@ -1,5 +1,10 @@
 .git
 .env
+/.cache/
+/rosbag-results/
+/.venv/
+/.ruff_cache/
+/.DS_Store
 **/__pycache__/
 **/*.pyc
 **/.pytest_cache/

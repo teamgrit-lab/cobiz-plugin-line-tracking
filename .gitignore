@@ -19,3 +19,4 @@ models/*.pth
 
 # Local rosbag conversion and inspection artifacts.
 rosbag-results/
+/.cache/

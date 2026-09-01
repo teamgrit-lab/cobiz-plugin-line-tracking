@@ -71,3 +71,23 @@ def test_swin_l_debug_service_is_explicit_and_has_no_drive_contract():
     assert "/a2_control" not in debug_service
     assert "swin_l_local_path_debug.py ros2" in entrypoint
     assert "/workspace/tools" in entrypoint
+
+
+def test_jetson_swin_l_base_build_contract():
+    compose = (ROOT / "docker-compose.yml").read_text()
+    env_example = (ROOT / ".env.example").read_text()
+    debug_dockerfile = (ROOT / "Dockerfile.swin-l-debug").read_text()
+    base_dockerfile = (ROOT / "Dockerfile.swin-l-jetson-base").read_text()
+    builder = (ROOT / "tools" / "build_jetson_swin_l_base.sh").read_text()
+
+    assert "cobiz-plugin-line-tracking-swin-l-jetson:r36.5" in compose
+    assert "SWIN_L_JETSON_BASE_SOURCE_IMAGE=cobiz:jetson" in env_example
+    assert "ARG SWIN_L_BASE_IMAGE=cobiz-plugin-line-tracking-swin-l-jetson:r36.5" in debug_dockerfile
+    assert "ros-humble-cv-bridge" in base_dockerfile
+    assert "import torch" in base_dockerfile
+    assert "import torchvision" in base_dockerfile
+    assert "import transformers" in base_dockerfile
+    assert "import cv_bridge" in base_dockerfile
+    assert "jetson-containers" in builder
+    assert "--base=\"${SOURCE_IMAGE}\"" in builder
+    assert "pytorch torchvision transformers" in builder

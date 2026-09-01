@@ -430,11 +430,11 @@ local path이며, 왼쪽 위 패널에서 LiDAR 안전 상태를 확인할 수 �
 cd /path/to/cobiz-plugin-line-tracking
 cp .env.example .env
 
-# Jetson에서는 SWIN_L_BASE_IMAGE를 ROS 2 Humble + JetPack 호환 CUDA PyTorch가
-# 함께 들어 있고 torch/torchvision 버전이 서로 호환되는 arm64 이미지로
-# 바꿔야 한다. ros:humble-ros-base는
-# PyTorch가 없는 placeholder이므로 그대로 실행하면 preflight에서 종료된다.
-nano .env
+# Jetson의 cobiz:jetson 기반 의존성 이미지를 먼저 만든다.
+# 이 명령은 torch/torchvision/Transformers를 Jetson용으로 설치하고
+# cv_bridge 및 ROS 메시지 패키지를 추가한다.
+set -a; source .env; set +a
+./tools/build_jetson_swin_l_base.sh
 
 docker compose up -d --build debugging-swin-l
 docker compose logs -f debugging-swin-l

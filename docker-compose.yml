@@ -83,7 +83,7 @@ services:
       context: .
       dockerfile: Dockerfile.swin-l-debug
       args:
-        SWIN_L_BASE_IMAGE: ${SWIN_L_BASE_IMAGE:-ros:humble-ros-base}
+        SWIN_L_BASE_IMAGE: ${SWIN_L_BASE_IMAGE:-cobiz-plugin-line-tracking-swin-l-jetson:r36.5}
     image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
     container_name: cobiz-plugin-line-tracking-debugging-swin-l
     network_mode: host

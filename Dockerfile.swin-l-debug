@@ -1,4 +1,4 @@
-ARG SWIN_L_BASE_IMAGE=ros:humble-ros-base
+ARG SWIN_L_BASE_IMAGE=cobiz-plugin-line-tracking-swin-l-jetson:r36.5
 FROM ${SWIN_L_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -6,10 +6,10 @@ ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/root/.cache/huggingface
 SHELL ["/bin/bash", "-c"]
 
-# The selected base image must provide JetPack-compatible CUDA PyTorch and
-# torchvision on Jetson.  ROS is installed here when the base image is a plain
-# ROS image; using a custom ROS+PyTorch+torchvision base is required for the
-# actual Jetson build.
+# The project-managed Jetson base is produced by
+# tools/build_jetson_swin_l_base.sh.  It contains Jetson-compatible PyTorch,
+# torchvision, Transformers and ROS/cv_bridge.  Keep the small dependency
+# layer below as an idempotent guard for custom base images.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         python3-pip \

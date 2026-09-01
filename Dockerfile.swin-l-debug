@@ -1,4 +1,4 @@
-ARG SWIN_L_BASE_IMAGE=cobiz-plugin-line-tracking-swin-l-jetson:r36.5
+ARG SWIN_L_BASE_IMAGE=cobiz:jetson
 FROM ${SWIN_L_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -6,10 +6,14 @@ ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/root/.cache/huggingface
 SHELL ["/bin/bash", "-c"]
 
-# The project-managed Jetson base is produced by
-# tools/build_jetson_swin_l_base.sh.  It contains Jetson-compatible PyTorch,
-# torchvision, Transformers and ROS/cv_bridge.  Keep the small dependency
-# layer below as an idempotent guard for custom base images.
+ARG SWIN_L_TORCH_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126
+ARG SWIN_L_TORCH_VERSION=2.11.0
+ARG SWIN_L_TORCHVISION_VERSION=0.26.0
+
+# cobiz:jetson already provides Ubuntu 22.04/Python 3.10, CUDA 12.6 and the
+# ROS 2 Humble core. The model wheels must come from a Jetson aarch64 index;
+# installing torch from the normal PyPI index would not provide the required
+# CUDA-enabled Jetson build.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         python3-pip \
@@ -27,6 +31,13 @@ RUN apt-get update \
 # installing the model-side Python packages in an isolated environment.
 RUN python3 -m venv --system-site-packages /opt/swin-l-venv \
     && /opt/swin-l-venv/bin/python -m pip install --no-cache-dir \
+        --index-url "${SWIN_L_TORCH_INDEX_URL}" \
+        --extra-index-url "https://pypi.org/simple" \
+        --only-binary=torch,torchvision \
+        "torch==${SWIN_L_TORCH_VERSION}" \
+        "torchvision==${SWIN_L_TORCHVISION_VERSION}" \
+    && /opt/swin-l-venv/bin/python -m pip install --no-cache-dir \
+        "numpy>=1.26,<2" \
         "pillow>=10,<14" \
         "scipy>=1.10,<2" \
         "transformers==5.16.1" \

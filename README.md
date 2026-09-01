@@ -430,12 +430,11 @@ local path이며, 왼쪽 위 패널에서 LiDAR 안전 상태를 확인할 수 �
 cd /path/to/cobiz-plugin-line-tracking
 cp .env.example .env
 
-# Jetson의 cobiz:jetson 기반 의존성 이미지를 먼저 만든다.
-# 이 명령은 torch/torchvision/Transformers를 Jetson용으로 설치하고
-# cv_bridge 및 ROS 메시지 패키지를 추가한다.
-set -a; source .env; set +a
-./tools/build_jetson_swin_l_base.sh
-
+# debugging-swin-l은 cobiz:jetson에서 직접 다음 의존성을 설치한다.
+# - Jetson aarch64 CUDA wheel: torch, torchvision
+# - 일반 Python 패키지: Transformers, SciPy, MCAP
+# - ROS 패키지: cv_bridge 및 메시지 타입
+# jetson-containers를 실행 중인 상태로 유지할 필요는 없다.
 docker compose up -d --build debugging-swin-l
 docker compose logs -f debugging-swin-l
 ```

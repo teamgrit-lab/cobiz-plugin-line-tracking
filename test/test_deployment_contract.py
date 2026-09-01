@@ -77,17 +77,19 @@ def test_jetson_swin_l_base_build_contract():
     compose = (ROOT / "docker-compose.yml").read_text()
     env_example = (ROOT / ".env.example").read_text()
     debug_dockerfile = (ROOT / "Dockerfile.swin-l-debug").read_text()
-    base_dockerfile = (ROOT / "Dockerfile.swin-l-jetson-base").read_text()
-    builder = (ROOT / "tools" / "build_jetson_swin_l_base.sh").read_text()
 
-    assert "cobiz-plugin-line-tracking-swin-l-jetson:r36.5" in compose
-    assert "SWIN_L_JETSON_BASE_SOURCE_IMAGE=cobiz:jetson" in env_example
-    assert "ARG SWIN_L_BASE_IMAGE=cobiz-plugin-line-tracking-swin-l-jetson:r36.5" in debug_dockerfile
-    assert "ros-humble-cv-bridge" in base_dockerfile
-    assert "import torch" in base_dockerfile
-    assert "import torchvision" in base_dockerfile
-    assert "import transformers" in base_dockerfile
-    assert "import cv_bridge" in base_dockerfile
-    assert "jetson-containers" in builder
-    assert "--base=\"${SOURCE_IMAGE}\"" in builder
-    assert "pytorch torchvision transformers" in builder
+    assert "SWIN_L_BASE_IMAGE: ${SWIN_L_BASE_IMAGE:-cobiz:jetson}" in compose
+    assert "SWIN_L_TORCH_INDEX_URL" in compose
+    assert "SWIN_L_TORCH_VERSION" in compose
+    assert "SWIN_L_TORCHVISION_VERSION" in compose
+    assert "SWIN_L_BASE_IMAGE=cobiz:jetson" in env_example
+    assert "SWIN_L_TORCH_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126" in env_example
+    assert "SWIN_L_TORCH_VERSION=2.11.0" in env_example
+    assert "SWIN_L_TORCHVISION_VERSION=0.26.0" in env_example
+    assert "ARG SWIN_L_BASE_IMAGE=cobiz:jetson" in debug_dockerfile
+    assert "ARG SWIN_L_TORCH_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126" in debug_dockerfile
+    assert '"torch==${SWIN_L_TORCH_VERSION}"' in debug_dockerfile
+    assert '"torchvision==${SWIN_L_TORCHVISION_VERSION}"' in debug_dockerfile
+    assert "--only-binary=torch,torchvision" in debug_dockerfile
+    assert "ros-humble-cv-bridge" in debug_dockerfile
+    assert '"transformers==5.16.1"' in debug_dockerfile

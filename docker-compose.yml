@@ -83,7 +83,10 @@ services:
       context: .
       dockerfile: Dockerfile.swin-l-debug
       args:
-        SWIN_L_BASE_IMAGE: ${SWIN_L_BASE_IMAGE:-cobiz-plugin-line-tracking-swin-l-jetson:r36.5}
+        SWIN_L_BASE_IMAGE: ${SWIN_L_BASE_IMAGE:-cobiz:jetson}
+        SWIN_L_TORCH_INDEX_URL: ${SWIN_L_TORCH_INDEX_URL:-https://pypi.jetson-ai-lab.io/jp6/cu126}
+        SWIN_L_TORCH_VERSION: ${SWIN_L_TORCH_VERSION:-2.11.0}
+        SWIN_L_TORCHVISION_VERSION: ${SWIN_L_TORCHVISION_VERSION:-0.26.0}
     image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
     container_name: cobiz-plugin-line-tracking-debugging-swin-l
     network_mode: host

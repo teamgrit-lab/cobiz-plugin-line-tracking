@@ -1,0 +1,66 @@
+{
+  "bridgeVersion": "3.6",
+  "kind": "google-docs-trusted-read",
+  "status": "complete",
+  "outputDir": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/.codex/google-docs/trusted-read-01",
+  "target": {
+    "documentId": "1mRME7Q3F8xQq_NjXVHEOPi5K5niuPv1Bo9t-TgSa39k",
+    "title": "[202608] 당진낙농축협 프로젝트 사후분석",
+    "revisionId": "ANLCKQnco_Cz81JTR4tQbkGv9PsKn3XvK1EnKqFxD2rSFOChFYXyx7Kd78N7RFOILgFpg4G0Ayk8d7e-C8aQ7lVkZ210Pc8tPH68bLJJIao",
+    "documentUrl": "https://docs.google.com/document/d/1mRME7Q3F8xQq_NjXVHEOPi5K5niuPv1Bo9t-TgSa39k",
+    "selectedTabId": null
+  },
+  "dropdownMetadata": {
+    "status": "unavailable",
+    "resolvedTool": null,
+    "authoritative": false,
+    "count": 0
+  },
+  "controlAwareness": {
+    "hasProtectedControls": true,
+    "authoritativeDropdownCount": 0,
+    "opaqueControlCount": 210,
+    "affectedParagraphCount": 210,
+    "nativeElementCounts": {
+      "inlineObjectElement": 41,
+      "person": 11,
+      "richLink": 46,
+      "dateElement": 8,
+      "horizontalRule": 11
+    },
+    "preservationRequired": true,
+    "recommendedBehavior": "Edit supported text before or after protected controls; do not rewrite their containing structure."
+  },
+  "warnings": [
+    "Existing native or opaque controls were detected. Preserve each control and its containing structure unless the user explicitly requests an exact supported mutation.",
+    "Private-use markers are classified as opaque copy-only controls. Do not replace them with visible text or infer dropdown semantics from the glyph alone."
+  ],
+  "files": {
+    "document_result": {
+      "path": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/.codex/google-docs/trusted-read-01/document-result.json",
+      "bytes": 8028826,
+      "sha256": "d3dd9ffa7a2bc590188dfe39777d60f646686d848baa4461861063982e2cdf35"
+    },
+    "control_inventory": {
+      "path": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/.codex/google-docs/trusted-read-01/control-inventory.json",
+      "bytes": 314021,
+      "sha256": "86cd96a60bd51ce091c469d2bc2f2e6f2ece339223981d96430445d829b996ec"
+    },
+    "document_outline": {
+      "path": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/.codex/google-docs/trusted-read-01/document-outline.json",
+      "bytes": 1833282,
+      "sha256": "0f6793441bfeda5a949c32b6fc31867f8a27f7794c85f111944a6887a960b33c"
+    },
+    "document_text": {
+      "path": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/.codex/google-docs/trusted-read-01/document-text.md",
+      "bytes": 389503,
+      "sha256": "65c792f963a6dbae3151bdc2fecf31cc6562c2ae76fc46cece326eced6ede854"
+    },
+    "receipt": {
+      "path": "/Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking/.codex/google-docs/trusted-read-01/receipt.json",
+      "bytes": 1498,
+      "sha256": "95a7864af9ee18e34db771011e4bb37410767132cebfd2e1b502db3622c21483"
+    }
+  },
+  "error": null
+}

@@ -29,6 +29,7 @@ from best_so_far_runtime import (
     DEFAULT_EVALUATION_SIZE,
     DEFAULT_PROFILE,
     PROFILE_NAMES,
+    ROAD_ISLAND_ACTIONS,
     BestSoFarConfig,
     BestSoFarSegmenter,
 )
@@ -54,6 +55,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-revision", default=None)
     parser.add_argument("--temporal-alpha", type=float, default=None)
     parser.add_argument("--temporal-hysteresis-margin", type=float, default=None)
+    parser.add_argument(
+        "--road-island-action",
+        choices=ROAD_ISLAND_ACTIONS,
+        default=None,
+        help="how to handle small Road islands surrounded by Sidewalk",
+    )
+    parser.add_argument(
+        "--minimum-sidewalk-ring-ratio",
+        type=float,
+        default=None,
+        help="minimum surrounding Sidewalk ratio used to classify a Road island",
+    )
+    parser.add_argument(
+        "--pedestrian-area-road-expansion",
+        type=int,
+        default=0,
+        help="expand Road into adjacent Pedestrian Area by this pixel radius",
+    )
     parser.add_argument(
         "--evaluation-size",
         type=int,
@@ -143,6 +162,9 @@ def main() -> int:
         evaluation_width=args.evaluation_size[1],
         temporal_alpha=args.temporal_alpha,
         temporal_hysteresis_margin=args.temporal_hysteresis_margin,
+        road_island_action=args.road_island_action,
+        minimum_sidewalk_ring_ratio=args.minimum_sidewalk_ring_ratio,
+        pedestrian_area_road_expansion=args.pedestrian_area_road_expansion,
         device=args.device,
     )
     print(

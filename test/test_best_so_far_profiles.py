@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 
+import numpy as np
 import pytest
 
 
@@ -14,8 +15,10 @@ from best_so_far_runtime import (  # noqa: E402
     R50_PROFILE,
     R50_ROAD_LABELS,
     R50_SIDEWALK_LABELS,
+    ROAD_ISLAND_ACTIONS,
     SWIN_L_PROFILE,
     BestSoFarConfig,
+    BestSoFarSegmenter,
     resolve_profile,
 )
 
@@ -68,3 +71,61 @@ def test_profile_checkpoint_can_be_explicitly_overridden():
 def test_unknown_profile_is_rejected():
     with pytest.raises(ValueError, match="unsupported profile"):
         BestSoFarConfig(profile="unknown").validate()
+
+
+def test_unknown_road_island_action_is_rejected():
+    assert ROAD_ISLAND_ACTIONS == ("drop", "reassign-sidewalk")
+    with pytest.raises(ValueError, match="road_island_action"):
+        BestSoFarConfig(road_island_action="unknown").validate()
+
+
+def test_negative_pedestrian_area_road_expansion_is_rejected():
+    with pytest.raises(ValueError, match="pedestrian_area_road_expansion"):
+        BestSoFarConfig(pedestrian_area_road_expansion=-1).validate()
+
+
+@pytest.mark.parametrize("ratio", (-0.01, 1.01))
+def test_invalid_minimum_sidewalk_ring_ratio_is_rejected(ratio):
+    with pytest.raises(ValueError, match="minimum_sidewalk_ring_ratio"):
+        BestSoFarConfig(minimum_sidewalk_ring_ratio=ratio).validate()
+
+
+@pytest.mark.parametrize(
+    ("action", "expect_sidewalk"),
+    (("drop", False), ("reassign-sidewalk", True)),
+)
+def test_small_road_island_action(action, expect_sidewalk):
+    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter.maximum_road_island_area = 16
+    segmenter.minimum_sidewalk_ring_ratio = 0.10
+    segmenter.road_island_action = action
+    road = np.zeros((12, 12), dtype=bool)
+    road[5:7, 5:7] = True
+    sidewalk = np.ones((12, 12), dtype=bool)
+    sidewalk[5:7, 5:7] = False
+
+    retained_road, retained_sidewalk = segmenter._refine_road_components(
+        road,
+        sidewalk,
+        minimum_area=1,
+    )
+
+    assert not retained_road.any()
+    assert bool(retained_sidewalk[5:7, 5:7].all()) is expect_sidewalk
+
+
+def test_road_expands_only_into_adjacent_pedestrian_area():
+    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter.pedestrian_area_road_expansion = 1
+    segmenter.pedestrian_area_id = 7
+    selected = np.full((7, 7), 2, dtype=np.uint8)
+    selected[3, 3] = 1
+    class_map = np.full((7, 7), 7, dtype=np.int64)
+    class_map[2, 2] = 9
+
+    expanded = segmenter._expand_road_into_pedestrian_area(selected, class_map)
+
+    assert expanded[3, 3] == 1
+    assert expanded[2, 3] == 1
+    assert expanded[2, 2] == 2
+    assert expanded[0, 0] == 2

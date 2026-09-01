@@ -16,8 +16,6 @@
 from __future__ import annotations
 
 import argparse
-import os
-import tempfile
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -113,6 +111,30 @@ def candidate_states() -> list[CandidateState]:
             hysteresis_margin=0.0,
         ),
         CandidateState(
+            "semantic-tuned-manhole-reassign-road-2560-ring-0.10-hysteresis-0.00",
+            2560,
+            0.10,
+            "reassign-sidewalk",
+            "swin-tuned-manhole",
+            hysteresis_margin=0.0,
+        ),
+        CandidateState(
+            "candidate-003-pedestrian-area-near-road-10px",
+            2560,
+            0.10,
+            "reassign-sidewalk",
+            "swin-tuned-manhole-pedestrian-near-road",
+            hysteresis_margin=0.0,
+        ),
+        CandidateState(
+            "candidate-008-sidewalk-ring-0.15",
+            2560,
+            0.15,
+            "reassign-sidewalk",
+            "swin-tuned-manhole-pedestrian-near-road",
+            hysteresis_margin=0.0,
+        ),
+        CandidateState(
             "semantic-tuned-manhole-drop-road-2560-ring-0.10-hysteresis-0.03",
             2560,
             0.10,
@@ -201,9 +223,7 @@ def base_postprocess(
         sidewalk_ids=sidewalk_ids,
     )
     top_scores = torch.topk(smooth_scores, k=2, dim=0).values
-    score_margin = (
-        (top_scores[0] - top_scores[1]).detach().float().cpu().numpy()
-    )
+    score_margin = (top_scores[0] - top_scores[1]).detach().float().cpu().numpy()
     return selected, score_margin, minimum_area, class_map
 
 
@@ -286,22 +306,21 @@ def main() -> int:
         BestSoFarConfig(profile=SWIN_L_PROFILE, device=args.device)
     )
     print("MODEL_LOAD_START profile=r50-fp16-640x360", flush=True)
-    r50 = BestSoFarSegmenter(
-        BestSoFarConfig(profile=R50_PROFILE, device=args.device)
-    )
+    r50 = BestSoFarSegmenter(BestSoFarConfig(profile=R50_PROFILE, device=args.device))
     candidates = candidate_states()
     tuned_road_labels = tuple(
-        label for label in ROAD_LABELS if label not in {"Bike Lane", "Parking", "Service Lane"}
+        label
+        for label in ROAD_LABELS
+        if label not in {"Bike Lane", "Parking", "Service Lane"}
     )
     tuned_sidewalk_labels = SIDEWALK_LABELS + ("Bike Lane",)
     tuned_road_ids = resolve_ids(r50.model.config.id2label, tuned_road_labels)
-    tuned_sidewalk_ids = resolve_ids(
-        r50.model.config.id2label, tuned_sidewalk_labels
-    )
+    tuned_sidewalk_ids = resolve_ids(r50.model.config.id2label, tuned_sidewalk_labels)
     tuned_manhole_sidewalk_labels = tuned_sidewalk_labels + ("Manhole",)
     tuned_manhole_sidewalk_ids = resolve_ids(
         r50.model.config.id2label, tuned_manhole_sidewalk_labels
     )
+    pedestrian_area_id = resolve_ids(r50.model.config.id2label, ("Pedestrian Area",))[0]
     canonical_road_ids = resolve_ids(r50.model.config.id2label, ROAD_LABELS)
     canonical_sidewalk_ids = resolve_ids(r50.model.config.id2label, SIDEWALK_LABELS)
     rows: dict[str, list[dict[str, float]]] = defaultdict(list)
@@ -344,7 +363,9 @@ def main() -> int:
                     inference_started = time.perf_counter()
                     scores = r50._semantic_scores(frame)
                     r50._synchronize()
-                    r50_inference_seconds.append(time.perf_counter() - inference_started)
+                    r50_inference_seconds.append(
+                        time.perf_counter() - inference_started
+                    )
                     smooth_scores = (
                         scores
                         if previous_scores is None
@@ -368,11 +389,22 @@ def main() -> int:
                         road_ids=tuned_road_ids,
                         sidewalk_ids=tuned_manhole_sidewalk_ids,
                     )
+                    road_neighborhood = cv2.dilate(
+                        (tuned_manhole_selected == 1).astype(np.uint8),
+                        np.ones((21, 21), dtype=np.uint8),
+                    ).astype(bool)
+                    pedestrian_near_road_selected = tuned_manhole_selected.copy()
+                    pedestrian_near_road_selected[
+                        (class_map == pedestrian_area_id) & road_neighborhood
+                    ] = 1
                     update_label_confusion(label_confusion, class_map, reference)
                     selected_by_mapping = {
                         "current": base_selected,
                         "swin-tuned": tuned_selected,
                         "swin-tuned-manhole": tuned_manhole_selected,
+                        "swin-tuned-manhole-pedestrian-near-road": (
+                            pedestrian_near_road_selected
+                        ),
                     }
                     for candidate in candidates:
                         selected = postprocess_candidate(
@@ -395,7 +427,11 @@ def main() -> int:
                 capture.release()
             if decoded == 0:
                 skipped_clips.append(
-                    {"video": str(video), "start_frame": start, "reason": "decode-failed"}
+                    {
+                        "video": str(video),
+                        "start_frame": start,
+                        "reason": "decode-failed",
+                    }
                 )
 
     if not rows:
@@ -411,17 +447,13 @@ def main() -> int:
                 "maximum_road_component_area": candidate.maximum_road_component_area,
                 "minimum_sidewalk_ring_ratio": candidate.minimum_sidewalk_ring_ratio,
                 "hysteresis_margin": candidate.hysteresis_margin,
-                "mean_surface_iou": (
-                    summary["road_iou"] + summary["sidewalk_iou"]
-                )
+                "mean_surface_iou": (summary["road_iou"] + summary["sidewalk_iou"])
                 / 2.0,
             }
         )
         summaries.append(summary)
     summaries.sort(
-        key=lambda item: (
-            item["mean_surface_iou"], item["selected_label_agreement"]
-        ),
+        key=lambda item: (item["mean_surface_iou"], item["selected_label_agreement"]),
         reverse=True,
     )
 
@@ -457,9 +489,7 @@ def main() -> int:
             "skipped_clips": skipped_clips,
         },
         "runtimes": {"swin_l": swin.metadata(), "r50": r50.metadata()},
-        "r50_inference_fps": (
-            len(r50_inference_seconds) / sum(r50_inference_seconds)
-        ),
+        "r50_inference_fps": (len(r50_inference_seconds) / sum(r50_inference_seconds)),
         "candidates": summaries,
         "best_candidate": summaries[0],
         "semantic_tuning": {

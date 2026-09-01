@@ -50,6 +50,7 @@ R50_ROAD_LABELS = tuple(
 R50_SIDEWALK_LABELS = SIDEWALK_LABELS + ("Bike Lane", "Manhole")
 R50_MAXIMUM_ROAD_ISLAND_AREA = 2560
 R50_MINIMUM_SIDEWALK_RING_RATIO = 0.10
+ROAD_ISLAND_ACTIONS = ("drop", "reassign-sidewalk")
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,9 @@ class BestSoFarConfig:
     evaluation_width: int = DEFAULT_EVALUATION_SIZE[1]
     temporal_alpha: float | None = None
     temporal_hysteresis_margin: float | None = None
+    road_island_action: str | None = None
+    minimum_sidewalk_ring_ratio: float | None = None
+    pedestrian_area_road_expansion: int = 0
     device: str = "auto"
 
     def validate(self) -> None:
@@ -147,6 +151,20 @@ class BestSoFarConfig:
             and not 0.0 <= self.temporal_hysteresis_margin <= 1.0
         ):
             raise ValueError("temporal_hysteresis_margin must be in [0, 1]")
+        if (
+            self.road_island_action is not None
+            and self.road_island_action not in ROAD_ISLAND_ACTIONS
+        ):
+            raise ValueError(
+                f"road_island_action must be one of {', '.join(ROAD_ISLAND_ACTIONS)}"
+            )
+        if (
+            self.minimum_sidewalk_ring_ratio is not None
+            and not 0.0 <= self.minimum_sidewalk_ring_ratio <= 1.0
+        ):
+            raise ValueError("minimum_sidewalk_ring_ratio must be in [0, 1]")
+        if self.pedestrian_area_road_expansion < 0:
+            raise ValueError("pedestrian_area_road_expansion must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -183,6 +201,8 @@ class BestSoFarSegmenter:
             if config.temporal_hysteresis_margin is not None
             else self.profile.temporal_hysteresis_margin
         )
+        self.road_island_action = config.road_island_action or "drop"
+        self.pedestrian_area_road_expansion = config.pedestrian_area_road_expansion
         self.device = choose_device(config.device)
         self.use_fp16 = self.profile.precision == "fp16" and self.device.type in {
             "cuda",
@@ -217,14 +237,23 @@ class BestSoFarSegmenter:
             self.road_labels = R50_ROAD_LABELS
             self.sidewalk_labels = R50_SIDEWALK_LABELS
             self.maximum_road_island_area = R50_MAXIMUM_ROAD_ISLAND_AREA
-            self.minimum_sidewalk_ring_ratio = R50_MINIMUM_SIDEWALK_RING_RATIO
+            self.minimum_sidewalk_ring_ratio = (
+                config.minimum_sidewalk_ring_ratio
+                if config.minimum_sidewalk_ring_ratio is not None
+                else R50_MINIMUM_SIDEWALK_RING_RATIO
+            )
         else:
             self.road_labels = ROAD_LABELS
             self.sidewalk_labels = SIDEWALK_LABELS
             self.maximum_road_island_area = 0
             self.minimum_sidewalk_ring_ratio = 0.0
         self.road_ids = resolve_ids(self.model.config.id2label, self.road_labels)
-        self.sidewalk_ids = resolve_ids(self.model.config.id2label, self.sidewalk_labels)
+        self.sidewalk_ids = resolve_ids(
+            self.model.config.id2label, self.sidewalk_labels
+        )
+        self.pedestrian_area_id = resolve_ids(
+            self.model.config.id2label, ("Pedestrian Area",)
+        )[0]
         self.model_load_seconds = time.perf_counter() - load_started
         self._previous_scores: torch.Tensor | None = None
         self._previous_selected: np.ndarray | None = None
@@ -290,21 +319,22 @@ class BestSoFarSegmenter:
     def _as_numpy(tensor: torch.Tensor) -> np.ndarray:
         return tensor.detach().float().cpu().numpy()
 
-    def _retain_road_components(
+    def _refine_road_components(
         self,
         road: np.ndarray,
         sidewalk: np.ndarray,
         minimum_area: int,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, np.ndarray]:
         count, labels, stats, _ = cv2.connectedComponentsWithStats(
             road.astype(np.uint8), connectivity=8
         )
         retained = stats[:, cv2.CC_STAT_AREA] >= minimum_area
         retained[0] = False
         if self.maximum_road_island_area <= 0:
-            return retained[labels]
+            return retained[labels], sidewalk
 
         kernel = np.ones((5, 5), dtype=np.uint8)
+        reassigned_sidewalk = np.zeros_like(sidewalk)
         for component in range(1, count):
             area = int(stats[component, cv2.CC_STAT_AREA])
             if not retained[component] or area > self.maximum_road_island_area:
@@ -320,7 +350,25 @@ class BestSoFarSegmenter:
             )
             if sidewalk_ratio >= self.minimum_sidewalk_ring_ratio:
                 retained[component] = False
-        return retained[labels]
+                if self.road_island_action == "reassign-sidewalk":
+                    reassigned_sidewalk[component_mask] = True
+        return retained[labels], sidewalk | reassigned_sidewalk
+
+    def _expand_road_into_pedestrian_area(
+        self,
+        selected: np.ndarray,
+        class_map: np.ndarray,
+    ) -> np.ndarray:
+        radius = self.pedestrian_area_road_expansion
+        if radius <= 0:
+            return selected
+        road_neighborhood = cv2.dilate(
+            (selected == 1).astype(np.uint8),
+            np.ones((radius * 2 + 1, radius * 2 + 1), dtype=np.uint8),
+        ).astype(bool)
+        expanded = selected.copy()
+        expanded[(class_map == self.pedestrian_area_id) & road_neighborhood] = 1
+        return expanded
 
     def segment(self, frame_bgr: np.ndarray) -> BestSoFarResult:
         if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
@@ -347,6 +395,7 @@ class BestSoFarSegmenter:
             road_ids=self.road_ids,
             sidewalk_ids=self.sidewalk_ids,
         )
+        selected = self._expand_road_into_pedestrian_area(selected, smooth_map)
 
         hold_ratio = 0.0
         if (
@@ -362,7 +411,7 @@ class BestSoFarSegmenter:
             selected[hold_mask] = self._previous_selected[hold_mask]
             hold_ratio = float(np.mean(hold_mask))
         retained_sidewalk = remove_small_components(selected == 2, minimum_area)
-        retained_road = self._retain_road_components(
+        retained_road, retained_sidewalk = self._refine_road_components(
             selected == 1,
             retained_sidewalk,
             minimum_area,
@@ -427,5 +476,7 @@ class BestSoFarSegmenter:
                 "temporal_hysteresis_margin": self.temporal_hysteresis_margin,
                 "maximum_road_island_area": self.maximum_road_island_area,
                 "minimum_sidewalk_ring_ratio": self.minimum_sidewalk_ring_ratio,
+                "road_island_action": self.road_island_action,
+                "pedestrian_area_road_expansion": (self.pedestrian_area_road_expansion),
             },
         }

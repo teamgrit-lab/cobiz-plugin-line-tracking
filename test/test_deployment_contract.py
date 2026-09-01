@@ -16,10 +16,15 @@ def test_compose_uses_host_network_and_a2_joy_contract():
 def test_dds_contract_is_read_only_and_entrypoint_fails_when_missing():
     compose = (ROOT / "docker-compose.yml").read_text()
     entrypoint = (ROOT / "docker" / "entrypoint.sh").read_text()
+    debug_entrypoint = (ROOT / "docker" / "swin_l_debug_entrypoint.sh").read_text()
 
     assert "/opt/ros/teamgrit/dds:ro" in compose
     assert "if [[ ! -f" in entrypoint
     assert "teamgrit_dds_env.sh" in entrypoint
+    assert "set +u" in entrypoint
+    assert "set -u" in entrypoint
+    assert "set +u" in debug_entrypoint
+    assert "set -u" in debug_entrypoint
 
 
 def test_runtime_config_is_mounted_read_only():

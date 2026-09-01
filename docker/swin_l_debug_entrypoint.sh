@@ -2,6 +2,9 @@
 set -euo pipefail
 
 : "${ROS_DISTRO:?ROS_DISTRO must be set}"
+# ROS/colcon setup scripts read several optional variables without defaults.
+# Source them with nounset disabled, then restore the strict shell for the node.
+set +u
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
 
 TEAMGRIT_DDS_ENV="/opt/ros/teamgrit/dds/teamgrit_dds_env.sh"
@@ -10,6 +13,7 @@ if [[ ! -f "${TEAMGRIT_DDS_ENV}" ]]; then
   exit 1
 fi
 source "${TEAMGRIT_DDS_ENV}"
+set -u
 
 python3 - <<'PY'
 import sys

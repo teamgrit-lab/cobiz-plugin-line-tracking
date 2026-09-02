@@ -3,6 +3,7 @@ import sys
 
 import numpy as np
 import pytest
+import torch
 
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
@@ -19,6 +20,7 @@ from best_so_far_runtime import (  # noqa: E402
     SWIN_L_PROFILE,
     BestSoFarConfig,
     BestSoFarSegmenter,
+    _changed_pixel_hysteresis_hold_mask,
     resolve_profile,
 )
 
@@ -129,3 +131,21 @@ def test_road_expands_only_into_adjacent_pedestrian_area():
     assert expanded[2, 3] == 1
     assert expanded[2, 2] == 2
     assert expanded[0, 0] == 2
+
+
+def test_changed_pixel_hysteresis_matches_full_frame_topk():
+    generator = np.random.default_rng(17)
+    scores = torch.from_numpy(generator.random((7, 16, 20), dtype=np.float32))
+    selected = generator.integers(0, 3, size=(16, 20), dtype=np.uint8)
+    previous = generator.integers(0, 3, size=(16, 20), dtype=np.uint8)
+    margin = 0.07
+
+    top_scores = torch.topk(scores, k=2, dim=0).values
+    full_margin = (top_scores[0] - top_scores[1]).numpy()
+    expected = (selected != previous) & (full_margin < margin)
+
+    actual = _changed_pixel_hysteresis_hold_mask(
+        scores, selected, previous, margin
+    )
+
+    assert np.array_equal(actual, expected)

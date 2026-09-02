@@ -180,6 +180,26 @@ class BestSoFarResult:
     sidewalk_area_ratio: float
 
 
+def _changed_pixel_hysteresis_hold_mask(
+    smooth_scores: torch.Tensor,
+    selected: np.ndarray,
+    previous_selected: np.ndarray,
+    margin: float,
+) -> np.ndarray:
+    """Match full-frame top-k hysteresis while scoring only changed pixels."""
+
+    changed_mask = selected != previous_selected
+    hold_mask = np.zeros_like(changed_mask)
+    if not np.any(changed_mask):
+        return hold_mask
+    changed_positions = torch.from_numpy(changed_mask).to(device=smooth_scores.device)
+    changed_scores = smooth_scores[:, changed_positions]
+    top_scores = torch.topk(changed_scores, k=2, dim=0).values
+    changed_margin = (top_scores[0] - top_scores[1]).detach().float().cpu().numpy()
+    hold_mask[changed_mask] = changed_margin < margin
+    return hold_mask
+
+
 class BestSoFarSegmenter:
     """Stateful frame segmenter for either pinned Mapillary profile."""
 
@@ -402,14 +422,16 @@ class BestSoFarSegmenter:
             self._previous_selected is not None
             and self.temporal_hysteresis_margin > 0.0
         ):
-            top_scores = torch.topk(smooth_scores, k=2, dim=0).values
-            score_margin = self._as_numpy(top_scores[0] - top_scores[1])
-            hold_mask = (selected != self._previous_selected) & (
-                score_margin < self.temporal_hysteresis_margin
+            hold_mask = _changed_pixel_hysteresis_hold_mask(
+                smooth_scores,
+                selected,
+                self._previous_selected,
+                self.temporal_hysteresis_margin,
             )
-            selected = selected.copy()
-            selected[hold_mask] = self._previous_selected[hold_mask]
-            hold_ratio = float(np.mean(hold_mask))
+            if np.any(hold_mask):
+                selected = selected.copy()
+                selected[hold_mask] = self._previous_selected[hold_mask]
+                hold_ratio = float(np.mean(hold_mask))
         retained_sidewalk = remove_small_components(selected == 2, minimum_area)
         retained_road, retained_sidewalk = self._refine_road_components(
             selected == 1,

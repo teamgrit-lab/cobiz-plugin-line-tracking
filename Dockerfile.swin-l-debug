@@ -1,4 +1,4 @@
-ARG SWIN_L_BASE_IMAGE=cobiz:jetson
+ARG SWIN_L_BASE_IMAGE=cobiz:jetson-swin-l-l4t-r36.5.0
 FROM ${SWIN_L_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -6,37 +6,44 @@ ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/root/.cache/huggingface
 SHELL ["/bin/bash", "-c"]
 
-ARG SWIN_L_TORCH_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126
-ARG SWIN_L_TORCH_VERSION=2.11.0
-ARG SWIN_L_TORCHVISION_VERSION=0.26.0
+ARG SWIN_L_TORCHVISION_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126
+ARG SWIN_L_TORCHVISION_VERSION=0.23.0
 
-# cobiz:jetson already provides Ubuntu 22.04/Python 3.10, CUDA 12.6 and the
-# ROS 2 Humble core. The model wheels must come from a Jetson aarch64 index;
-# installing torch from the normal PyPI index would not provide the required
-# CUDA-enabled Jetson build.
+# The base image is built once with jetson-containers and provides the
+# Jetson-compatible PyTorch, CUDA, and ROS stack. torchvision and Transformers
+# is installed below from the Jetson aarch64 index because pytorch:2.8 does
+# not include it and the generic alias currently resolves to a newer release.
+# Do not install torch from PyPI here: pip can select a CPU wheel or a CUDA
+# build that is newer than the Jetson host driver.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         python3-pip \
-        python3-venv \
         python3-numpy \
         python3-opencv \
         ros-humble-cv-bridge \
         ros-humble-geometry-msgs \
         ros-humble-nav-msgs \
+        ros-humble-rmw-cyclonedds-cpp \
         ros-humble-sensor-msgs \
         ros-humble-std-msgs \
     && rm -rf /var/lib/apt/lists/*
 
-# Keep ROS's system Python visible so rclpy/cv_bridge remain available while
-# installing the model-side Python packages in an isolated environment.
-RUN python3 -m venv --system-site-packages /opt/swin-l-venv \
-    && /opt/swin-l-venv/bin/python -m pip install --no-cache-dir \
-        --index-url "${SWIN_L_TORCH_INDEX_URL}" \
-        --extra-index-url "https://pypi.org/simple" \
-        --only-binary=torch,torchvision \
-        "torch==${SWIN_L_TORCH_VERSION}" \
+# python3-opencv installs cv2 into Debian's dist-packages directory, while
+# the base image runs its /opt/venv interpreter. Add that directory through a
+# .pth file so cv2 is visible without putting the system NumPy ahead of the
+# model environment's NumPy<2.
+RUN /opt/venv/bin/python -c \
+    "import site; from pathlib import Path; Path(site.getsitepackages()[0], 'jetson-system-dist-packages.pth').write_text('/usr/lib/python3/dist-packages\\n')"
+
+# Reuse the Python environment from the Jetson base image. PyTorch is installed
+# there by jetson-containers under /opt/venv; a separate venv would not see it,
+# even when created with --system-site-packages.
+RUN /opt/venv/bin/python -m pip install --no-cache-dir \
+        --index-url "${SWIN_L_TORCHVISION_INDEX_URL}" \
+        --no-deps \
+        --only-binary=torchvision \
         "torchvision==${SWIN_L_TORCHVISION_VERSION}" \
-    && /opt/swin-l-venv/bin/python -m pip install --no-cache-dir \
+    && /opt/venv/bin/python -m pip install --no-cache-dir \
         "numpy>=1.26,<2" \
         "pillow>=10,<14" \
         "scipy>=1.10,<2" \
@@ -44,7 +51,16 @@ RUN python3 -m venv --system-site-packages /opt/swin-l-venv \
         "mcap==1.4.0" \
         "mcap-ros2-support==0.5.7"
 
-ENV PATH=/opt/swin-l-venv/bin:${PATH}
+# Fail during the image build if the base image did not actually provide the
+# expected CUDA-enabled model stack. GPU availability itself cannot be tested
+# in a Docker build because BuildKit is not given the Jetson GPU device.
+RUN /opt/venv/bin/python -c \
+    'import cv2, torch, torchvision, transformers; \
+     cuda = torch.version.cuda; \
+     assert cuda and cuda.startswith("12.6"), f"expected CUDA 12.6 PyTorch, got {cuda!r}"; \
+     print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} transformers={transformers.__version__} opencv={cv2.__version__}")'
+
+ENV PATH=/opt/venv/bin:${PATH}
 WORKDIR /workspace
 COPY tools /workspace/tools
 COPY docker/swin_l_debug_entrypoint.sh /entrypoint-swin-l-debug.sh

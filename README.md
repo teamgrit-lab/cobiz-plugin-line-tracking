@@ -362,51 +362,57 @@ uv run tools/benchmark_best_so_far.py mcap \
 
 ## Swin-L 인도 중심 local path 디버그
 
-`tools/swin_l_local_path_debug.py`는 위 Swin-L profile의 `Sidewalk` mask를
-카메라 전방 3~8m의 metric bird's-eye grid로 옮긴 뒤, 각 거리에서 인도 영역의
-중심을 추출해 `base_link` 기준 `nav_msgs/Path`로 만든다. 매 프레임마다 경로를
-갈아끼우지 않고 최신 카메라 프레임만 유지하는 depth-1 큐, Swin-L 4Hz 기본 추론,
-0.8초 EMA, 0.9초 경로 hold를 사용한다. LiDAR가 오래되었거나 path corridor 안에
-3m 이내의 점이 3개 이상 있으면 `safety_stop` 디버그 토픽이 `true`가 된다.
-이 프로세스는 `/a2_control`을 발행하지 않으므로 기존 제어 노드와 분리된 검사
-용이다.
+`tools/swin_l_local_path_debug.py`는 Swin-L profile의 `Sidewalk` mask를 카메라
+전방 3~8m의 metric bird's-eye grid로 옮긴 뒤, 각 거리에서 인도 영역의 중심을
+추출해 `base_link` 기준 `nav_msgs/Path`로 만든다. 매 프레임마다 경로를
+갈아끼우지 않고 최신 카메라 프레임만 유지하는 depth-1 큐, Swin-L 기본 추론
+4Hz, 0.8초 EMA, 0.9초 경로 hold를 사용한다. 따라서 출력 타이머는 기본 10Hz여도
+실제 Swin-L 추론이 4Hz보다 느리면 유효한 경로 갱신은 더 느려질 수 있다.
 
-첨부 rosbag에서 확인된 토픽을 기본값으로 사용한다.
+유효한 결과는 `local_path.poses`가 2개 이상이고 metrics에서
+`path_tracked=true`, `path_confidence>0`인 상태다. `ros2 topic hz`가 약 10Hz라는
+것만으로 경로가 갱신되는 것은 아니다. `poses=[]`, `path_tracked=false`,
+`reason=path_unavailable`이면 영상은 들어오고 overlay timer도 돌지만 인도
+중심선을 추출하지 못한 상태다. LiDAR가 연결되어 있어도 인도 mask/ROI/
+homography가 맞지 않으면 이 상태가 된다.
 
-| 방향 | `.env` 변수 | 기본값 |
+LiDAR가 오래되었거나 path corridor 안에 3m 이내의 점이 3개 이상 있으면
+`safety_stop` 디버그 토픽이 `true`가 된다. 이 프로세스는 `/a2_control`을 발행하지
+않으므로 기존 제어 노드와 분리된 검사 전용이다.
+
+### 토픽과 주요 설정
+
+영상과 LiDAR 토픽은 `.env`에서 정의한다. 첨부 rosbag의 640x360 스트림은
+`res_360p` 토픽을 사용하지만, 현재 Jetson의 1280x720 카메라 스트림은 보통
+`/a2/front_camera/image_raw`를 사용한다. LiDAR도 장치에 따라 `points1` 또는
+`points2`가 될 수 있으므로 실제 토픽 목록과 컨테이너 로그를 확인한다.
+
+| 방향 | `.env` 변수 | 예시 |
 |---|---|---|
-| 입력 영상 | `SWIN_L_IMAGE_TOPIC` | `/a2/front_camera/res_360p/image_raw` |
-| 입력 LiDAR | `SWIN_L_LIDAR_TOPIC` | `/unitree/slam_lidar/points2` |
+| 입력 영상 | `SWIN_L_IMAGE_TOPIC` | `/a2/front_camera/image_raw` |
+| 입력 LiDAR | `SWIN_L_LIDAR_TOPIC` | `/unitree/slam_lidar/points1` |
 | 출력 overlay | `SWIN_L_OVERLAY_TOPIC` | `/line_tracking/swin_l/overlay` |
 | 출력 경로 | `SWIN_L_LOCAL_PATH_TOPIC` | `/line_tracking/swin_l/local_path` |
 | 안전 상태 | `SWIN_L_SAFETY_STOP_TOPIC` | `/line_tracking/swin_l/safety_stop` |
+| 여유 거리 | `SWIN_L_CLEARANCE_TOPIC` | `/line_tracking/swin_l/clearance_m` |
+| 진단 metrics | `SWIN_L_METRICS_TOPIC` | `/line_tracking/swin_l/metrics` |
+
+카메라 입력 해상도와 모델 평가 해상도는 별개다. 예를 들어 카메라가 1280x720이어도
+`SWIN_L_EVALUATION_WIDTH=640`, `SWIN_L_EVALUATION_HEIGHT=360`으로 두면 모델은
+640x360으로 평가한다. 이는 Swin-L 계산량을 줄이기 위한 설정이며 원본 토픽의
+해상도를 변경하지 않는다.
 
 `SWIN_L_ROI_POLYGON`과 `SWIN_L_GROUND_HALF_WIDTH_M`은 카메라 pitch와 장착 위치에
 따라 반드시 현장에서 보정해야 한다. Rosbag에는 `CameraInfo`는 있지만
 camera-to-base extrinsic/TF가 없으므로 기본 homography는 초기 디버그값이다.
-LiDAR는 bag의 `hesai_lidar` frame에서 x=전방, y=왼쪽으로 정렬되어 있다고 가정하며,
-실차에서는 extrinsic을 확인한 뒤 `SWIN_L_LIDAR_Z_*`, corridor 폭과 stop 거리를
-조정해야 한다.
+LiDAR는 x=전방, y=왼쪽으로 `base_link`에 정렬되어 있다고 가정한다. 실차에서는
+extrinsic을 확인한 뒤 `SWIN_L_LIDAR_Z_*`, corridor 폭과 stop 거리를 조정한다.
 
-ROS 2 토픽으로 실행하려면 Jetson의 ROS 2 환경과 JetPack 호환 PyTorch/Transformers를
-설치하고 `scipy`도 함께 준비한 뒤 다음처럼 실행한다.
+### Rosbag을 동영상으로 먼저 확인
 
-```bash
-cd /path/to/cobiz-plugin-line-tracking
-cp .env.example .env  # 필요하면 SWIN_L_* 값을 수정
-set -a; source .env; set +a
-source /opt/ros/humble/setup.bash
-python3 tools/swin_l_local_path_debug.py ros2
-
-# 확인
-ros2 topic echo /line_tracking/swin_l/local_path
-ros2 topic echo /line_tracking/swin_l/safety_stop
-rqt_image_view /line_tracking/swin_l/overlay
-```
-
-ROS 2 없이 같은 rosbag을 동영상 overlay로 확인할 수도 있다. 아래 모드는 camera
-20Hz 출력 프레임을 유지하면서 Swin-L update만 기본 4Hz로 실행하고 LiDAR 상태와
-raw/평활 경로를 overlay한다.
+ROS 2 없이 같은 rosbag을 동영상 overlay로 확인할 수 있다. camera 20Hz 출력
+프레임은 유지하면서 Swin-L update만 기본 4Hz로 실행하고 LiDAR 상태와 raw/
+평활 경로를 overlay한다.
 
 ```bash
 uv run tools/swin_l_local_path_debug.py mcap \
@@ -416,25 +422,90 @@ uv run tools/swin_l_local_path_debug.py mcap \
   --max-frames 400
 ```
 
-Overlay에서 마젠타는 Swin-L 인도, 주황색은 최신 raw 중심선, 흰색은 평활된
-local path이며, 왼쪽 위 패널에서 LiDAR 안전 상태를 확인할 수 있다. 이 코드는
-디버깅용이므로 경로를 실제 보행 제어기에 연결하기 전 homography, LiDAR frame
-정렬, 장애물 z 범위를 검증해야 한다.
+Overlay에서 마젠타는 Swin-L 인도 mask, 주황색은 최신 raw 중심선, 흰색은 평활된
+local path다. 이 코드는 디버깅용이므로 실제 보행 제어기에 연결하기 전 homography,
+LiDAR frame 정렬, 장애물 z 범위를 검증해야 한다.
 
 ## Docker debug 컨테이너
 
-주행용 `line-tracking` 서비스와 분리해서 local path만 확인하려면 다음 서비스를
-명시적으로 실행한다. `debugging-swin-l`은 `/a2_control`을 발행하지 않는다.
+아래 구성은 Jetson에서 `debugging-swin-l`만 실행해 local path와 overlay를 확인하고
+로봇을 주행시키지 않는 절차다. `debugging-swin-l`은 `/a2_control`을 발행하지
+않으므로 주행용 `line-tracking` 서비스와 분리해서 사용할 수 있다.
+
+`jetson-containers`는 이 저장소 안에 있을 필요가 없다. Jetson 호스트의 별도
+디렉터리(예: `~/tools/jetson-containers`)에 clone해도 되며, 이미지 build가 끝난
+뒤 계속 실행 중일 필요도 없다.
 
 ```bash
-cd /path/to/cobiz-plugin-line-tracking
+cd ~/dev/dangjin-a2/cobiz-plugin-line-tracking
 cp .env.example .env
+```
 
-# debugging-swin-l은 cobiz:jetson에서 직접 다음 의존성을 설치한다.
-# - Jetson aarch64 CUDA wheel: torch, torchvision
-# - 일반 Python 패키지: Transformers, SciPy, MCAP
-# - ROS 패키지: cv_bridge 및 메시지 타입
-# jetson-containers를 실행 중인 상태로 유지할 필요는 없다.
+현재 Jetson 카메라가 1280x720이라면 `.env`에서 입력 토픽만 실제 장치에 맞추고,
+모델 평가 해상도는 640x360으로 유지한다.
+
+```dotenv
+SWIN_L_IMAGE_TOPIC=/a2/front_camera/image_raw
+SWIN_L_LIDAR_TOPIC=/unitree/slam_lidar/points1
+SWIN_L_EVALUATION_WIDTH=640
+SWIN_L_EVALUATION_HEIGHT=360
+SWIN_L_BASE_IMAGE=cobiz:jetson-swin-l-l4t-r36.5.0
+```
+
+첨부 rosbag처럼 640x360 stream을 재생할 때는
+`/a2/front_camera/res_360p/image_raw`를 사용한다. LiDAR도 장치에 따라 `points1`
+또는 `points2`가 될 수 있으므로 `ros2 topic list`와 컨테이너 로그의
+`image=... lidar=...`를 기준으로 `.env`를 맞춘다.
+
+```bash
+# Jetson 호스트에서 한 번 수행한다. clone 위치는 프로젝트 폴더와 달라도 된다.
+cd ~/tools/jetson-containers
+jetson-containers --help
+docker image inspect cobiz:jetson >/dev/null
+
+# cobiz:jetson에는 ROS Humble이 이미 있으므로 ROS/OpenCV/FFmpeg stage는
+# 다시 빌드하지 않고 Jetson CUDA 12.6용 PyTorch만 추가한다.
+PYTORCH_VERSION=2.8 CUDA_VERSION=12.6 \
+jetson-containers build \
+  --base=cobiz:jetson \
+  --name=cobiz:jetson-swin-l \
+  --skip-packages=ffmpeg,opencv,ros \
+  pytorch:2.8
+
+이 명령은 dependency stage를 여러 개 만들 수 있어 시간이 오래 걸린다.
+`--simulate`는 dependency 해석만 보여주고 Docker image를 만들지 않는다. 실제
+image가 필요한 경우에는 위의 `build` 명령을 실행해야 한다. FFmpeg/OpenCV/ROS
+stage를 포함한 기존 시도에서 각각 `dav1d`, OpenCV package, rosdep default
+source 중복 문제가 발생했기 때문에 `cobiz:jetson`에서는 해당 stage를 건너뛴다.
+
+# Jetson-containers가 L4T 태그를 자동으로 붙이는지 확인한다.
+docker images 'cobiz:jetson-swin-l*'
+
+# 최종 alias가 없고 intermediate tag만 있는 경우에는 재빌드하지 않고
+# alias만 추가한다.
+if ! docker image inspect cobiz:jetson-swin-l-l4t-r36.5.0 >/dev/null 2>&1; then
+  docker image inspect cobiz:jetson-swin-l-l4t-r36.5.0-pytorch_2.8 >/dev/null
+  docker tag \
+    cobiz:jetson-swin-l-l4t-r36.5.0-pytorch_2.8 \
+    cobiz:jetson-swin-l-l4t-r36.5.0
+fi
+
+# Compose build 전 CUDA PyTorch와 ROS를 빠르게 검증한다.
+docker run --rm --runtime=nvidia \
+  --entrypoint python3 \
+  cobiz:jetson-swin-l-l4t-r36.5.0 \
+  -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())'
+
+docker run --rm --runtime=nvidia \
+  --entrypoint bash \
+  cobiz:jetson-swin-l-l4t-r36.5.0 \
+  -lc 'source /opt/ros/humble/setup.bash; python3 -c "import rclpy; print(rclpy.__file__)"'
+
+# 위 base image가 제공하는 PyTorch를 사용하고, Compose 빌드에서
+# Transformers, Jetson CUDA 12.6용 torchvision, cv_bridge와 Cyclone DDS를
+# 보강한다. 정상적인 핵심 출력은 `2.8.0 12.6 True`다.
+cd ~/dev/dangjin-a2/cobiz-plugin-line-tracking
+docker compose stop line-tracking
 docker compose up -d --build debugging-swin-l
 docker compose logs -f debugging-swin-l
 ```
@@ -464,25 +535,88 @@ rqt_image_view /line_tracking/swin_l/overlay
 rviz2  # Fixed Frame=base_link, Path topic=/line_tracking/swin_l/local_path
 ```
 
-모델은 `${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}`에 캐시되어 다음
-컨테이너 재생성 때 재사용된다. 처음 실행할 때는 Swin-L checkpoint 다운로드로
-시간이 걸릴 수 있다. 컨테이너를 종료할 때는 다음 명령을 사용한다.
+출력 타이머 기본값은 10Hz이고 Swin-L 목표 추론률은 4Hz다. 따라서 10Hz가
+측정되어도 이전 경로를 재발행하는 중일 수 있다. 다음을 함께 판단한다.
+
+```text
+정상: poses >= 2, path_tracked=true, path_confidence > 0
+비정상: poses == [], path_tracked=false, reason=path_unavailable
+```
+
+2026-09-03 결과 MCAP에서는 다섯 output topic이 약 10Hz였지만 20.5초 동안
+`local_path.poses`가 계속 비어 있고 `path_unavailable`이었다. overlay 자체는
+갱신됐으므로 이 경우는 publisher 고장이 아니라 인도 mask/ROI/homography가
+유효한 중심선을 만들지 못한 상황이다. 실내 영상, 인도가 보이지 않는 장면,
+카메라 pitch가 기본값과 다른 경우를 먼저 확인하고 ROI와 homography를 보정한다.
+LiDAR가 `lidar_available=true`인데도 Path가 비어 있다면 LiDAR보다 영상 경로
+추출을 먼저 점검한다.
+
+### MCAP으로 재현 결과 저장
+
+결과만 짧게 기록하면 카메라 원본을 다시 저장하는 것보다 디스크를 크게 아낄 수
+있다. Jetson host에서 실행하고 Ctrl-C로 중지한다.
 
 ```bash
+source /opt/ros/humble/setup.bash
+mkdir -p ~/rosbags/swin_l
+ros2 bag record -s mcap \
+  -o ~/rosbags/swin_l/debug_result_$(date +%Y%m%d_%H%M%S) \
+  /line_tracking/swin_l/overlay \
+  /line_tracking/swin_l/local_path \
+  /line_tracking/swin_l/safety_stop \
+  /line_tracking/swin_l/clearance_m \
+  /line_tracking/swin_l/metrics \
+  /tf /tf_static
+```
+
+원인 분석을 위해 입력까지 기록할 때만 카메라와 LiDAR 토픽을 추가한다.
+1280x720 RGB 영상은 약 20Hz에서 분당 수 GB가 될 수 있고 LiDAR도 수십 MB/s가
+될 수 있으므로 짧게 기록한다.
+
+```bash
+ros2 bag info ~/rosbags/swin_l/debug_result_YYYYMMDD_HHMMSS
+mcap info ~/rosbags/swin_l/debug_result_YYYYMMDD_HHMMSS/*.mcap
+```
+
+### Jetson 부하와 통신 확인
+
+`network_mode: host`이므로 `docker stats`의 Net I/O가 0으로 보여도 실제 ROS
+트래픽이 없다는 뜻은 아니다. 다음 명령으로 host 인터페이스와 컨테이너 부하를
+확인한다.
+
+```bash
+docker stats cobiz-plugin-line-tracking-debugging-swin-l
+tegrastats
+ip -s link show enP8p1s0
+ros2 topic bw /a2/front_camera/image_raw
+ros2 topic bw /unitree/slam_lidar/points1
+```
+
+`ros2 topic bw`는 측정 subscriber가 수신한 payload 기준이므로 실제 wire
+utilization과 완전히 같지 않으며, 측정을 위해 임시 subscriber 트래픽도 만든다.
+Jetson의 `enP8p1s0`↔A2 `eth0` 링크는 1Gbps full-duplex이고, 직접 TCP 측정은
+약 905~913Mbps였다. debug 컨테이너가 실행 중일 때 관측한 payload는 카메라
+40~47MB/s, LiDAR 약 30MB/s 수준까지 나와 합계 약 560~616Mbps가 될 수 있다.
+`/livox/lidar`를 A2로 전달하는 경우에는 약 0.52MB@10Hz, 즉 42Mbps 정도를
+추가로 예상한다. Swin-L 추론이 Jetson CPU/GPU를 크게 사용할 수 있으므로 녹화
+시간과 model input 해상도를 제한한다.
+
+### 종료와 주행 안전
+
+일반 `docker compose up -d`는 주행용 `line-tracking` 서비스를 시작할 수 있고
+`/a2_control`을 publish할 수 있다. local path만 확인할 때는 반드시 debug
+서비스를 명시하고 주행 서비스를 먼저 정지한다.
+
+```bash
+docker compose stop line-tracking
 docker compose stop debugging-swin-l
 docker compose rm -f debugging-swin-l
 ```
 
-주의: 일반 `docker compose up -d`는 기존 주행용 `line-tracking` 서비스만
-시작하며 `/a2_control`을 발행할 수 있다. Swin-L local path만 확인하고 실제
-주행을 막으려는 경우에는 반드시 `docker compose up -d --build
-debugging-swin-l`처럼 서비스 이름을 명시한다. 두 서비스를 동시에 실행하지
-않도록 `line-tracking`을 먼저 내린다.
-
-```bash
-docker compose stop line-tracking
-docker compose up -d --build debugging-swin-l
-```
+모델은 `${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}`에 캐시되어 다음
+컨테이너 재생성 때 재사용된다. 처음 실행 시 Swin-L checkpoint 다운로드와
+Docker image build 때문에 시간이 오래 걸릴 수 있으며, Jetson의 여유 디스크도
+미리 확인한다.
 
 새 기본 `r50-fp16-640x360`은 같은 label aggregation과 temporal 설정을 유지하면서
 다음 실행 계약을 사용합니다.

@@ -18,7 +18,6 @@ ARG SWIN_L_TORCHVISION_VERSION=0.23.0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         python3-pip \
-        python3-venv \
         python3-numpy \
         python3-opencv \
         ros-humble-cv-bridge \
@@ -29,15 +28,15 @@ RUN apt-get update \
         ros-humble-std-msgs \
     && rm -rf /var/lib/apt/lists/*
 
-# Keep ROS's system Python visible so rclpy/cv_bridge remain available while
-# installing the model-side Python packages in an isolated environment.
-RUN python3 -m venv --system-site-packages /opt/swin-l-venv \
-    && /opt/swin-l-venv/bin/python -m pip install --no-cache-dir \
+# Reuse the Python environment from the Jetson base image. PyTorch is installed
+# there by jetson-containers under /opt/venv; a separate venv would not see it,
+# even when created with --system-site-packages.
+RUN /opt/venv/bin/python -m pip install --no-cache-dir \
         --index-url "${SWIN_L_TORCHVISION_INDEX_URL}" \
         --no-deps \
         --only-binary=torchvision \
         "torchvision==${SWIN_L_TORCHVISION_VERSION}" \
-    && /opt/swin-l-venv/bin/python -m pip install --no-cache-dir \
+    && /opt/venv/bin/python -m pip install --no-cache-dir \
         "numpy>=1.26,<2" \
         "pillow>=10,<14" \
         "scipy>=1.10,<2" \
@@ -48,13 +47,13 @@ RUN python3 -m venv --system-site-packages /opt/swin-l-venv \
 # Fail during the image build if the base image did not actually provide the
 # expected CUDA-enabled model stack. GPU availability itself cannot be tested
 # in a Docker build because BuildKit is not given the Jetson GPU device.
-RUN /opt/swin-l-venv/bin/python -c \
+RUN /opt/venv/bin/python -c \
     'import torch, torchvision, transformers; \
      cuda = torch.version.cuda; \
      assert cuda and cuda.startswith("12.6"), f"expected CUDA 12.6 PyTorch, got {cuda!r}"; \
      print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} transformers={transformers.__version__}")'
 
-ENV PATH=/opt/swin-l-venv/bin:${PATH}
+ENV PATH=/opt/venv/bin:${PATH}
 WORKDIR /workspace
 COPY tools /workspace/tools
 COPY docker/swin_l_debug_entrypoint.sh /entrypoint-swin-l-debug.sh

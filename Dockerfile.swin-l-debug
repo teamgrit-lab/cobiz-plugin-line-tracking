@@ -28,6 +28,13 @@ RUN apt-get update \
         ros-humble-std-msgs \
     && rm -rf /var/lib/apt/lists/*
 
+# python3-opencv installs cv2 into Debian's dist-packages directory, while
+# the base image runs its /opt/venv interpreter. Add that directory through a
+# .pth file so cv2 is visible without putting the system NumPy ahead of the
+# model environment's NumPy<2.
+RUN /opt/venv/bin/python -c \
+    "import site; from pathlib import Path; Path(site.getsitepackages()[0], 'jetson-system-dist-packages.pth').write_text('/usr/lib/python3/dist-packages\\n')"
+
 # Reuse the Python environment from the Jetson base image. PyTorch is installed
 # there by jetson-containers under /opt/venv; a separate venv would not see it,
 # even when created with --system-site-packages.
@@ -48,10 +55,10 @@ RUN /opt/venv/bin/python -m pip install --no-cache-dir \
 # expected CUDA-enabled model stack. GPU availability itself cannot be tested
 # in a Docker build because BuildKit is not given the Jetson GPU device.
 RUN /opt/venv/bin/python -c \
-    'import torch, torchvision, transformers; \
+    'import cv2, torch, torchvision, transformers; \
      cuda = torch.version.cuda; \
      assert cuda and cuda.startswith("12.6"), f"expected CUDA 12.6 PyTorch, got {cuda!r}"; \
-     print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} transformers={transformers.__version__}")'
+     print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} transformers={transformers.__version__} opencv={cv2.__version__}")'
 
 ENV PATH=/opt/venv/bin:${PATH}
 WORKDIR /workspace

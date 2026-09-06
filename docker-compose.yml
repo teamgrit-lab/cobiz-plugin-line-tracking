@@ -79,7 +79,7 @@ services:
   # docker compose up -d --build debugging-swin-l
   debugging-swin-l:
     profiles: [debug]
-    build:
+    build: &swin-l-build
       context: .
       dockerfile: Dockerfile.swin-l-debug
       args:
@@ -102,3 +102,24 @@ services:
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
+
+  # One-shot offline MCAP tests using the same Jetson CUDA image as live debug.
+  # Override its ROS/DDS entrypoint and keep files owned by the host user.
+  test-swin-l:
+    profiles: [test]
+    build: *swin-l-build
+    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+    runtime: nvidia
+    shm_size: "2gb"
+    user: "${SWIN_L_TEST_UID:-1000}:${SWIN_L_TEST_GID:-1000}"
+    working_dir: /workspace
+    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/swin_l_rosbag_overlay.py"]
+    command: ["--help"]
+    volumes:
+      - ./.env:/workspace/.env:ro
+      - ${SWIN_L_ROSBAG_DIR:-./rosbags}:/bags:ro
+      - ${SWIN_L_TEST_RESULTS_DIR:-./rosbag-results/swin-l-tests}:/workspace/rosbag-results/swin-l-tests
+      - ${SWIN_L_TEST_CACHE_DIR:-./.cache/huggingface-tests}:/cache/huggingface
+    environment:
+      HF_HOME: /cache/huggingface
+      PYTHONDONTWRITEBYTECODE: "1"

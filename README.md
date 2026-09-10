@@ -360,6 +360,37 @@ uv run tools/benchmark_best_so_far.py mcap \
 - Road/Bike Lane/Crosswalk/Parking/Service Lane/Lane Marking을 Road로 통합
 - Sidewalk/Pedestrian Area/Curb Cut을 Sidewalk로 통합
 
+## MCAP overlay 테스트를 명령 한 줄로 실행
+
+Mac/일반 PC에서는 저장소 루트에서 `uv`로 실행한다. Jetson은 아래의
+[MCAP 테스트 컨테이너](#jetson에서-mcap-overlay-테스트)를 사용한다.
+두 명령 모두 위의 `swin-l-best-so-far`
+모델·revision·FP32·384×384 입력·temporal 설정을 고정한다. `.env`의
+다른 모델 선택은 적용하지 않으며, Local Path 기하 설정은 기존 `.env`를 사용한다.
+
+```bash
+# 1. 인도 검출 overlay: 원본 카메라의 모든 프레임을 추론
+uv run tools/swin_l_rosbag_overlay.py sidewalk --input /path/to/input.mcap --open
+
+# 2. Local Planning overlay: 인도 중심 경로·평활·LiDAR 상태
+uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/input.mcap --open
+```
+
+기본은 처음 200프레임(현재 20Hz bag에서 약 10초)이다. 전체를 처리하려면
+`--max-frames 0`, 문제 구간부터 보려면 `--start-offset 90`을 추가한다.
+입력은 단일 `.mcap`이며 기본 토픽은 카메라
+`/a2/front_camera/res_360p/image_raw`, LiDAR `/unitree/slam_lidar/points2`다.
+다른 bag은 `--image-topic`, `--lidar-topic`, `--output-fps`로 맞춘다.
+
+완료하면 영상이 자동으로 열리고, 터미널에 MP4와 JSON의 절대경로가 나온다.
+매 실행마다 `rosbag-results/swin-l-tests/` 아래 새 폴더를 만든다. 영상만
+생성하려면 `--open`을 생략한다. 첫 실행에는 모델과 의존성을 내려받는다.
+
+- `sidewalk`: 초록=도로, 마젠타=인도. 경로와 LiDAR를 계산하지 않는다.
+- `local-path`: 마젠타=인도, 주황=추정 경로, 흰색=평활 경로. 기존 4Hz 목표
+  추론과 hold를 재사용하므로 `TRACKED`라도 이전 경로일 수 있다. 현재 경로는
+  인도 중심 후보이며 장애물 우회 planner는 아니다.
+
 ## Swin-L 인도 중심 local path 디버그
 
 `tools/swin_l_local_path_debug.py`는 Swin-L profile의 `Sidewalk` mask를 카메라
@@ -438,7 +469,7 @@ LiDAR frame 정렬, 장애물 z 범위를 검증해야 한다.
 
 ```bash
 cd ~/dev/dangjin-a2/cobiz-plugin-line-tracking
-cp .env.example .env
+test -f .env || cp .env.example .env
 ```
 
 현재 Jetson 카메라가 1280x720이라면 `.env`에서 입력 토픽만 실제 장치에 맞추고,
@@ -471,6 +502,7 @@ jetson-containers build \
   --name=cobiz:jetson-swin-l \
   --skip-packages=ffmpeg,opencv,ros \
   pytorch:2.8
+```
 
 이 명령은 dependency stage를 여러 개 만들 수 있어 시간이 오래 걸린다.
 `--simulate`는 dependency 해석만 보여주고 Docker image를 만들지 않는다. 실제
@@ -478,6 +510,7 @@ image가 필요한 경우에는 위의 `build` 명령을 실행해야 한다. FF
 stage를 포함한 기존 시도에서 각각 `dav1d`, OpenCV package, rosdep default
 source 중복 문제가 발생했기 때문에 `cobiz:jetson`에서는 해당 stage를 건너뛴다.
 
+```bash
 # Jetson-containers가 L4T 태그를 자동으로 붙이는지 확인한다.
 docker images 'cobiz:jetson-swin-l*'
 
@@ -617,6 +650,68 @@ docker compose rm -f debugging-swin-l
 컨테이너 재생성 때 재사용된다. 처음 실행 시 Swin-L checkpoint 다운로드와
 Docker image build 때문에 시간이 오래 걸릴 수 있으며, Jetson의 여유 디스크도
 미리 확인한다.
+
+### Jetson에서 MCAP overlay 테스트
+
+`test-swin-l`은 위 실시간 `debugging-swin-l`과 같은 Dockerfile·CUDA 이미지를
+사용한다. 녹화된 MCAP을 직접 읽으므로 `ros2 bag play`, ROS/DDS source와
+실시간 토픽 연결은 필요 없다. 컨테이너의 `/opt/venv/bin/python`으로 실행해
+Jetson용 PyTorch 2.8/CUDA 12.6을 유지한다. 여기서는 `uv run`을 사용하지 않는다.
+
+**최초 준비 — Jetson 호스트의 저장소 루트에서:** 기존 실시간 디버깅 이미지가
+있어도 새 테스트 스크립트를 포함하도록 Compose 이미지를 다시 빌드한다.
+`SWIN_L_BASE_IMAGE`가 아직 없다면 위 Docker debug 절차의 base 이미지 빌드를
+먼저 마친다. 아래 rosbag 디렉터리는 실제 `.mcap` 파일이 있는 폴더로 바꾼다.
+
+```bash
+cd ~/dev/dangjin-a2/cobiz-plugin-line-tracking
+test -f .env || cp .env.example .env
+export SWIN_L_ROSBAG_DIR="$HOME/rosbags"
+export SWIN_L_TEST_UID="$(id -u)" SWIN_L_TEST_GID="$(id -g)"
+export SWIN_L_TEST_RESULTS_DIR="$PWD/rosbag-results/swin-l-tests"
+export SWIN_L_TEST_CACHE_DIR="$PWD/.cache/huggingface-tests"
+test -f "$SWIN_L_ROSBAG_DIR/20260827_062352_teamgrit_rosbag_0.mcap"
+mkdir -p "$SWIN_L_TEST_RESULTS_DIR" "$SWIN_L_TEST_CACHE_DIR"
+docker compose build test-swin-l
+docker compose run --rm --no-deps --entrypoint /opt/venv/bin/python test-swin-l -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available()); assert torch.cuda.is_available(), "Jetson CUDA unavailable"'
+```
+
+CUDA 확인 출력은 `2.8.0 12.6 True` 계열이어야 한다. 각 `export`는 새 터미널에서
+다시 실행하거나 `.env`에 실제 절대경로·UID·GID 값으로 저장한다. 테스트 캐시는
+호스트 사용자 권한으로 쓰기 위해 실시간 디버깅 캐시와 별도로 둔다. 최초 실행은
+Swin-L 모델 다운로드가 필요하고 다음 실행부터 같은 캐시를 재사용한다.
+
+**테스트 — 같은 터미널에서 각각 한 줄:**
+
+```bash
+# 1. 인도 검출 overlay
+docker compose run --rm --no-deps test-swin-l sidewalk --input /bags/20260827_062352_teamgrit_rosbag_0.mcap --device cuda
+
+# 2. Local Planning overlay
+docker compose run --rm --no-deps test-swin-l local-path --input /bags/20260827_062352_teamgrit_rosbag_0.mcap --device cuda
+```
+
+`/bags`는 `SWIN_L_ROSBAG_DIR`의 읽기 전용 mount다. 두 명령은 동일한 최고 성능
+보관 Swin-L 모델·revision·FP32 설정을 고정하고 기본 200프레임을 처리한다.
+전체는 `--max-frames 0`, 90초 이후는 `--start-offset 90`을 추가한다. 카메라·LiDAR
+기본 토픽은 앞의 MCAP 테스트와 같고, `.env`의 실시간 토픽보다 CLI 기본값이
+우선한다. 다른 토픽은 `--image-topic`, `--lidar-topic`으로 명시한다.
+
+**결과 확인:** 터미널의 `VIDEO=`·`REPORT=`에서 `/workspace/`를 호스트의 저장소
+경로로 바꾸면 된다(위 기본 결과 경로 기준). 실행마다 새 폴더에
+`sidewalk-overlay.mp4`·`sidewalk-report.json` 또는
+`local-path-overlay.mp4`·`local-path-report.json`이 생성된다.
+컨테이너가 종료되어도 호스트의 `rosbag-results/swin-l-tests/`에 남는다.
+Jetson 데스크톱에서 MP4를 열거나 SSH 작업 시 PC로 복사해 재생한다.
+`--open`은 컨테이너 안에서 사용하지 않는다.
+
+```bash
+# Jetson 데스크톱: VIDEO=에서 확인한 호스트 경로를 넣는다.
+xdg-open /absolute/path/to/sidewalk-overlay.mp4
+```
+
+이 테스트의 Local Path 4Hz 설정은 bag 시간에 따른 추론 간격이다. 처리 속도가
+실시간 4Hz라는 뜻은 아니며, 실제 Jetson 속도는 별도 벤치마크로 확인한다.
 
 새 기본 `r50-fp16-640x360`은 같은 label aggregation과 temporal 설정을 유지하면서
 다음 실행 계약을 사용합니다.

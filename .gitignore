@@ -18,5 +18,6 @@ models/*.engine
 models/*.pth
 
 # Local rosbag conversion and inspection artifacts.
+/rosbags/
 rosbag-results/
 /.cache/

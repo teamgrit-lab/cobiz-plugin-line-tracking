@@ -17,7 +17,9 @@
 
 The ``mcap`` mode replays the supplied rosbag without ROS 2 and writes a
 camera-rate MP4 overlay.  Swin-L is intentionally scheduled at a lower rate;
-the smoothed path is reused between inference frames.  The ``ros2`` mode uses
+the smoothed path is reused between inference frames.  With ``--overlay-mode
+sidewalk``, every camera frame is inferred without path or LiDAR processing.
+The ``ros2`` mode uses
 the same algorithm on live topics and publishes a ``nav_msgs/Path`` plus debug
 topics.  It must be launched with a Jetson ROS/PyTorch environment that
 already contains ``rclpy`` and the Jetson-compatible PyTorch build.
@@ -375,11 +377,12 @@ def run_mcap(args: argparse.Namespace) -> int:
     path = args.input.expanduser().resolve()
     if not path.is_file() or path.suffix.lower() != ".mcap":
         raise FileNotFoundError(f"MCAP input does not exist: {path}")
-    local_config = _local_path_config_from_args(args)
-    lidar_config = _lidar_config_from_args(args)
+    with_local_path = args.overlay_mode == "local-path"
+    local_config = _local_path_config_from_args(args) if with_local_path else None
+    lidar_config = _lidar_config_from_args(args) if with_local_path else None
     segmenter = BestSoFarSegmenter(_runtime_config(args))
-    smoother = LocalPathSmoother(local_config)
-    lidar = LidarSafetyMonitor(lidar_config)
+    smoother = LocalPathSmoother(local_config) if local_config else None
+    lidar = LidarSafetyMonitor(lidar_config) if lidar_config else None
     writer: cv2.VideoWriter | None = None
     inference_period = 1.0 / args.inference_hz
     next_inference = -math.inf
@@ -399,10 +402,15 @@ def run_mcap(args: argparse.Namespace) -> int:
         start_ns = int(summary.statistics.message_start_time + args.start_offset * 1e9)
 
     try:
+        topics = (
+            (args.image_topic, args.lidar_topic)
+            if with_local_path
+            else (args.image_topic,)
+        )
         for schema, channel, message, decoded in _iter_mcap_events(
-            path, (args.image_topic, args.lidar_topic), start_time_ns=start_ns
+            path, topics, start_time_ns=start_ns
         ):
-            if channel.topic == args.lidar_topic:
+            if lidar is not None and channel.topic == args.lidar_topic:
                 try:
                     lidar.update(pointcloud2_xyz(decoded), message.log_time / 1e9)
                 except ValueError:
@@ -418,38 +426,56 @@ def run_mcap(args: argparse.Namespace) -> int:
                 writer = _build_writer(
                     args.output.expanduser().resolve(), frame, args.output_fps
                 )
-            estimate = previous_estimate
-            if timestamp_sec >= next_inference:
+            if not with_local_path:
+                # Preserve the quality baseline: infer every original camera
+                # frame, with no MP4 re-encoding or lower-rate mask reuse.
                 result = segmenter.segment(frame)
-                previous_mask = result.selected_mask
-                estimate = extract_sidewalk_centerline(
-                    result.selected_mask == 2, local_config
-                )
-                previous_estimate = estimate
-                smoother.update(estimate, timestamp_sec)
                 inference_count += 1
-                inference_times.append(result.total_seconds)
-                next_inference = timestamp_sec + inference_period
-            path_now = smoother.current(timestamp_sec)
-            safety = lidar.evaluate(path_now, timestamp_sec)
-            overlay = render_local_path_overlay(
-                frame,
-                previous_mask
-                if previous_mask.size
-                else np.zeros(frame.shape[:2], np.uint8),
-                estimate,
-                path_now,
-                safety,
-                local_config,
-                frame_index=frame_count,
-                inference_count=inference_count,
-                inference_hz=(
-                    1.0 / float(np.mean(inference_times)) if inference_times else 0.0
-                ),
-            )
+                overlay = segmenter.render_overlay(
+                    frame,
+                    result.selected_mask,
+                    frame_index=frame_count,
+                    fps=args.output_fps,
+                )
+            else:
+                assert (
+                    local_config is not None and smoother is not None and lidar is not None
+                )
+                estimate = previous_estimate
+                if timestamp_sec >= next_inference:
+                    result = segmenter.segment(frame)
+                    previous_mask = result.selected_mask
+                    estimate = extract_sidewalk_centerline(
+                        result.selected_mask == 2, local_config
+                    )
+                    previous_estimate = estimate
+                    smoother.update(estimate, timestamp_sec)
+                    inference_count += 1
+                    inference_times.append(result.total_seconds)
+                    next_inference = timestamp_sec + inference_period
+                path_now = smoother.current(timestamp_sec)
+                safety = lidar.evaluate(path_now, timestamp_sec)
+                overlay = render_local_path_overlay(
+                    frame,
+                    previous_mask,
+                    estimate,
+                    path_now,
+                    safety,
+                    local_config,
+                    frame_index=frame_count,
+                    inference_count=inference_count,
+                    inference_hz=(
+                        1.0 / float(np.mean(inference_times)) if inference_times else 0.0
+                    ),
+                )
             assert writer is not None
             writer.write(overlay)
             frame_count += 1
+            if frame_count % 100 == 0:
+                print(
+                    f"MCAP_PROGRESS frames={frame_count} updates={inference_count}",
+                    flush=True,
+                )
             if args.max_frames and frame_count >= args.max_frames:
                 break
     finally:
@@ -460,14 +486,19 @@ def run_mcap(args: argparse.Namespace) -> int:
     if args.report is not None:
         report = {
             "source": str(path),
+            "overlay_mode": args.overlay_mode,
+            "start_offset_sec": args.start_offset,
+            "output_fps": args.output_fps,
+            "inference_policy": "bag_time_rate" if with_local_path else "every_frame",
+            "requested_inference_hz": args.inference_hz if with_local_path else None,
             "image_topic": args.image_topic,
-            "lidar_topic": args.lidar_topic,
+            "lidar_topic": args.lidar_topic if with_local_path else None,
             "frames_written": frame_count,
             "swin_l_updates": inference_count,
             "output": str(args.output.expanduser().resolve()),
             "model": segmenter.metadata(),
-            "local_path": asdict(local_config),
-            "lidar_safety": asdict(lidar_config),
+            "local_path": asdict(local_config) if local_config else None,
+            "lidar_safety": asdict(lidar_config) if lidar_config else None,
         }
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -872,6 +903,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     mcap.add_argument("--report", type=Path, default=None)
     mcap.add_argument("--start-offset", type=float, default=0.0)
     mcap.add_argument("--max-frames", type=int, default=200)
+    mcap.add_argument(
+        "--overlay-mode",
+        choices=("sidewalk", "local-path"),
+        default="local-path",
+        help="sidewalk infers every camera frame; local-path also smooths paths and checks LiDAR",
+    )
     ros2 = subparsers.add_parser("ros2", help="subscribe to live ROS 2 topics")
     _add_common_arguments(ros2)
     ros2.add_argument(

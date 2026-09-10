@@ -98,3 +98,42 @@ def test_jetson_swin_l_base_build_contract():
     assert "ros-humble-cv-bridge" in debug_dockerfile
     assert "ros-humble-rmw-cyclonedds-cpp" in debug_dockerfile
     assert '"transformers==5.16.1"' in debug_dockerfile
+
+
+def test_offline_swin_l_service_reuses_cuda_without_starting_ros():
+    import yaml
+
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    offline = services["test-swin-l"]
+    live = services["debugging-swin-l"]
+
+    assert offline["build"] == live["build"]
+    assert offline["image"] == live["image"]
+    assert offline["profiles"] == ["test"]
+    assert offline["runtime"] == "nvidia"
+    assert offline["entrypoint"] == [
+        "/opt/venv/bin/python",
+        "/workspace/tools/swin_l_rosbag_overlay.py",
+    ]
+    assert offline["command"] == ["--help"]
+    assert "depends_on" not in offline
+    assert "network_mode" not in offline
+    assert "restart" not in offline
+    assert "SWIN_L_TEST_UID" in offline["user"]
+    assert "SWIN_L_TEST_GID" in offline["user"]
+    mounts = {
+        mount.rsplit(":", 2)[-2]: mount
+        for mount in offline["volumes"]
+        if mount.endswith(":ro")
+    }
+    assert "/bags" in mounts
+    assert "/workspace/.env" in mounts
+    assert all("teamgrit/dds" not in mount for mount in offline["volumes"])
+    assert any(
+        mount.endswith(":/workspace/rosbag-results/swin-l-tests")
+        for mount in offline["volumes"]
+    )
+    assert any(
+        mount.endswith(":" + offline["environment"]["HF_HOME"])
+        for mount in offline["volumes"]
+    )

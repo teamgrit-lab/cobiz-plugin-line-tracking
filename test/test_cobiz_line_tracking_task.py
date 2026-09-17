@@ -80,6 +80,44 @@ def test_start_requires_tracking_then_completes_finite_task():
     assert tasks.active is None
 
 
+@pytest.mark.parametrize("payload", [{"selected_mask": 1}, '{"selected_mask": 1}'])
+def test_task_selects_road_from_object_or_json_payload(payload):
+    tasks = LineTrackingTasks(TaskPolicy(default_selected_mask=2))
+
+    started = tasks.handle_event(event(payload=payload), now=0, ready_reason="tracking")
+
+    assert started["type"] == "TASK_STARTED"
+    assert tasks.active.selected_mask == 1
+    tasks.finish("TASK_COMPLETED")
+    assert tasks.active is None
+
+
+def test_task_uses_configured_mask_when_payload_omits_it():
+    tasks = LineTrackingTasks(TaskPolicy(default_selected_mask=1))
+
+    started = tasks.handle_event(
+        event(payload={"duration_sec": 30}), now=0, ready_reason="tracking"
+    )
+
+    assert started["type"] == "TASK_STARTED"
+    assert tasks.active.selected_mask == 1
+
+
+@pytest.mark.parametrize("selected_mask", [0, 3, -1, True, 1.0, "1", None, {}, []])
+def test_invalid_selected_mask_rejected_even_when_path_is_unavailable(selected_mask):
+    tasks = LineTrackingTasks()
+
+    state = tasks.handle_event(
+        event(payload={"selected_mask": selected_mask}),
+        now=0,
+        ready_reason="path_unavailable",
+    )
+
+    assert state["type"] == "TASK_REJECTED"
+    assert state["reason"] == "invalid_selected_mask"
+    assert tasks.active is None
+
+
 def test_server_abort_requires_active_matching_id_even_without_action_name():
     tasks = LineTrackingTasks()
     tasks.handle_event(event(task_id="a-1"), now=0, ready_reason="tracking")

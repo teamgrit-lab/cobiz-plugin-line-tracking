@@ -26,6 +26,7 @@ class TaskPolicy:
     max_duration_sec: float = 300.0
     unsafe_timeout_sec: float = 2.0
     startup_hold_sec: float = 2.0
+    default_selected_mask: int = 2
 
     def validate(self) -> None:
         values = (
@@ -41,6 +42,10 @@ class TaskPolicy:
             or self.default_duration_sec > self.max_duration_sec
         ):
             raise ValueError("default duration must exceed startup hold by 1 second")
+        if type(
+            self.default_selected_mask
+        ) is not int or self.default_selected_mask not in (1, 2):
+            raise ValueError("default selected_mask must be 1 (road) or 2 (sidewalk)")
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,7 @@ class ActiveTask:
     device_name: str | None
     started_at: float
     duration_sec: float
+    selected_mask: int
 
 
 def _task_id(event: Mapping[str, Any]) -> tuple[str | int, str] | None:
@@ -63,7 +69,7 @@ def _task_id(event: Mapping[str, Any]) -> tuple[str | int, str] | None:
     return (key if isinstance(value, str) else value), key
 
 
-def _duration(event: Mapping[str, Any], policy: TaskPolicy) -> float:
+def _payload(event: Mapping[str, Any]) -> Mapping[str, Any]:
     payload = event.get("payload")
     if isinstance(payload, str):
         try:
@@ -74,6 +80,23 @@ def _duration(event: Mapping[str, Any], policy: TaskPolicy) -> float:
         payload = {}
     if not isinstance(payload, Mapping):
         raise ValueError("invalid_payload")
+    return payload
+
+
+def requested_selected_mask(event: Mapping[str, Any], default: int) -> int:
+    """Return the requested drivable class, falling back to the configured default."""
+
+    return _selected_mask(_payload(event), default)
+
+
+def _selected_mask(payload: Mapping[str, Any], default: int) -> int:
+    value = payload.get("selected_mask", default)
+    if type(value) is not int or value not in (1, 2):
+        raise ValueError("invalid_selected_mask")
+    return value
+
+
+def _duration(payload: Mapping[str, Any], policy: TaskPolicy) -> float:
     value = payload.get("duration_sec", policy.default_duration_sec)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("invalid_duration_sec")
@@ -171,18 +194,30 @@ class LineTrackingTasks:
         device_name = event.get("device_name")
         if not isinstance(device_name, str):
             device_name = None
-        candidate = ActiveTask(raw_id, key, device_id, device_name, now, 0.0)
+        candidate = ActiveTask(
+            raw_id,
+            key,
+            device_id,
+            device_name,
+            now,
+            0.0,
+            self.policy.default_selected_mask,
+        )
         if self.active is not None:
             return self._state(
                 candidate, "TASK_REJECTED", "another_line_tracking_task_active"
             )
-        if ready_reason != "tracking":
-            return self._state(candidate, "TASK_REJECTED", ready_reason)
         try:
-            duration = _duration(event, self.policy)
+            payload = _payload(event)
+            selected_mask = _selected_mask(payload, self.policy.default_selected_mask)
+            duration = _duration(payload, self.policy)
         except ValueError as error:
             return self._state(candidate, "TASK_REJECTED", str(error))
-        self.active = ActiveTask(raw_id, key, device_id, device_name, now, duration)
+        if ready_reason != "tracking":
+            return self._state(candidate, "TASK_REJECTED", ready_reason)
+        self.active = ActiveTask(
+            raw_id, key, device_id, device_name, now, duration, selected_mask
+        )
         self.tracking_seen = False
         self.unsafe_since = None
         return self._state(self.active, "TASK_STARTED")

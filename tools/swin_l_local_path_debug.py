@@ -73,7 +73,12 @@ from swin_l_drive_control import (
     decide_drive,
     lidar_frame_matches_base,
 )
-from cobiz_line_tracking_task import LineTrackingTasks, TaskPolicy
+from cobiz_line_tracking_task import (
+    ActiveTask,
+    LineTrackingTasks,
+    TaskPolicy,
+    requested_selected_mask,
+)
 
 
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
@@ -82,6 +87,7 @@ DEFAULT_LOCAL_PATH_TOPIC = "/line_tracking/swin_l/local_path"
 DEFAULT_SAFETY_STOP_TOPIC = "/line_tracking/swin_l/safety_stop"
 DEFAULT_CLEARANCE_TOPIC = "/line_tracking/swin_l/clearance_m"
 DEFAULT_METRICS_TOPIC = "/line_tracking/swin_l/metrics"
+PATH_MASK_CLASSES = {1: "ROAD", 2: "SIDEWALK"}
 
 
 def _load_dotenv_values() -> dict[str, str]:
@@ -119,6 +125,38 @@ def _env_float(name: str, default: float) -> float:
 
 def _env_int(name: str, default: int) -> int:
     return int(_env(name, str(default)))
+
+
+def selected_path_region(selected_mask: np.ndarray, path_mask_class: int) -> np.ndarray:
+    """Select only the configured drivable class; background is never a path."""
+
+    if path_mask_class not in PATH_MASK_CLASSES:
+        raise ValueError("SWIN_L_PATH_MASK_CLASS must be 1 (road) or 2 (sidewalk)")
+    return selected_mask == path_mask_class
+
+
+def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
+    """Use the Cobiz task's class only for the lifetime of that task."""
+
+    return active_task.selected_mask if active_task is not None else default
+
+
+def update_path_smoothers(
+    selected_mask: np.ndarray,
+    smoothers: dict[int, LocalPathSmoother],
+    config: LocalPathConfig,
+    timestamp_sec: float,
+) -> dict[int, LocalPathEstimate | None]:
+    """Keep both task-mode path candidates current for safe task preflight."""
+
+    estimates = {}
+    for mask_class, smoother in smoothers.items():
+        estimate = extract_sidewalk_centerline(
+            selected_path_region(selected_mask, mask_class), config
+        )
+        smoother.update(estimate, timestamp_sec)
+        estimates[mask_class] = estimate
+    return estimates
 
 
 def _parse_polygon(value: str) -> tuple[float, ...]:
@@ -291,6 +329,7 @@ def render_local_path_overlay(
     frame_index: int,
     inference_count: int,
     inference_hz: float,
+    path_mask_class: int = 2,
 ) -> np.ndarray:
     """Render segmentation, raw/final path and LiDAR state on the camera frame."""
 
@@ -330,7 +369,7 @@ def render_local_path_overlay(
         safety_text = f"LIDAR: {safety.reason}"
         safety_color = (0, 165, 255)
     lines = (
-        "SWIN-L SIDEWALK LOCAL PATH",
+        f"SWIN-L {PATH_MASK_CLASSES[path_mask_class]} LOCAL PATH",
         f"raw={estimate.confidence:.2f} valid={estimate.valid_ratio:.2f}"
         if estimate
         else "raw=--",
@@ -457,7 +496,10 @@ def run_mcap(args: argparse.Namespace) -> int:
                     result = segmenter.segment(frame)
                     previous_mask = result.selected_mask
                     estimate = extract_sidewalk_centerline(
-                        result.selected_mask == 2, local_config
+                        selected_path_region(
+                            result.selected_mask, args.path_mask_class
+                        ),
+                        local_config,
                     )
                     previous_estimate = estimate
                     smoother.update(estimate, timestamp_sec)
@@ -480,6 +522,7 @@ def run_mcap(args: argparse.Namespace) -> int:
                         if inference_times
                         else 0.0
                     ),
+                    path_mask_class=args.path_mask_class,
                 )
             assert writer is not None
             writer.write(overlay)
@@ -510,6 +553,7 @@ def run_mcap(args: argparse.Namespace) -> int:
             "swin_l_updates": inference_count,
             "output": str(args.output.expanduser().resolve()),
             "model": segmenter.metadata(),
+            "path_mask_class": args.path_mask_class if with_local_path else None,
             "local_path": asdict(local_config) if local_config else None,
             "lidar_safety": asdict(lidar_config) if lidar_config else None,
         }
@@ -647,14 +691,17 @@ def run_ros2(args: argparse.Namespace) -> int:
     segmenter = BestSoFarSegmenter(_runtime_config(args))
     if drive_mode and segmenter.device.type != "cuda":
         raise RuntimeError("Swin-L drive mode requires a CUDA model device")
-    smoother = LocalPathSmoother(local_config)
+    smoothers = {
+        mask_class: LocalPathSmoother(local_config)
+        for mask_class in ((1, 2) if task_mode else (args.path_mask_class,))
+    }
     lidar = LidarSafetyMonitor(lidar_config)
     latest = LatestFrameQueue()
     state_lock = threading.Lock()
     state: dict[str, Any] = {
         "frame": None,
         "selected_mask": None,
-        "estimate": None,
+        "estimates": {},
         "header": None,
         "sequence": 0,
         "inference_count": 0,
@@ -686,13 +733,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                         default_duration_sec=args.default_task_duration_sec,
                         max_duration_sec=args.max_task_duration_sec,
                         unsafe_timeout_sec=args.unsafe_timeout_sec,
+                        default_selected_mask=args.path_mask_class,
                     )
                 )
                 if task_mode
                 else None
             )
             self.last_ready_reason = "inputs_not_ready"
-            self.last_readiness_at = 0.0
             self.stop_until = 0.0
             if self.drive_config is not None:
                 self.drive_config.validate()
@@ -764,11 +811,12 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.started = time.monotonic()
             self.get_logger().info(
                 "Swin-L local path debug started | image=%s lidar=%s profile=%s "
-                "inference_hz=%.2f output_hz=%.2f near=%.1fm far=%.1fm"
+                "path_surface=%s inference_hz=%.2f output_hz=%.2f near=%.1fm far=%.1fm"
                 % (
                     args.image_topic,
                     args.lidar_topic,
                     args.profile,
+                    PATH_MASK_CLASSES[args.path_mask_class],
                     args.inference_hz,
                     args.output_hz,
                     local_config.near_distance_m,
@@ -809,6 +857,48 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.release_task_control(reason)
                 self.publish_task_state(body)
 
+        def drive_readiness(
+            self, mask_class: int, now: float
+        ) -> tuple[SmoothedPath | None, LidarSafetyResult, DriveDecision]:
+            with state_lock:
+                last_image_at = state["last_image_at"]
+                last_inference_at = state["last_inference_at"]
+                last_image_stamp_ns = state["last_image_stamp_ns"]
+                last_inference_stamp_ns = state["last_inference_stamp_ns"]
+                last_lidar_stamp_ns = state["last_lidar_stamp_ns"]
+            path = smoothers[mask_class].current(now)
+            safety = lidar.evaluate(path, now)
+            clock_now_ns = self.get_clock().now().nanoseconds
+            camera_age_sec = _effective_source_age_sec(
+                last_image_at, last_image_stamp_ns, now, clock_now_ns
+            )
+            inference_age_sec = _effective_source_age_sec(
+                last_inference_at, last_inference_stamp_ns, now, clock_now_ns
+            )
+            if safety.lidar_available and last_lidar_stamp_ns is not None:
+                safety = replace(
+                    safety,
+                    age_sec=max(
+                        safety.age_sec or 0.0,
+                        (clock_now_ns - last_lidar_stamp_ns) / 1_000_000_000,
+                    ),
+                )
+            publisher_count = self.count_publishers(args.joy_topic)
+            other_publishers = publisher_count > (
+                1 if self.command_publisher is not None else 0
+            )
+            decision = decide_drive(
+                path,
+                safety,
+                camera_age_sec=camera_age_sec,
+                inference_age_sec=inference_age_sec,
+                other_control_publishers=other_publishers,
+                enabled=True,
+                calibrated=task_armed if task_mode else True,
+                config=self.drive_config,
+            )
+            return path, safety, decision
+
         def on_task_event(self, message: Any) -> None:
             if self.tasks is None:
                 return
@@ -818,11 +908,21 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.get_logger().warning("ignored malformed /task_event JSON")
                 return
             now = time.monotonic()
-            ready_reason = (
-                self.last_ready_reason
-                if now - self.last_readiness_at <= 0.2
-                else "inputs_not_ready"
-            )
+            ready_reason = "inputs_not_ready"
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "TASK_REGISTERED"
+                and event.get("action_name") == "LINE_TRACKING"
+                and self.tasks.active is None
+            ):
+                try:
+                    mask_class = requested_selected_mask(
+                        event, self.tasks.policy.default_selected_mask
+                    )
+                except ValueError:
+                    pass  # The task lifecycle reports the precise payload error.
+                else:
+                    ready_reason = self.drive_readiness(mask_class, now)[2].reason
             if self.command_publisher is not None and self.tasks.active is None:
                 ready_reason = "control_release_pending"
             previous_task = self.tasks.active
@@ -954,6 +1054,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.get_logger().error(f"Swin-L output failed: {error}")
 
         def _publish_state(self) -> None:
+            task_active = self.tasks.active if self.tasks is not None else None
+            mask_class = active_path_mask_class(task_active, args.path_mask_class)
             with state_lock:
                 frame = (
                     state["frame"].copy()
@@ -965,61 +1067,20 @@ def run_ros2(args: argparse.Namespace) -> int:
                     if extended_diagnostics and state["selected_mask"] is not None
                     else None
                 )
-                estimate = state["estimate"] if extended_diagnostics else None
+                estimate = (
+                    state["estimates"].get(mask_class) if extended_diagnostics else None
+                )
                 header = state["header"]
                 sequence = int(state["sequence"]) if extended_diagnostics else 0
                 inference_count = int(state["inference_count"])
                 inference_times = (
                     list(state["inference_times"]) if extended_diagnostics else []
                 )
-                last_image_at = state["last_image_at"]
-                last_inference_at = state["last_inference_at"]
-                last_image_stamp_ns = state["last_image_stamp_ns"]
-                last_inference_stamp_ns = state["last_inference_stamp_ns"]
-                last_lidar_stamp_ns = state["last_lidar_stamp_ns"]
             now = time.monotonic()
-            path = smoother.current(now)
-            safety = lidar.evaluate(path, now)
             drive_decision = None
             if self.drive_config is not None:
-                clock_now_ns = self.get_clock().now().nanoseconds
-                camera_age_sec = _effective_source_age_sec(
-                    last_image_at,
-                    last_image_stamp_ns,
-                    now,
-                    clock_now_ns,
-                )
-                inference_age_sec = _effective_source_age_sec(
-                    last_inference_at,
-                    last_inference_stamp_ns,
-                    now,
-                    clock_now_ns,
-                )
-                if safety.lidar_available and last_lidar_stamp_ns is not None:
-                    safety = replace(
-                        safety,
-                        age_sec=max(
-                            safety.age_sec or 0.0,
-                            (clock_now_ns - last_lidar_stamp_ns) / 1_000_000_000,
-                        ),
-                    )
-                publisher_count = self.count_publishers(args.joy_topic)
-                other_publishers = publisher_count > (
-                    1 if self.command_publisher is not None else 0
-                )
-                ready_decision = decide_drive(
-                    path,
-                    safety,
-                    camera_age_sec=camera_age_sec,
-                    inference_age_sec=inference_age_sec,
-                    other_control_publishers=other_publishers,
-                    enabled=True,
-                    calibrated=task_armed if task_mode else True,
-                    config=self.drive_config,
-                )
+                path, safety, ready_decision = self.drive_readiness(mask_class, now)
                 self.last_ready_reason = ready_decision.reason
-                self.last_readiness_at = now
-                task_active = self.tasks.active if self.tasks is not None else None
                 startup_hold = (
                     task_active is not None
                     and now - task_active.started_at
@@ -1054,6 +1115,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                     if now - self.started < 2.0:
                         drive_decision = DriveDecision.stop("startup_hold")
                     self.publish_drive(drive_decision)
+            else:
+                path = smoothers[mask_class].current(now)
+                safety = lidar.evaluate(path, now)
             self.safety_publisher.publish(Bool(data=bool(safety.stop)))
             if self.clearance_publisher is not None:
                 self.clearance_publisher.publish(
@@ -1063,6 +1127,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "profile": args.profile,
                 "camera_topic": args.image_topic,
                 "lidar_topic": args.lidar_topic,
+                "path_mask_class": mask_class,
+                "path_surface": PATH_MASK_CLASSES[mask_class],
                 "path_tracked": path is not None,
                 "path_confidence": float(path.confidence) if path else 0.0,
                 "path_age_sec": float(path.age_sec) if path else None,
@@ -1095,6 +1161,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 frame_index=sequence,
                 inference_count=inference_count,
                 inference_hz=inference_hz,
+                path_mask_class=mask_class,
             )
             overlay_message = self.bridge.cv2_to_imgmsg(overlay, encoding="bgr8")
             overlay_message.header = header
@@ -1128,15 +1195,17 @@ def run_ros2(args: argparse.Namespace) -> int:
                     time.sleep(delay)
                 started = time.perf_counter() if extended_diagnostics else 0.0
                 result: BestSoFarResult = segmenter.segment(packet.frame_bgr)
-                estimate = extract_sidewalk_centerline(
-                    result.selected_mask == 2, local_config
-                )
-                smoother.update(estimate, packet.timestamp_sec)
                 with state_lock:
+                    estimates = update_path_smoothers(
+                        result.selected_mask,
+                        smoothers,
+                        local_config,
+                        packet.timestamp_sec,
+                    )
                     if extended_diagnostics:
                         state["frame"] = packet.frame_bgr
                         state["selected_mask"] = result.selected_mask
-                        state["estimate"] = estimate
+                        state["estimates"] = estimates
                         state["inference_times"].append(time.perf_counter() - started)
                     state["header"] = packet.source_header
                     state["inference_count"] += 1
@@ -1207,6 +1276,13 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--lidar-topic", default=_env("SWIN_L_LIDAR_TOPIC", LidarSafetyConfig.topic)
+    )
+    parser.add_argument(
+        "--path-mask-class",
+        type=int,
+        choices=tuple(PATH_MASK_CLASSES),
+        default=_env("SWIN_L_PATH_MASK_CLASS", "2"),
+        help="1=road, 2=sidewalk (default from SWIN_L_PATH_MASK_CLASS)",
     )
     parser.add_argument(
         "--near-distance-m",
@@ -1395,6 +1471,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 default=_env_float("LINE_TRACKING_UNSAFE_TIMEOUT_SEC", 2.0),
             )
     args = parser.parse_args(argv)
+    if args.path_mask_class not in PATH_MASK_CLASSES:
+        parser.error("SWIN_L_PATH_MASK_CLASS must be 1 (road) or 2 (sidewalk)")
     if args.inference_hz <= 0.0 or args.output_fps <= 0.0:
         parser.error("inference/output FPS must be positive")
     if args.mode in ("ros2", "drive", "task-drive") and args.output_hz <= 0.0:

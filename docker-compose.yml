@@ -101,6 +101,7 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_PROFILE: swin-l-aspect-224x384
+      SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
@@ -125,6 +126,7 @@ services:
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_MODE: task-drive
       SWIN_L_PROFILE: swin-l-aspect-224x384
+      SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
       SWIN_L_DRIVE_ENABLED: ${SWIN_L_DRIVE_ENABLED:-false}
       SWIN_L_CALIBRATION_CONFIRMED: ${SWIN_L_CALIBRATION_CONFIRMED:-false}
@@ -191,6 +193,7 @@ services:
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_MODE: drive
       SWIN_L_PROFILE: swin-l-aspect-224x384
+      SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
       SWIN_L_DRIVE_ENABLED: ${SWIN_L_DRIVE_ENABLED:-false}
       SWIN_L_CALIBRATION_CONFIRMED: ${SWIN_L_CALIBRATION_CONFIRMED:-false}

@@ -96,6 +96,15 @@ def test_swin_l_drive_is_explicit_and_fail_closed_by_default():
     assert "/a2_control" in drive["environment"]["JOY_TOPIC"]
 
 
+def test_live_swin_l_services_forward_configured_path_mask_class():
+    import yaml
+
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    for name in ("debugging-swin-l", "drive-swin-l", "actual-activate"):
+        assert services[name]["environment"]["SWIN_L_PATH_MASK_CLASS"].endswith(":-2}")
+    assert "SWIN_L_PATH_MASK_CLASS=2" in (ROOT / ".env.example").read_text()
+
+
 def test_default_compose_is_cobiz_task_listener_not_legacy_drive():
     import yaml
 

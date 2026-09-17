@@ -2,9 +2,11 @@
 
 기본 Docker Compose 서비스 `actual-activate`는 Cobiz 서버의 커스텀 액션
 `LINE_TRACKING`을 기다립니다. 작업이 도착하고 현장 보정·카메라·LiDAR 안전
-검사를 통과한 경우에만 Swin-L `swin-l-aspect-224x384` 보도 중심 경로로
+검사를 통과한 경우에만 Swin-L `swin-l-aspect-224x384`의 선택된 영역 중심 경로로
 Unitree A2용 `sensor_msgs/Joy` 명령을 생성합니다. 작업이 없으면 Joy publisher도
-없습니다. 기존 YOLOP 노란 선 추종은 별도 `legacy` 프로필로 보관합니다.
+없습니다. 기본은 인도(`SWIN_L_PATH_MASK_CLASS=2`)이며, `.env`에서 차도(`1`)로
+선택할 수 있습니다. Cobiz 작업의 `payload.selected_mask`가 있으면 그 작업에만
+적용합니다. 기존 YOLOP 노란 선 추종은 별도 `legacy` 프로필로 보관합니다.
 
 아래 YOLOP 흐름은 **레거시** 서비스 설명입니다.
 
@@ -100,7 +102,10 @@ ros2 topic echo /task_state
 ```
 
 기본 작업 시간은 60초, 최대 300초입니다. 서버 작업 `payload`에
-`{"duration_sec": 30}`을 넣으면 30초로 조정합니다. 센서·모델 경로가 준비되지
+`{"duration_sec": 30, "selected_mask": 1}`을 넣으면 30초 동안 차도(`1`)를
+추종합니다. 인도는 `2`이며, `selected_mask`를 생략하면 `.env`의
+`SWIN_L_PATH_MASK_CLASS`를 사용합니다. `0`·그 밖의 값은 `invalid_selected_mask`로
+거절합니다. 작업 종료 후에는 `.env` 기본값으로 돌아갑니다. 센서·모델 경로가 준비되지
 않았거나 다른 `/a2_control` publisher가 있으면 작업을 거절합니다. 수락 시
 2초간 0 명령을 보낸 뒤 추종하고, 서버 취소·시간 만료·안전 조건 위반 2초 지속 시
 0 명령 후 종료 상태를 보고합니다. 무한 주행 작업은 지원하지 않습니다.
@@ -420,14 +425,14 @@ uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/input.mcap --o
 생성하려면 `--open`을 생략한다. 첫 실행에는 모델과 의존성을 내려받는다.
 
 - `sidewalk`: 초록=도로, 마젠타=인도. 경로와 LiDAR를 계산하지 않는다.
-- `local-path`: 마젠타=인도, 주황=추정 경로, 흰색=평활 경로. 기존 4Hz 목표
-  추론과 hold를 재사용하므로 `TRACKED`라도 이전 경로일 수 있다. 현재 경로는
-  인도 중심 후보이며 장애물 우회 planner는 아니다.
+- `local-path`: 초록=차도, 마젠타=인도, 주황=추정 경로, 흰색=평활 경로. 경로 대상은
+  `SWIN_L_PATH_MASK_CLASS`로 선택한다. 기존 4Hz 목표 추론과 hold를 재사용하므로
+  `TRACKED`라도 이전 경로일 수 있다. 장애물 우회 planner는 아니다.
 
-## Swin-L 인도 중심 local path 디버그
+## Swin-L 선택 영역 중심 local path 디버그
 
-`tools/swin_l_local_path_debug.py`는 Swin-L profile의 `Sidewalk` mask를 카메라
-전방 3~8m의 metric bird's-eye grid로 옮긴 뒤, 각 거리에서 인도 영역의 중심을
+`tools/swin_l_local_path_debug.py`는 Swin-L profile에서 선택한 인도 또는 차도
+mask를 카메라 전방 3~8m의 metric bird's-eye grid로 옮긴 뒤, 각 거리에서 영역의 중심을
 추출해 `base_link` 기준 `nav_msgs/Path`로 만든다. 매 프레임마다 경로를
 갈아끼우지 않고 최신 카메라 프레임만 유지하는 depth-1 큐, Swin-L 기본 추론
 4Hz, 0.8초 EMA, 0.9초 경로 hold를 사용한다. 따라서 출력 타이머는 기본 10Hz여도
@@ -436,8 +441,8 @@ uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/input.mcap --o
 유효한 결과는 `local_path.poses`가 2개 이상이고 metrics에서
 `path_tracked=true`, `path_confidence>0`인 상태다. `ros2 topic hz`가 약 10Hz라는
 것만으로 경로가 갱신되는 것은 아니다. `poses=[]`, `path_tracked=false`,
-`reason=path_unavailable`이면 영상은 들어오고 overlay timer도 돌지만 인도
-중심선을 추출하지 못한 상태다. LiDAR가 연결되어 있어도 인도 mask/ROI/
+`reason=path_unavailable`이면 영상은 들어오지만 선택된 영역의 중심선을 추출하지
+못한 상태다. LiDAR가 연결되어 있어도 mask/ROI/
 homography가 맞지 않으면 이 상태가 된다.
 
 LiDAR가 오래되었거나 path corridor 안에 3m 이내의 점이 3개 이상 있으면
@@ -455,6 +460,7 @@ LiDAR가 오래되었거나 path corridor 안에 3m 이내의 점이 3개 이상
 |---|---|---|
 | 입력 영상 | `SWIN_L_IMAGE_TOPIC` | `/a2/front_camera/image_raw` |
 | 입력 LiDAR | `SWIN_L_LIDAR_TOPIC` | `/unitree/slam_lidar/points1` |
+| 경로 대상 클래스 | `SWIN_L_PATH_MASK_CLASS` | `2`=인도(기본), `1`=차도 |
 | 출력 overlay (주행 모드만) | `SWIN_L_OVERLAY_TOPIC` | `/line_tracking/swin_l/overlay` |
 | 출력 경로 | `SWIN_L_LOCAL_PATH_TOPIC` | `/line_tracking/swin_l/local_path` |
 | 안전 상태 | `SWIN_L_SAFETY_STOP_TOPIC` | `/line_tracking/swin_l/safety_stop` |
@@ -463,6 +469,14 @@ LiDAR가 오래되었거나 path corridor 안에 3m 이내의 점이 3개 이상
 
 `debugging-swin-l`에서는 경로·안전 상태·metrics만 발행한다. LiDAR 여유 거리의
 상세값은 별도 토픽 대신 `metrics.lidar.clearance_m`에서 확인할 수 있다.
+`metrics.path_mask_class`와 `metrics.path_surface`에서 현재 선택을 확인할 수 있다.
+`0`(배경)과 그 밖의 `.env` 값은 시작 시 거부한다. `.env`를 바꾼 뒤에는 해당 컨테이너를
+재생성해야 적용된다. Cobiz `LINE_TRACKING` 작업의 `payload.selected_mask`로는
+`1` 또는 `2`를 지정할 수 있으며, 수락된 작업에만 적용된다. 모델이 분할한 두
+영역의 경로를 각각 유지해 요청한 영역의 경로·LiDAR 판정으로 작업을 수락한다.
+인도→차도 자동 대체는 하지 않는다.
+차도 추종을 실제 주행에 적용하기 전에는 카메라 원근 보정, 경로 폭·중심선과
+LiDAR 안전 구간을 차도 장면에서 별도로 검증해야 한다.
 
 카메라 입력 해상도와 모델 평가 해상도는 별개다. 예를 들어 카메라가 1280x720이어도
 `SWIN_L_EVALUATION_WIDTH=640`, `SWIN_L_EVALUATION_HEIGHT=360`으로 두면 모델은

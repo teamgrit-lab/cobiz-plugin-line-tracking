@@ -70,6 +70,7 @@ def test_swin_l_debug_service_is_explicit_and_has_no_drive_contract():
     assert "runtime: nvidia" in compose
     debug_service = yaml.safe_load(compose)["services"]["debugging-swin-l"]
     assert "JOY_TOPIC" not in debug_service["environment"]
+    assert debug_service["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384"
     assert "SWIN_L_MODE:-ros2" in entrypoint
     assert 'swin_l_local_path_debug.py "${mode}"' in entrypoint
     assert "/workspace/tools" in entrypoint

@@ -100,6 +100,7 @@ services:
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
+      SWIN_L_PROFILE: swin-l-aspect-224x384
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped

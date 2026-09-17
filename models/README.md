@@ -28,7 +28,8 @@ cp weights/yolop-736-1280.onnx /path/to/cobiz-plugin-line-tracking/models/yolop-
 
 cd /path/to/cobiz-plugin-line-tracking
 cp .env.example .env
-docker compose up -d --build
+docker compose stop actual-activate
+docker compose --profile legacy up -d --build line-tracking
 ```
 
 `360p` is the default profile for lower CPU latency. `720p` retains more

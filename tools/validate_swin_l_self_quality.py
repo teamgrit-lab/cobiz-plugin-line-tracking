@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 
 from benchmark_best_so_far import DEFAULT_TOPIC, iter_mcap_packets
-from best_so_far_runtime import SWIN_L_PROFILE, BestSoFarConfig, BestSoFarSegmenter
+from best_so_far_runtime import SWIN_L_ASPECT_PROFILE, BestSoFarConfig, BestSoFarSegmenter
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -124,7 +124,7 @@ def _capture(
     offsets: list[float],
     frames_per_segment: int,
 ) -> tuple[dict[str, np.ndarray], list[np.ndarray], dict[str, Any]]:
-    segmenter = BestSoFarSegmenter(BestSoFarConfig(profile=SWIN_L_PROFILE))
+    segmenter = BestSoFarSegmenter(BestSoFarConfig(profile=SWIN_L_ASPECT_PROFILE))
     masks: list[np.ndarray] = []
     segment_ids: list[int] = []
     sequences: list[int] = []

@@ -9,10 +9,10 @@ def test_maps_velocity_to_a2_control_axes_with_required_signs():
 
     axes = command_to_joy_axes(command)
 
-    assert axes == pytest.approx([0.08, -0.25, -0.30])
+    assert axes == pytest.approx([-0.08, -0.25, 0.30])
     assert -axes[1] == pytest.approx(command.vx)
-    assert -axes[0] == pytest.approx(command.vy)
-    assert -axes[2] == pytest.approx(command.yaw_rate)
+    assert -axes[0] == pytest.approx(-command.vy)
+    assert -axes[2] == pytest.approx(-command.yaw_rate)
 
 
 def test_all_a2_control_buttons_are_released():

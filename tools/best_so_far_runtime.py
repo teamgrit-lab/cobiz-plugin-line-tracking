@@ -1,12 +1,16 @@
 """Reusable runtimes for the retained and realtime Mapillary profiles.
 
-Two named profiles are intentionally kept here:
+Named profiles are intentionally kept here:
 
 * ``swin-l-best-so-far`` is the immutable quality baseline. Selecting it
   restores the exact model revision, 384x384 model input, 640x360 score map,
   temporal alpha 0.62, and hysteresis margin 0.07 used by the retained
   full-video results.
-* ``r50-fp16-640x360`` is the realtime candidate. It uses MaskFormer R50 at
+* ``swin-l-aspect-224x384`` is the selected default. It keeps the same
+  checkpoint and temporal settings but preserves the wide camera aspect ratio.
+* ``swin-l-aspect-448x768`` is a slower, quality-first experimental profile
+  validated on the two test-one videos; it retains the same Swin-L contract.
+* ``r50-fp16-640x360`` is the previous realtime candidate. It uses MaskFormer R50 at
   the native 640x360 camera size, FP16 on MPS/CUDA, Swin-aligned surface label
   aggregation, and a zero-cost temporal margin selected by direct comparison.
 
@@ -39,8 +43,10 @@ from transformers import (
 )
 
 SWIN_L_PROFILE = "swin-l-best-so-far"
+SWIN_L_ASPECT_PROFILE = "swin-l-aspect-224x384"
+SWIN_L_ASPECT_QUALITY_PROFILE = "swin-l-aspect-448x768"
 R50_PROFILE = "r50-fp16-640x360"
-DEFAULT_PROFILE = R50_PROFILE
+DEFAULT_PROFILE = SWIN_L_ASPECT_PROFILE
 DEFAULT_EVALUATION_SIZE = (360, 640)
 R50_ROAD_LABELS = tuple(
     label
@@ -76,6 +82,28 @@ PROFILE_SPECS = {
         model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
         input_height=384,
         input_width=384,
+        precision="fp32",
+        temporal_alpha=0.62,
+        temporal_hysteresis_margin=0.07,
+    ),
+    SWIN_L_ASPECT_PROFILE: ProfileSpec(
+        name=SWIN_L_ASPECT_PROFILE,
+        model_family="mask2former",
+        model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
+        model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
+        input_height=224,
+        input_width=384,
+        precision="fp32",
+        temporal_alpha=0.62,
+        temporal_hysteresis_margin=0.07,
+    ),
+    SWIN_L_ASPECT_QUALITY_PROFILE: ProfileSpec(
+        name=SWIN_L_ASPECT_QUALITY_PROFILE,
+        model_family="mask2former",
+        model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
+        model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
+        input_height=448,
+        input_width=768,
         precision="fp32",
         temporal_alpha=0.62,
         temporal_hysteresis_margin=0.07,

@@ -27,7 +27,7 @@ import numpy as np
 from best_so_far_runtime import (
     PROFILE_NAMES,
     R50_PROFILE,
-    SWIN_L_PROFILE,
+    SWIN_L_ASPECT_PROFILE,
     BestSoFarConfig,
     BestSoFarSegmenter,
 )
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
         "--profiles",
         choices=PROFILE_NAMES,
         nargs=2,
-        default=(SWIN_L_PROFILE, R50_PROFILE),
+        default=(SWIN_L_ASPECT_PROFILE, R50_PROFILE),
         metavar=("LEFT", "RIGHT"),
     )
     parser.add_argument("--start-frame", type=int, default=0)

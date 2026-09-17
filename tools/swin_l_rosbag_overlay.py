@@ -13,7 +13,7 @@
 #   "transformers==5.16.1",
 # ]
 # ///
-"""One-command MCAP overlay tests with the retained Swin-L quality baseline.
+"""One-command MCAP overlay tests with the selected Swin-L 224x384 profile.
 
 sidewalk: infer every camera frame and overlay Road/Sidewalk segmentation.
 local-path: reuse the existing path smoothing and LiDAR debug pipeline.
@@ -107,9 +107,9 @@ def prepare_outputs(args: argparse.Namespace) -> tuple[Path, Path]:
 def build_debug_arguments(
     args: argparse.Namespace, video: Path, report: Path
 ) -> list[str]:
-    from best_so_far_runtime import SWIN_L_PROFILE, resolve_profile
+    from best_so_far_runtime import SWIN_L_ASPECT_PROFILE, resolve_profile
 
-    profile = resolve_profile(SWIN_L_PROFILE)
+    profile = resolve_profile(SWIN_L_ASPECT_PROFILE)
     # Pin the model even when a local .env selects R50 or another checkpoint.
     # Geometry settings continue to use the existing local-path configuration.
     return [
@@ -123,7 +123,7 @@ def build_debug_arguments(
         "--overlay-mode",
         args.mode,
         "--profile",
-        SWIN_L_PROFILE,
+        SWIN_L_ASPECT_PROFILE,
         "--model-id",
         profile.model_id,
         "--model-revision",

@@ -59,6 +59,8 @@ def test_test_mode_topics_and_resolution_profiles_are_exposed():
 
 
 def test_swin_l_debug_service_is_explicit_and_has_no_drive_contract():
+    import yaml
+
     compose = (ROOT / "docker-compose.yml").read_text()
     entrypoint = (ROOT / "docker" / "swin_l_debug_entrypoint.sh").read_text()
 
@@ -66,11 +68,51 @@ def test_swin_l_debug_service_is_explicit_and_has_no_drive_contract():
     assert "profiles: [debug]" in compose
     assert "Dockerfile.swin-l-debug" in compose
     assert "runtime: nvidia" in compose
-    debug_service = compose.split("debugging-swin-l:", maxsplit=1)[1]
-    assert "JOY_TOPIC:" not in debug_service
-    assert "/a2_control" not in debug_service
-    assert "swin_l_local_path_debug.py ros2" in entrypoint
+    debug_service = yaml.safe_load(compose)["services"]["debugging-swin-l"]
+    assert "JOY_TOPIC" not in debug_service["environment"]
+    assert debug_service["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384"
+    assert "SWIN_L_MODE:-ros2" in entrypoint
+    assert 'swin_l_local_path_debug.py "${mode}"' in entrypoint
     assert "/workspace/tools" in entrypoint
+
+
+def test_swin_l_drive_is_explicit_and_fail_closed_by_default():
+    import yaml
+
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    drive = services["drive-swin-l"]
+    debug = services["debugging-swin-l"]
+    assert drive["profiles"] == ["drive"]
+    assert drive["build"] == debug["build"]
+    assert drive["runtime"] == "nvidia"
+    assert drive["environment"]["SWIN_L_MODE"] == "drive"
+    assert drive["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384"
+    assert "SWIN_L_DRIVE_ENABLED:-false" in drive["environment"]["SWIN_L_DRIVE_ENABLED"]
+    assert (
+        "SWIN_L_CALIBRATION_CONFIRMED:-false"
+        in drive["environment"]["SWIN_L_CALIBRATION_CONFIRMED"]
+    )
+    assert drive["restart"] == "no"
+    assert "/a2_control" in drive["environment"]["JOY_TOPIC"]
+
+
+def test_default_compose_is_cobiz_task_listener_not_legacy_drive():
+    import yaml
+
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    listener = services["actual-activate"]
+    assert "profiles" not in listener
+    assert services["line-tracking"]["profiles"] == ["legacy"]
+    assert listener["environment"]["SWIN_L_MODE"] == "task-drive"
+    assert listener["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384"
+    assert listener["environment"]["SWIN_L_DRIVE_ENABLED"].endswith(":-false}")
+    assert listener["environment"]["SWIN_L_CALIBRATION_CONFIRMED"].endswith(":-false}")
+    assert listener["environment"]["LINE_TRACKING_TASK_EVENT_TOPIC"].endswith(
+        "/task_event}"
+    )
+    assert listener["environment"]["LINE_TRACKING_TASK_STATE_TOPIC"].endswith(
+        "/task_state}"
+    )
 
 
 def test_jetson_swin_l_base_build_contract():
@@ -78,7 +120,10 @@ def test_jetson_swin_l_base_build_contract():
     env_example = (ROOT / ".env.example").read_text()
     debug_dockerfile = (ROOT / "Dockerfile.swin-l-debug").read_text()
 
-    assert "SWIN_L_BASE_IMAGE: ${SWIN_L_BASE_IMAGE:-cobiz:jetson-swin-l-l4t-r36.5.0}" in compose
+    assert (
+        "SWIN_L_BASE_IMAGE: ${SWIN_L_BASE_IMAGE:-cobiz:jetson-swin-l-l4t-r36.5.0}"
+        in compose
+    )
     assert "SWIN_L_TORCH_INDEX_URL" not in compose
     assert "SWIN_L_TORCH_VERSION" not in compose
     assert "SWIN_L_TORCHVISION_INDEX_URL" in compose
@@ -86,7 +131,10 @@ def test_jetson_swin_l_base_build_contract():
     assert "SWIN_L_BASE_IMAGE=cobiz:jetson-swin-l-l4t-r36.5.0" in env_example
     assert "SWIN_L_TORCH_INDEX_URL" not in env_example
     assert "SWIN_L_TORCH_VERSION" not in env_example
-    assert "SWIN_L_TORCHVISION_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126" in env_example
+    assert (
+        "SWIN_L_TORCHVISION_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126"
+        in env_example
+    )
     assert "SWIN_L_TORCHVISION_VERSION=0.23.0" in env_example
     assert "ARG SWIN_L_BASE_IMAGE=cobiz:jetson-swin-l-l4t-r36.5.0" in debug_dockerfile
     assert "pip install" in debug_dockerfile

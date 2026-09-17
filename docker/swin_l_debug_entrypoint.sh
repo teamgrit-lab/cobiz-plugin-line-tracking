@@ -47,4 +47,19 @@ if "cuda" in os.environ.get("SWIN_L_DEVICE", "auto").lower() and not torch.cuda.
     raise SystemExit(1)
 PY
 
-exec python3 /workspace/tools/swin_l_local_path_debug.py ros2
+mode="${SWIN_L_MODE:-ros2}"
+case "${mode}" in
+  ros2) ;;
+  task-drive) ;;
+  drive)
+    if [[ "${SWIN_L_DRIVE_ENABLED:-false}" != "true" || "${SWIN_L_CALIBRATION_CONFIRMED:-false}" != "true" ]]; then
+      echo "[swin-l-debug] drive requires explicit enablement and confirmed camera/LiDAR calibration" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "[swin-l-debug] unsupported SWIN_L_MODE: ${mode}" >&2
+    exit 1
+    ;;
+esac
+exec python3 /workspace/tools/swin_l_local_path_debug.py "${mode}"

@@ -474,6 +474,13 @@ class LidarSafetyMonitor:
             self._points = np.ascontiguousarray(points[finite])
             self._timestamp = float(timestamp_sec)
 
+    def invalidate(self) -> None:
+        """Immediately fail closed after a malformed or wrong-frame scan."""
+
+        with self._lock:
+            self._points = None
+            self._timestamp = None
+
     def evaluate(
         self, path: SmoothedPath | None, timestamp_sec: float
     ) -> LidarSafetyResult:

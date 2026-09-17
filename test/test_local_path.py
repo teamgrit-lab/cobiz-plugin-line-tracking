@@ -106,6 +106,15 @@ def test_lidar_gate_detects_multiple_points_in_path():
     assert result.clearance_m == pytest.approx(2.5)
 
 
+def test_invalidated_lidar_scan_stops_immediately():
+    monitor = LidarSafetyMonitor(LidarSafetyConfig())
+    monitor.update(np.zeros((0, 3), dtype=np.float32), 1.0)
+    monitor.invalidate()
+    result = monitor.evaluate(None, 1.0)
+    assert result.stop
+    assert not result.lidar_available
+
+
 def test_pointcloud2_decoder_supports_hesai_style_26_byte_points():
     import struct
 

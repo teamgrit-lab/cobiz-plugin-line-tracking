@@ -13,15 +13,15 @@
 #   "transformers==5.16.1",
 # ]
 # ///
-"""Debug Swin-L sidewalk segmentation, local path smoothing and LiDAR gating.
+"""Run Swin-L surface segmentation, local path smoothing and LiDAR gating.
 
 The ``mcap`` mode replays the supplied rosbag without ROS 2 and writes a
 camera-rate MP4 overlay.  Swin-L is intentionally scheduled at a lower rate;
 the smoothed path is reused between inference frames.  With ``--overlay-mode
 sidewalk``, every camera frame is inferred without path or LiDAR processing.
 The ``ros2`` mode publishes only path, metrics and safety-stop topics. The
-separate ``drive`` mode also publishes fail-closed, low-speed A2 Joy commands;
-it requires explicit drive enablement and confirmed camera/LiDAR calibration.
+task-driven mode publishes fail-closed, low-speed A2 Joy commands only for an
+accepted Cobiz task after explicit calibration checks.
 Both live modes require a Jetson ROS/PyTorch environment.
 """
 
@@ -578,7 +578,7 @@ def _stamp_ns(header: Any) -> int:
 def _live_source_stamp(
     source_stamp_ns: int, current_stamp_ns: int, max_age_sec: float
 ) -> bool:
-    """Reject old rosbag frames and future-dated sensor frames in drive mode."""
+    """Reject old and future-dated sensor frames in live task mode."""
 
     age_sec = (current_stamp_ns - source_stamp_ns) / 1_000_000_000
     return source_stamp_ns > 0 and -0.05 <= age_sec <= max_age_sec
@@ -590,7 +590,7 @@ def _effective_source_age_sec(
     current_monotonic_sec: float,
     current_stamp_ns: int,
 ) -> float | None:
-    """Keep both arrival and original sensor age in the drive watchdog."""
+    """Keep both arrival and original sensor age in the live watchdog."""
 
     if arrival_sec is None or source_stamp_ns is None:
         return None
@@ -629,36 +629,23 @@ def _path_message(path: SmoothedPath | None, header: Any, frame_id: str) -> Any:
     return message
 
 
-def _validate_drive_preflight(
-    args: argparse.Namespace, *, require_arm: bool = True
-) -> None:
-    """Reject live control unless the selected model and calibration are explicit."""
+def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
+    """Reject task-driven control unless its model and calibration are explicit."""
 
-    enabled = _env("SWIN_L_DRIVE_ENABLED", "false").lower() in {"1", "true", "yes"}
-    calibrated = _env("SWIN_L_CALIBRATION_CONFIRMED", "false").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    if require_arm and (not enabled or not calibrated):
-        raise RuntimeError(
-            "drive mode requires SWIN_L_DRIVE_ENABLED=true and "
-            "SWIN_L_CALIBRATION_CONFIRMED=true after camera/LiDAR frame validation"
-        )
     pinned = resolve_profile(SWIN_L_ASPECT_PROFILE)
     if args.profile != SWIN_L_ASPECT_PROFILE:
-        raise ValueError("drive mode is pinned to swin-l-aspect-224x384")
+        raise ValueError("task-drive mode is pinned to swin-l-aspect-224x384")
     if args.model_id not in (None, pinned.model_id) or args.model_revision not in (
         None,
         pinned.model_revision,
     ):
-        raise ValueError("drive mode cannot override the pinned checkpoint")
+        raise ValueError("task-drive mode cannot override the pinned checkpoint")
     if tuple(args.evaluation_size) != DEFAULT_EVALUATION_SIZE:
-        raise ValueError("drive mode requires a 360x640 score map")
+        raise ValueError("task-drive mode requires a 360x640 score map")
     if args.path_frame_id != "base_link":
-        raise ValueError("drive mode requires a calibrated base_link path")
+        raise ValueError("task-drive mode requires a calibrated base_link path")
     if args.output_hz < 10.0:
-        raise ValueError("drive mode requires at least 10 Hz zero-command updates")
+        raise ValueError("task-drive mode requires at least 10 Hz zero-command updates")
 
 
 def run_ros2(args: argparse.Namespace) -> int:
@@ -676,11 +663,10 @@ def run_ros2(args: argparse.Namespace) -> int:
         ) from error
 
     task_mode = args.mode == "task-drive"
-    drive_mode = args.mode in ("drive", "task-drive")
     # Inspection mode keeps only lightweight path, safety and metrics outputs.
-    extended_diagnostics = drive_mode
-    if drive_mode:
-        _validate_drive_preflight(args, require_arm=not task_mode)
+    extended_diagnostics = task_mode
+    if task_mode:
+        _validate_task_drive_preflight(args)
     task_armed = _env("SWIN_L_DRIVE_ENABLED", "false").lower() in {
         "1",
         "true",
@@ -689,8 +675,8 @@ def run_ros2(args: argparse.Namespace) -> int:
     local_config = _local_path_config_from_args(args)
     lidar_config = _lidar_config_from_args(args)
     segmenter = BestSoFarSegmenter(_runtime_config(args))
-    if drive_mode and segmenter.device.type != "cuda":
-        raise RuntimeError("Swin-L drive mode requires a CUDA model device")
+    if task_mode and segmenter.device.type != "cuda":
+        raise RuntimeError("Swin-L task-drive mode requires a CUDA model device")
     smoothers = {
         mask_class: LocalPathSmoother(local_config)
         for mask_class in ((1, 2) if task_mode else (args.path_mask_class,))
@@ -717,16 +703,16 @@ def run_ros2(args: argparse.Namespace) -> int:
     class DebugNode(Node):
         def __init__(self) -> None:
             super().__init__(
-                "swin_l_drive" if drive_mode else "swin_l_local_path_debug"
+                "swin_l_task_drive" if task_mode else "swin_l_local_path_debug"
             )
             if (
-                drive_mode
+                task_mode
                 and self.has_parameter("use_sim_time")
                 and bool(self.get_parameter("use_sim_time").value)
             ):
-                raise RuntimeError("drive mode requires live system time, not /clock")
+                raise RuntimeError("task-drive mode requires live system time, not /clock")
             self.bridge = CvBridge()
-            self.drive_config = DriveConfig() if drive_mode else None
+            self.drive_config = DriveConfig() if task_mode else None
             self.tasks = (
                 LineTrackingTasks(
                     TaskPolicy(
@@ -790,11 +776,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 depth=10,
                 reliability=ReliabilityPolicy.BEST_EFFORT,
             )
-            self.command_publisher = (
-                self.create_publisher(Joy, args.joy_topic, self.command_qos)
-                if drive_mode and not task_mode
-                else None
-            )
+            self.command_publisher = None
             self.task_state_publisher = (
                 self.create_publisher(String, args.task_state_topic, output_qos)
                 if task_mode
@@ -830,12 +812,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             if task_mode:
                 self.get_logger().info(
                     "Cobiz LINE_TRACKING task listener ready; Joy publisher is absent until a safe task is accepted"
-                )
-            elif drive_mode:
-                self.get_logger().warning(
-                    "Swin-L DRIVE mode armed for low-speed Joy output; "
-                    "camera/LiDAR calibration and exclusive control ownership "
-                    "must have been verified before starting"
                 )
 
         def publish_task_state(self, body: dict[str, Any]) -> None:
@@ -962,8 +938,8 @@ def run_ros2(args: argparse.Namespace) -> int:
 
         def on_image(self, message: Any) -> None:
             try:
-                source_stamp_ns = _stamp_ns(message.header) if drive_mode else None
-                if drive_mode and (
+                source_stamp_ns = _stamp_ns(message.header) if task_mode else None
+                if task_mode and (
                     not _live_source_stamp(
                         source_stamp_ns,
                         self.get_clock().now().nanoseconds,
@@ -991,10 +967,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                     with state_lock:
                         state["sequence"] += 1
                         state["last_image_at"] = time.monotonic()
-                        if drive_mode:
+                        if task_mode:
                             state["last_image_stamp_ns"] = source_stamp_ns
             except Exception as error:  # noqa: BLE001 - safe debug boundary.
-                if drive_mode:
+                if task_mode:
                     with state_lock:
                         state["last_image_at"] = None
                     self.publish_drive(DriveDecision.stop("camera_conversion_error"))
@@ -1002,8 +978,8 @@ def run_ros2(args: argparse.Namespace) -> int:
 
         def on_lidar(self, message: Any) -> None:
             try:
-                source_stamp_ns = _stamp_ns(message.header) if drive_mode else None
-                if drive_mode and (
+                source_stamp_ns = _stamp_ns(message.header) if task_mode else None
+                if task_mode and (
                     not _live_source_stamp(
                         source_stamp_ns,
                         self.get_clock().now().nanoseconds,
@@ -1017,7 +993,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     lidar.invalidate()
                     self.publish_drive(DriveDecision.stop("lidar_timestamp_invalid"))
                     return
-                if drive_mode and not lidar_frame_matches_base(
+                if task_mode and not lidar_frame_matches_base(
                     str(message.header.frame_id), args.path_frame_id
                 ):
                     self.get_logger().warning(
@@ -1028,16 +1004,16 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.publish_drive(DriveDecision.stop("lidar_frame_invalid"))
                     return
                 points = pointcloud2_xyz(message)
-                if drive_mode and not np.any(np.all(np.isfinite(points), axis=1)):
+                if task_mode and not np.any(np.all(np.isfinite(points), axis=1)):
                     lidar.invalidate()
                     self.publish_drive(DriveDecision.stop("lidar_empty_scan"))
                     return
                 lidar.update(points, time.monotonic())
-                if drive_mode:
+                if task_mode:
                     with state_lock:
                         state["last_lidar_stamp_ns"] = source_stamp_ns
             except Exception as error:  # noqa: BLE001 - ignore malformed scan.
-                if drive_mode:
+                if task_mode:
                     lidar.invalidate()
                     self.publish_drive(DriveDecision.stop("lidar_decode_error"))
                 self.get_logger().warning(f"LiDAR decode failed: {error}")
@@ -1172,7 +1148,7 @@ def run_ros2(args: argparse.Namespace) -> int:
     previous_sigterm = signal.getsignal(signal.SIGTERM)
 
     def stop_on_sigterm(_signum: int, _frame: Any) -> None:
-        if drive_mode:
+        if task_mode:
             try:
                 node.publish_drive(DriveDecision.stop("sigterm"))
                 node.abort_active_task("sigterm")
@@ -1210,14 +1186,14 @@ def run_ros2(args: argparse.Namespace) -> int:
                     state["header"] = packet.source_header
                     state["inference_count"] += 1
                     state["last_inference_at"] = time.monotonic()
-                    if drive_mode:
+                    if task_mode:
                         state["last_inference_stamp_ns"] = _stamp_ns(
                             packet.source_header
                         )
                 next_allowed = time.monotonic() + 1.0 / args.inference_hz
         except BaseException as error:  # noqa: BLE001 - forward to main thread.
             worker_error.append(error)
-            if drive_mode:
+            if task_mode:
                 try:
                     node.publish_drive(DriveDecision.stop("inference_error"))
                     node.abort_active_task("inference_error")
@@ -1233,7 +1209,7 @@ def run_ros2(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        if drive_mode:
+        if task_mode:
             try:
                 node.publish_drive(DriveDecision.stop("shutdown"))
                 node.abort_active_task("shutdown")
@@ -1406,7 +1382,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     for mode, help_text in (
         ("ros2", "publish live ROS 2 path and debug topics without control"),
-        ("drive", "publish fail-closed, low-speed Joy commands after preflight"),
         ("task-drive", "wait for a Cobiz LINE_TRACKING task before Joy control"),
     ):
         live = subparsers.add_parser(mode, help=help_text)
@@ -1444,7 +1419,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             choices=("best_effort", "reliable"),
             default=_env("SWIN_L_INPUT_RELIABILITY", "best_effort"),
         )
-        if mode in ("drive", "task-drive"):
+        if mode == "task-drive":
             live.add_argument("--joy-topic", default=_env("JOY_TOPIC", "/a2_control"))
         if mode == "task-drive":
             live.add_argument(
@@ -1475,7 +1450,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("SWIN_L_PATH_MASK_CLASS must be 1 (road) or 2 (sidewalk)")
     if args.inference_hz <= 0.0 or args.output_fps <= 0.0:
         parser.error("inference/output FPS must be positive")
-    if args.mode in ("ros2", "drive", "task-drive") and args.output_hz <= 0.0:
+    if args.mode in ("ros2", "task-drive") and args.output_hz <= 0.0:
         parser.error("output-hz must be positive")
     if args.mode == "mcap" and (args.start_offset < 0.0 or args.max_frames < 0):
         parser.error("start-offset and max-frames must be non-negative")

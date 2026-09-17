@@ -51,12 +51,6 @@ mode="${SWIN_L_MODE:-ros2}"
 case "${mode}" in
   ros2) ;;
   task-drive) ;;
-  drive)
-    if [[ "${SWIN_L_DRIVE_ENABLED:-false}" != "true" || "${SWIN_L_CALIBRATION_CONFIRMED:-false}" != "true" ]]; then
-      echo "[swin-l-debug] drive requires explicit enablement and confirmed camera/LiDAR calibration" >&2
-      exit 1
-    fi
-    ;;
   *)
     echo "[swin-l-debug] unsupported SWIN_L_MODE: ${mode}" >&2
     exit 1

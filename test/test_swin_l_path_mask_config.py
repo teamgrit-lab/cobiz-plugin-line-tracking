@@ -17,7 +17,7 @@ from cobiz_line_tracking_task import ActiveTask  # noqa: E402
 
 
 @pytest.mark.parametrize("mask_class", [1, 2])
-@pytest.mark.parametrize("mode", ["ros2", "drive", "task-drive"])
+@pytest.mark.parametrize("mode", ["ros2", "task-drive"])
 def test_live_modes_use_the_env_selected_path_class(monkeypatch, mode, mask_class):
     monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", str(mask_class))
 

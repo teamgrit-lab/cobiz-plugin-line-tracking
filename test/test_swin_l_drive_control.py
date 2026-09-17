@@ -138,24 +138,17 @@ def test_drive_rejects_untransformed_lidar_frames():
     assert not lidar_frame_matches_base("base_link", "map")
 
 
-def test_live_drive_preflight_requires_confirmation_and_pinned_model(monkeypatch):
-    args = debug.parse_args(["drive"])
+def test_task_drive_preflight_requires_pinned_model():
+    args = debug.parse_args(["task-drive"])
     assert args.profile == "swin-l-aspect-224x384"
-    monkeypatch.setitem(debug.ENV, "SWIN_L_DRIVE_ENABLED", "false")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_CALIBRATION_CONFIRMED", "false")
-    with pytest.raises(RuntimeError, match="requires SWIN_L_DRIVE_ENABLED"):
-        debug._validate_drive_preflight(args)
-
-    monkeypatch.setitem(debug.ENV, "SWIN_L_DRIVE_ENABLED", "true")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_CALIBRATION_CONFIRMED", "true")
-    debug._validate_drive_preflight(args)
+    debug._validate_task_drive_preflight(args)
     args.profile = "swin-l-best-so-far"
     with pytest.raises(ValueError, match="pinned"):
-        debug._validate_drive_preflight(args)
+        debug._validate_task_drive_preflight(args)
     args.profile = "swin-l-aspect-224x384"
     args.output_hz = 5.0
     with pytest.raises(ValueError, match="at least 10 Hz"):
-        debug._validate_drive_preflight(args)
+        debug._validate_task_drive_preflight(args)
 
 
 def test_cobiz_task_listener_starts_unarmed_but_still_pins_swin(monkeypatch):
@@ -164,10 +157,10 @@ def test_cobiz_task_listener_starts_unarmed_but_still_pins_swin(monkeypatch):
     args = debug.parse_args(["task-drive"])
     assert args.task_event_topic == "/task_event"
     assert args.task_state_topic == "/task_state"
-    debug._validate_drive_preflight(args, require_arm=False)
+    debug._validate_task_drive_preflight(args)
     args.profile = "swin-l-best-so-far"
     with pytest.raises(ValueError, match="pinned"):
-        debug._validate_drive_preflight(args, require_arm=False)
+        debug._validate_task_drive_preflight(args)
 
 
 def test_ros_source_stamp_is_decoded_for_monotonic_checks():

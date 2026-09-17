@@ -12,10 +12,10 @@
 # ///
 """Evaluate Road/Sidewalk semantic segmentation on a directory of videos.
 
-The baseline uses NVIDIA's SegFormer checkpoint trained on Cityscapes.  Unlike
-the repository's YOLOP model, this checkpoint has explicit ``road`` and
-``sidewalk`` classes.  Sample mode deliberately produces review artifacts and
-metrics before a later run spends hours processing every frame.
+The baseline uses NVIDIA's SegFormer checkpoint trained on Cityscapes with
+explicit ``road`` and ``sidewalk`` classes.  Sample mode deliberately produces
+review artifacts and metrics before a later run spends hours processing every
+frame.
 """
 
 from __future__ import annotations

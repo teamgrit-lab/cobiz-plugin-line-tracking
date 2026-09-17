@@ -1,80 +1,4 @@
 services:
-  line-tracking:
-    profiles: [legacy]
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        BASE_IMAGE: ${BASE_IMAGE:-ros:humble-ros-base}
-    image: cobiz-plugin-line-tracking
-    container_name: cobiz-plugin-line-tracking
-    network_mode: host
-    ipc: host
-    volumes:
-      - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
-      - ./ros_ws/src/line_tracking/config/line_tracking.yaml:/ros_ws/install/line_tracking/share/line_tracking/config/line_tracking.yaml:ro
-      - ${MODEL_DIR:-./models}:/models:ro
-    environment:
-      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
-      # Empty defaults let line_tracking.yaml remain the source of truth when
-      # no .env override is provided.
-      IMAGE_TOPIC: ${IMAGE_TOPIC:-}
-      JOY_TOPIC: ${JOY_TOPIC:-}
-      CONTROL_TOPIC: ${CONTROL_TOPIC:-}
-      DEBUG_IMAGE_TOPIC: ${DEBUG_IMAGE_TOPIC:-}
-      MASK_TOPIC: ${MASK_TOPIC:-}
-      CONFIDENCE_TOPIC: ${CONFIDENCE_TOPIC:-}
-      INPUT_RELIABILITY: ${INPUT_RELIABILITY:-}
-      CAMERA_PROFILE: ${CAMERA_PROFILE:-}
-      SEGMENTATION_INPUT_WIDTH: ${SEGMENTATION_INPUT_WIDTH:-}
-      SEGMENTATION_INPUT_HEIGHT: ${SEGMENTATION_INPUT_HEIGHT:-}
-      SEGMENTATION_MODEL_PATH: ${SEGMENTATION_MODEL_PATH:-}
-      TEST_MODE: ${TEST_MODE:-}
-      PUBLISH_CONTROL_IN_TEST_MODE: ${PUBLISH_CONTROL_IN_TEST_MODE:-}
-      TEST_DEBUG_IMAGE_TOPIC: ${TEST_DEBUG_IMAGE_TOPIC:-}
-      TEST_ROAD_MASK_TOPIC: ${TEST_ROAD_MASK_TOPIC:-}
-      TEST_RAW_LINE_MASK_TOPIC: ${TEST_RAW_LINE_MASK_TOPIC:-}
-      TEST_LINE_MASK_TOPIC: ${TEST_LINE_MASK_TOPIC:-}
-      TEST_BIRDSEYE_MASK_TOPIC: ${TEST_BIRDSEYE_MASK_TOPIC:-}
-      TEST_CENTERLINE_TOPIC: ${TEST_CENTERLINE_TOPIC:-}
-      TEST_METRICS_TOPIC: ${TEST_METRICS_TOPIC:-}
-      CENTERLINE_FRAME_ID: ${CENTERLINE_FRAME_ID:-}
-      SWIN_L_PROFILE: ${SWIN_L_PROFILE:-}
-      SWIN_L_MODEL_ID: ${SWIN_L_MODEL_ID:-}
-      SWIN_L_MODEL_REVISION: ${SWIN_L_MODEL_REVISION:-}
-      SWIN_L_DEVICE: ${SWIN_L_DEVICE:-}
-      SWIN_L_EVALUATION_HEIGHT: ${SWIN_L_EVALUATION_HEIGHT:-}
-      SWIN_L_EVALUATION_WIDTH: ${SWIN_L_EVALUATION_WIDTH:-}
-      SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-}
-      SWIN_L_LIDAR_TOPIC: ${SWIN_L_LIDAR_TOPIC:-}
-      SWIN_L_OVERLAY_TOPIC: ${SWIN_L_OVERLAY_TOPIC:-}
-      SWIN_L_LOCAL_PATH_TOPIC: ${SWIN_L_LOCAL_PATH_TOPIC:-}
-      SWIN_L_SAFETY_STOP_TOPIC: ${SWIN_L_SAFETY_STOP_TOPIC:-}
-      SWIN_L_CLEARANCE_TOPIC: ${SWIN_L_CLEARANCE_TOPIC:-}
-      SWIN_L_METRICS_TOPIC: ${SWIN_L_METRICS_TOPIC:-}
-      SWIN_L_PATH_FRAME_ID: ${SWIN_L_PATH_FRAME_ID:-}
-      SWIN_L_INPUT_RELIABILITY: ${SWIN_L_INPUT_RELIABILITY:-}
-      SWIN_L_NEAR_DISTANCE_M: ${SWIN_L_NEAR_DISTANCE_M:-}
-      SWIN_L_FAR_DISTANCE_M: ${SWIN_L_FAR_DISTANCE_M:-}
-      SWIN_L_GROUND_HALF_WIDTH_M: ${SWIN_L_GROUND_HALF_WIDTH_M:-}
-      SWIN_L_SEARCH_HALF_WIDTH_M: ${SWIN_L_SEARCH_HALF_WIDTH_M:-}
-      SWIN_L_ROI_POLYGON: ${SWIN_L_ROI_POLYGON:-}
-      SWIN_L_PATH_POINTS: ${SWIN_L_PATH_POINTS:-}
-      SWIN_L_PATH_DURATION_SEC: ${SWIN_L_PATH_DURATION_SEC:-}
-      SWIN_L_INFERENCE_HZ: ${SWIN_L_INFERENCE_HZ:-}
-      SWIN_L_OUTPUT_HZ: ${SWIN_L_OUTPUT_HZ:-}
-      SWIN_L_SMOOTHING_TIME_CONSTANT_SEC: ${SWIN_L_SMOOTHING_TIME_CONSTANT_SEC:-}
-      SWIN_L_MAX_LATERAL_UPDATE_M: ${SWIN_L_MAX_LATERAL_UPDATE_M:-}
-      SWIN_L_PATH_HOLD_SEC: ${SWIN_L_PATH_HOLD_SEC:-}
-      SWIN_L_OBSTACLE_DISTANCE_M: ${SWIN_L_OBSTACLE_DISTANCE_M:-}
-      SWIN_L_STOP_DISTANCE_M: ${SWIN_L_STOP_DISTANCE_M:-}
-      SWIN_L_CORRIDOR_HALF_WIDTH_M: ${SWIN_L_CORRIDOR_HALF_WIDTH_M:-}
-      SWIN_L_LIDAR_TIMEOUT_SEC: ${SWIN_L_LIDAR_TIMEOUT_SEC:-}
-      SWIN_L_LIDAR_Z_MIN_M: ${SWIN_L_LIDAR_Z_MIN_M:-}
-      SWIN_L_LIDAR_Z_MAX_M: ${SWIN_L_LIDAR_Z_MAX_M:-}
-      SWIN_L_MIN_OBSTACLE_POINTS: ${SWIN_L_MIN_OBSTACLE_POINTS:-}
-    restart: unless-stopped
-
   # Safe inspection-only process. It publishes local path/debug topics and
   # never publishes /a2_control. Start it explicitly with:
   # docker compose up -d --build debugging-swin-l
@@ -106,10 +30,9 @@ services:
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
 
-  # Explicit, calibrated Swin-L driving mode. Never start alongside the
-  # legacy line-tracking publisher; ROS control ownership is exclusive.
-  # Default service: listens for Cobiz custom actions but does not create a
-  # Joy publisher until LINE_TRACKING passes calibration and sensor preflight.
+  # Explicit, calibrated Swin-L task-driving mode. It listens for Cobiz custom
+  # actions but does not create a Joy publisher until LINE_TRACKING passes
+  # calibration and sensor preflight.
   actual-activate:
     build: *swin-l-build
     image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
@@ -173,33 +96,6 @@ services:
       LINE_TRACKING_UNSAFE_TIMEOUT_SEC: ${LINE_TRACKING_UNSAFE_TIMEOUT_SEC:-2}
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
-
-  # Optional manual drive mode; never run it alongside actual-activate.
-  drive-swin-l:
-    profiles: [drive]
-    build: *swin-l-build
-    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
-    container_name: cobiz-plugin-line-tracking-drive-swin-l
-    network_mode: host
-    ipc: host
-    runtime: nvidia
-    shm_size: "2gb"
-    volumes:
-      - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
-      - ./.env:/workspace/.env:ro
-      - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
-    environment:
-      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
-      ROS_DISTRO: ${ROS_DISTRO:-humble}
-      SWIN_L_MODE: drive
-      SWIN_L_PROFILE: swin-l-aspect-224x384
-      SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
-      SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
-      SWIN_L_DRIVE_ENABLED: ${SWIN_L_DRIVE_ENABLED:-false}
-      SWIN_L_CALIBRATION_CONFIRMED: ${SWIN_L_CALIBRATION_CONFIRMED:-false}
-      JOY_TOPIC: ${JOY_TOPIC:-/a2_control}
-      HF_HOME: /root/.cache/huggingface
-    restart: "no"
 
   # One-shot offline MCAP tests using the same Jetson CUDA image as live debug.
   # Override its ROS/DDS entrypoint and keep files owned by the host user.

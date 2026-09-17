@@ -82,6 +82,6 @@ def test_debug_mode_creates_only_path_metrics_and_safety_publishers(monkeypatch)
         args.metrics_topic,
     ]
 
-    drive_args = debug.parse_args(["drive"])
-    assert drive_args.overlay_topic
-    assert drive_args.clearance_topic
+    task_args = debug.parse_args(["task-drive"])
+    assert task_args.overlay_topic
+    assert task_args.clearance_topic

@@ -17,6 +17,8 @@ from best_so_far_runtime import (  # noqa: E402
     R50_ROAD_LABELS,
     R50_SIDEWALK_LABELS,
     ROAD_ISLAND_ACTIONS,
+    SWIN_L_ASPECT_PROFILE,
+    SWIN_L_ASPECT_QUALITY_PROFILE,
     SWIN_L_PROFILE,
     BestSoFarConfig,
     BestSoFarSegmenter,
@@ -25,15 +27,15 @@ from best_so_far_runtime import (  # noqa: E402
 )
 
 
-def test_realtime_r50_is_the_default_profile():
-    assert DEFAULT_PROFILE == R50_PROFILE
+def test_swin_l_aspect_is_the_selected_default_profile():
+    assert DEFAULT_PROFILE == SWIN_L_ASPECT_PROFILE
     profile = resolve_profile(DEFAULT_PROFILE)
-    assert profile.model_family == "maskformer"
-    assert profile.input_height == 360
-    assert profile.input_width == 640
-    assert profile.precision == "fp16"
+    assert profile.model_family == "mask2former"
+    assert profile.input_height == 224
+    assert profile.input_width == 384
+    assert profile.precision == "fp32"
     assert profile.temporal_alpha == pytest.approx(0.62)
-    assert profile.temporal_hysteresis_margin == pytest.approx(0.0)
+    assert profile.temporal_hysteresis_margin == pytest.approx(0.07)
 
 
 def test_realtime_r50_uses_swin_aligned_surface_mapping_and_cleanup():
@@ -57,6 +59,30 @@ def test_swin_l_rollback_profile_is_fully_pinned():
     assert profile.precision == "fp32"
     assert profile.temporal_alpha == pytest.approx(0.62)
     assert profile.temporal_hysteresis_margin == pytest.approx(0.07)
+
+
+def test_swin_l_aspect_profile_preserves_checkpoint_and_temporal_settings():
+    baseline = resolve_profile(SWIN_L_PROFILE)
+    aspect = resolve_profile(SWIN_L_ASPECT_PROFILE)
+    assert aspect.model_family == baseline.model_family
+    assert aspect.model_id == baseline.model_id
+    assert aspect.model_revision == baseline.model_revision
+    assert (aspect.input_height, aspect.input_width) == (224, 384)
+    assert aspect.precision == baseline.precision
+    assert aspect.temporal_alpha == baseline.temporal_alpha
+    assert aspect.temporal_hysteresis_margin == baseline.temporal_hysteresis_margin
+
+
+def test_swin_l_quality_profile_preserves_checkpoint_and_temporal_settings():
+    baseline = resolve_profile(SWIN_L_PROFILE)
+    quality = resolve_profile(SWIN_L_ASPECT_QUALITY_PROFILE)
+    assert quality.model_family == baseline.model_family
+    assert quality.model_id == baseline.model_id
+    assert quality.model_revision == baseline.model_revision
+    assert (quality.input_height, quality.input_width) == (448, 768)
+    assert quality.precision == baseline.precision
+    assert quality.temporal_alpha == baseline.temporal_alpha
+    assert quality.temporal_hysteresis_margin == baseline.temporal_hysteresis_margin
 
 
 def test_profile_checkpoint_can_be_explicitly_overridden():

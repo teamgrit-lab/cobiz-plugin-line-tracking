@@ -455,11 +455,14 @@ LiDAR가 오래되었거나 path corridor 안에 3m 이내의 점이 3개 이상
 |---|---|---|
 | 입력 영상 | `SWIN_L_IMAGE_TOPIC` | `/a2/front_camera/image_raw` |
 | 입력 LiDAR | `SWIN_L_LIDAR_TOPIC` | `/unitree/slam_lidar/points1` |
-| 출력 overlay | `SWIN_L_OVERLAY_TOPIC` | `/line_tracking/swin_l/overlay` |
+| 출력 overlay (주행 모드만) | `SWIN_L_OVERLAY_TOPIC` | `/line_tracking/swin_l/overlay` |
 | 출력 경로 | `SWIN_L_LOCAL_PATH_TOPIC` | `/line_tracking/swin_l/local_path` |
 | 안전 상태 | `SWIN_L_SAFETY_STOP_TOPIC` | `/line_tracking/swin_l/safety_stop` |
-| 여유 거리 | `SWIN_L_CLEARANCE_TOPIC` | `/line_tracking/swin_l/clearance_m` |
+| 여유 거리 (주행 모드만) | `SWIN_L_CLEARANCE_TOPIC` | `/line_tracking/swin_l/clearance_m` |
 | 진단 metrics | `SWIN_L_METRICS_TOPIC` | `/line_tracking/swin_l/metrics` |
+
+`debugging-swin-l`에서는 경로·안전 상태·metrics만 발행한다. LiDAR 여유 거리의
+상세값은 별도 토픽 대신 `metrics.lidar.clearance_m`에서 확인할 수 있다.
 
 카메라 입력 해상도와 모델 평가 해상도는 별개다. 예를 들어 카메라가 1280x720이어도
 `SWIN_L_EVALUATION_WIDTH=640`, `SWIN_L_EVALUATION_HEIGHT=360`으로 두면 모델은
@@ -527,7 +530,7 @@ ROS metrics의 `drive_reason`이 `tracking`일 때만 비영(非零) Joy가 발�
 
 ## Docker debug 컨테이너
 
-아래 구성은 Jetson에서 `debugging-swin-l`만 실행해 local path와 overlay를 확인하고
+아래 구성은 Jetson에서 `debugging-swin-l`만 실행해 local path와 metrics를 확인하고
 로봇을 주행시키지 않는 절차다. `debugging-swin-l`은 `/a2_control`을 발행하지
 않으므로 주행용 `line-tracking` 서비스와 분리해서 사용할 수 있다.
 
@@ -620,19 +623,20 @@ docker compose --profile debug up -d --build debugging-swin-l
 컨테이너는 다음 토픽만 디버깅용으로 발행한다.
 
 ```text
-/line_tracking/swin_l/overlay
 /line_tracking/swin_l/local_path
 /line_tracking/swin_l/safety_stop
-/line_tracking/swin_l/clearance_m
 /line_tracking/swin_l/metrics
 ```
+
+오버레이 이미지 복사·렌더링과 별도 `clearance_m` 토픽 발행은 디버그 모드에서
+실행하지 않는다. LiDAR 여유 거리와 원인 코드는 `metrics`의 `lidar` 항목에 남는다.
 
 호스트에서 결과를 확인한다.
 
 ```bash
 ros2 topic echo /line_tracking/swin_l/local_path
 ros2 topic echo /line_tracking/swin_l/safety_stop
-rqt_image_view /line_tracking/swin_l/overlay
+ros2 topic echo /line_tracking/swin_l/metrics
 rviz2  # Fixed Frame=base_link, Path topic=/line_tracking/swin_l/local_path
 ```
 
@@ -644,7 +648,8 @@ rviz2  # Fixed Frame=base_link, Path topic=/line_tracking/swin_l/local_path
 비정상: poses == [], path_tracked=false, reason=path_unavailable
 ```
 
-2026-09-03 결과 MCAP에서는 다섯 output topic이 약 10Hz였지만 20.5초 동안
+2026-09-03의 이전 구성에서 기록한 MCAP에서는 다섯 output topic이 약 10Hz였지만
+20.5초 동안
 `local_path.poses`가 계속 비어 있고 `path_unavailable`이었다. overlay 자체는
 갱신됐으므로 이 경우는 publisher 고장이 아니라 인도 mask/ROI/homography가
 유효한 중심선을 만들지 못한 상황이다. 실내 영상, 인도가 보이지 않는 장면,
@@ -662,12 +667,9 @@ source /opt/ros/humble/setup.bash
 mkdir -p ~/rosbags/swin_l
 ros2 bag record -s mcap \
   -o ~/rosbags/swin_l/debug_result_$(date +%Y%m%d_%H%M%S) \
-  /line_tracking/swin_l/overlay \
   /line_tracking/swin_l/local_path \
   /line_tracking/swin_l/safety_stop \
-  /line_tracking/swin_l/clearance_m \
-  /line_tracking/swin_l/metrics \
-  /tf /tf_static
+  /line_tracking/swin_l/metrics
 ```
 
 원인 분석을 위해 입력까지 기록할 때만 카메라와 LiDAR 토픽을 추가한다.

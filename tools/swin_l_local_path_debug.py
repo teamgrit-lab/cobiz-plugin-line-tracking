@@ -19,7 +19,7 @@ The ``mcap`` mode replays the supplied rosbag without ROS 2 and writes a
 camera-rate MP4 overlay.  Swin-L is intentionally scheduled at a lower rate;
 the smoothed path is reused between inference frames.  With ``--overlay-mode
 sidewalk``, every camera frame is inferred without path or LiDAR processing.
-The ``ros2`` mode publishes a ``nav_msgs/Path`` and debug topics only. The
+The ``ros2`` mode publishes only path, metrics and safety-stop topics. The
 separate ``drive`` mode also publishes fail-closed, low-speed A2 Joy commands;
 it requires explicit drive enablement and confirmed camera/LiDAR calibration.
 Both live modes require a Jetson ROS/PyTorch environment.
@@ -633,6 +633,8 @@ def run_ros2(args: argparse.Namespace) -> int:
 
     task_mode = args.mode == "task-drive"
     drive_mode = args.mode in ("drive", "task-drive")
+    # Inspection mode keeps only lightweight path, safety and metrics outputs.
+    extended_diagnostics = drive_mode
     if drive_mode:
         _validate_drive_preflight(args, require_arm=not task_mode)
     task_armed = _env("SWIN_L_DRIVE_ENABLED", "false").lower() in {
@@ -720,14 +722,18 @@ def run_ros2(args: argparse.Namespace) -> int:
                 args.local_path_topic,
                 output_qos,
             )
-            self.overlay_publisher = self.create_publisher(
-                Image, args.overlay_topic, input_qos
+            self.overlay_publisher = (
+                self.create_publisher(Image, args.overlay_topic, input_qos)
+                if extended_diagnostics
+                else None
             )
             self.safety_publisher = self.create_publisher(
                 Bool, args.safety_stop_topic, output_qos
             )
-            self.clearance_publisher = self.create_publisher(
-                Float32, args.clearance_topic, output_qos
+            self.clearance_publisher = (
+                self.create_publisher(Float32, args.clearance_topic, output_qos)
+                if extended_diagnostics
+                else None
             )
             self.metrics_publisher = self.create_publisher(
                 String, args.metrics_topic, output_qos
@@ -949,17 +955,23 @@ def run_ros2(args: argparse.Namespace) -> int:
 
         def _publish_state(self) -> None:
             with state_lock:
-                frame = None if state["frame"] is None else state["frame"].copy()
-                selected = (
-                    None
-                    if state["selected_mask"] is None
-                    else state["selected_mask"].copy()
+                frame = (
+                    state["frame"].copy()
+                    if extended_diagnostics and state["frame"] is not None
+                    else None
                 )
-                estimate = state["estimate"]
+                selected = (
+                    state["selected_mask"].copy()
+                    if extended_diagnostics and state["selected_mask"] is not None
+                    else None
+                )
+                estimate = state["estimate"] if extended_diagnostics else None
                 header = state["header"]
-                sequence = int(state["sequence"])
+                sequence = int(state["sequence"]) if extended_diagnostics else 0
                 inference_count = int(state["inference_count"])
-                inference_times = list(state["inference_times"])
+                inference_times = (
+                    list(state["inference_times"]) if extended_diagnostics else []
+                )
                 last_image_at = state["last_image_at"]
                 last_inference_at = state["last_inference_at"]
                 last_image_stamp_ns = state["last_image_stamp_ns"]
@@ -1043,9 +1055,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                         drive_decision = DriveDecision.stop("startup_hold")
                     self.publish_drive(drive_decision)
             self.safety_publisher.publish(Bool(data=bool(safety.stop)))
-            self.clearance_publisher.publish(
-                Float32(data=float(safety.clearance_m or 0.0))
-            )
+            if self.clearance_publisher is not None:
+                self.clearance_publisher.publish(
+                    Float32(data=float(safety.clearance_m or 0.0))
+                )
             metrics = {
                 "profile": args.profile,
                 "camera_topic": args.image_topic,
@@ -1064,10 +1077,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "task_active": self.tasks.active is not None if self.tasks else None,
             }
             self.metrics_publisher.publish(String(data=json.dumps(metrics)))
-            if frame is None or selected is None or header is None:
+            if header is None:
                 return
             path_message = _path_message(path, header, args.path_frame_id)
             self.path_publisher.publish(path_message)
+            if self.overlay_publisher is None or frame is None or selected is None:
+                return
             mean_total = float(np.mean(inference_times)) if inference_times else 0.0
             inference_hz = 1.0 / mean_total if mean_total > 0.0 else 0.0
             overlay = render_local_path_overlay(
@@ -1111,19 +1126,20 @@ def run_ros2(args: argparse.Namespace) -> int:
                 delay = next_allowed - time.monotonic()
                 if delay > 0.0:
                     time.sleep(delay)
-                started = time.perf_counter()
+                started = time.perf_counter() if extended_diagnostics else 0.0
                 result: BestSoFarResult = segmenter.segment(packet.frame_bgr)
                 estimate = extract_sidewalk_centerline(
                     result.selected_mask == 2, local_config
                 )
                 smoother.update(estimate, packet.timestamp_sec)
                 with state_lock:
-                    state["frame"] = packet.frame_bgr
-                    state["selected_mask"] = result.selected_mask
-                    state["estimate"] = estimate
+                    if extended_diagnostics:
+                        state["frame"] = packet.frame_bgr
+                        state["selected_mask"] = result.selected_mask
+                        state["estimate"] = estimate
+                        state["inference_times"].append(time.perf_counter() - started)
                     state["header"] = packet.source_header
                     state["inference_count"] += 1
-                    state["inference_times"].append(time.perf_counter() - started)
                     state["last_inference_at"] = time.monotonic()
                     if drive_mode:
                         state["last_inference_stamp_ns"] = _stamp_ns(
@@ -1319,10 +1335,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     ):
         live = subparsers.add_parser(mode, help=help_text)
         _add_common_arguments(live)
-        live.add_argument(
-            "--overlay-topic",
-            default=_env("SWIN_L_OVERLAY_TOPIC", DEFAULT_OVERLAY_TOPIC),
-        )
+        if mode != "ros2":
+            live.add_argument(
+                "--overlay-topic",
+                default=_env("SWIN_L_OVERLAY_TOPIC", DEFAULT_OVERLAY_TOPIC),
+            )
         live.add_argument(
             "--local-path-topic",
             default=_env("SWIN_L_LOCAL_PATH_TOPIC", DEFAULT_LOCAL_PATH_TOPIC),
@@ -1331,10 +1348,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "--safety-stop-topic",
             default=_env("SWIN_L_SAFETY_STOP_TOPIC", DEFAULT_SAFETY_STOP_TOPIC),
         )
-        live.add_argument(
-            "--clearance-topic",
-            default=_env("SWIN_L_CLEARANCE_TOPIC", DEFAULT_CLEARANCE_TOPIC),
-        )
+        if mode != "ros2":
+            live.add_argument(
+                "--clearance-topic",
+                default=_env("SWIN_L_CLEARANCE_TOPIC", DEFAULT_CLEARANCE_TOPIC),
+            )
         live.add_argument(
             "--metrics-topic",
             default=_env("SWIN_L_METRICS_TOPIC", DEFAULT_METRICS_TOPIC),

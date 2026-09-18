@@ -1,7 +1,10 @@
 .git
 .env
 /.cache/
+/build*/
+/results/
 /rosbag-results/
+/videos/
 /.venv/
 /.ruff_cache/
 /.DS_Store

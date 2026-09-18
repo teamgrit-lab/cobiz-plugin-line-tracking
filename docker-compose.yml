@@ -9,8 +9,6 @@ services:
       dockerfile: Dockerfile.swin-l-debug
       args:
         SWIN_L_BASE_IMAGE: ${SWIN_L_BASE_IMAGE:-cobiz:jetson-swin-l-l4t-r36.5.0}
-        SWIN_L_TORCHVISION_INDEX_URL: ${SWIN_L_TORCHVISION_INDEX_URL:-https://pypi.jetson-ai-lab.io/jp6/cu126}
-        SWIN_L_TORCHVISION_VERSION: ${SWIN_L_TORCHVISION_VERSION:-0.23.0}
     image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
     container_name: cobiz-plugin-line-tracking-debugging-swin-l
     network_mode: host
@@ -19,15 +17,14 @@ services:
     shm_size: "2gb"
     volumes:
       - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
-      - ./.env:/workspace/.env:ro
-      - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
+      - ${SWIN_L_MODEL_DIR:-./models}:/models:ro
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_PROFILE: swin-l-aspect-224x384
+      SWIN_L_MODEL_PATH: /models/${SWIN_L_MODEL_FILE:-mask2former-swin-l-mapillary-224x384.onnx}
       SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
-      HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
 
   # Explicit, calibrated Swin-L task-driving mode. It listens for Cobiz custom
@@ -43,14 +40,16 @@ services:
     shm_size: "2gb"
     volumes:
       - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
-      - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
+      - ${SWIN_L_MODEL_DIR:-./models}:/models:ro
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_MODE: task-drive
       SWIN_L_PROFILE: swin-l-aspect-224x384
+      SWIN_L_MODEL_PATH: /models/${SWIN_L_MODEL_FILE:-mask2former-swin-l-mapillary-224x384.onnx}
       SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
+      SWIN_L_REQUIRE_CUDA: ${SWIN_L_REQUIRE_CUDA:-true}
       SWIN_L_DRIVE_ENABLED: ${SWIN_L_DRIVE_ENABLED:-false}
       SWIN_L_CALIBRATION_CONFIRMED: ${SWIN_L_CALIBRATION_CONFIRMED:-false}
       SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/image_raw}
@@ -94,11 +93,9 @@ services:
       LINE_TRACKING_DEFAULT_DURATION_SEC: ${LINE_TRACKING_DEFAULT_DURATION_SEC:-60}
       LINE_TRACKING_MAX_DURATION_SEC: ${LINE_TRACKING_MAX_DURATION_SEC:-300}
       LINE_TRACKING_UNSAFE_TIMEOUT_SEC: ${LINE_TRACKING_UNSAFE_TIMEOUT_SEC:-2}
-      HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
 
-  # One-shot offline MCAP tests using the same Jetson CUDA image as live debug.
-  # Override its ROS/DDS entrypoint and keep files owned by the host user.
+  # One-shot native video tools using the same Jetson CUDA image as live debug.
   test-swin-l:
     profiles: [test]
     build: *swin-l-build
@@ -106,14 +103,10 @@ services:
     runtime: nvidia
     shm_size: "2gb"
     user: "${SWIN_L_TEST_UID:-1000}:${SWIN_L_TEST_GID:-1000}"
-    working_dir: /workspace
-    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/swin_l_rosbag_overlay.py"]
-    command: ["--help"]
+    working_dir: /work
+    entrypoint: ["/opt/cobiz-line-tracking/bin/line_tracking_cli"]
+    command: ["profiles"]
     volumes:
-      - ./.env:/workspace/.env:ro
-      - ${SWIN_L_ROSBAG_DIR:-./rosbags}:/bags:ro
-      - ${SWIN_L_TEST_RESULTS_DIR:-./rosbag-results/swin-l-tests}:/workspace/rosbag-results/swin-l-tests
-      - ${SWIN_L_TEST_CACHE_DIR:-./.cache/huggingface-tests}:/cache/huggingface
-    environment:
-      HF_HOME: /cache/huggingface
-      PYTHONDONTWRITEBYTECODE: "1"
+      - ${SWIN_L_MODEL_DIR:-./models}:/models:ro
+      - ${SWIN_L_VIDEO_DIR:-./videos}:/videos:ro
+      - ${SWIN_L_TEST_RESULTS_DIR:-./results}:/results

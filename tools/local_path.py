@@ -10,6 +10,7 @@ base extrinsic calibration.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 import threading
 from typing import Any, Iterable
@@ -225,6 +226,30 @@ def _birdseye_sidewalk(
     """Warp a camera mask onto a metric x-forward/y-left grid."""
 
     height, width = sidewalk_mask.shape[:2]
+    image_x, image_y, x_values, y_values, close_kernel = _birdseye_geometry(
+        height, width, config
+    )
+    birdseye = cv2.remap(
+        np.where(sidewalk_mask > 0, 255, 0).astype(np.uint8),
+        image_x,
+        image_y,
+        interpolation=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    if close_kernel is not None:
+        birdseye = cv2.morphologyEx(birdseye, cv2.MORPH_CLOSE, close_kernel)
+    return birdseye, x_values, y_values
+
+
+@lru_cache(maxsize=8)
+def _birdseye_geometry(
+    height: int,
+    width: int,
+    config: LocalPathConfig,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+    """Build immutable remap geometry once per image shape and configuration."""
+
     homography = pixel_to_ground_homography((height, width), config)
     x_values = np.linspace(
         config.near_distance_m,
@@ -243,20 +268,24 @@ def _birdseye_sidewalk(
     image_points = ground_to_pixel(ground_points, homography).reshape(
         config.bev_height_px, config.bev_width_px, 2
     )
-    birdseye = cv2.remap(
-        np.where(sidewalk_mask > 0, 255, 0).astype(np.uint8),
-        image_points[..., 0],
-        image_points[..., 1],
-        interpolation=cv2.INTER_NEAREST,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
-    )
-    if config.close_kernel_px:
-        kernel = np.ones(
+    close_kernel = (
+        np.ones(
             (config.close_kernel_px, config.close_kernel_px), dtype=np.uint8
         )
-        birdseye = cv2.morphologyEx(birdseye, cv2.MORPH_CLOSE, kernel)
-    return birdseye, x_values, y_values
+        if config.close_kernel_px
+        else None
+    )
+    values = (
+        np.ascontiguousarray(image_points[..., 0]),
+        np.ascontiguousarray(image_points[..., 1]),
+        x_values,
+        y_values,
+        close_kernel,
+    )
+    for value in values:
+        if value is not None:
+            value.setflags(write=False)
+    return values
 
 
 def extract_sidewalk_centerline(
@@ -276,6 +305,53 @@ def extract_sidewalk_centerline(
     if mask.ndim != 2:
         raise ValueError("sidewalk_mask must be a two-dimensional array")
     birdseye, x_values, y_values = _birdseye_sidewalk(mask, config)
+    return _extract_centerline_from_birdseye(birdseye, x_values, y_values, config)
+
+
+def extract_class_centerlines(
+    selected_mask: np.ndarray,
+    mask_classes: Iterable[int],
+    config: LocalPathConfig,
+) -> dict[int, LocalPathEstimate | None]:
+    """Project a label map once and extract independent paths for each class."""
+
+    config.validate()
+    labels = np.asarray(selected_mask)
+    if labels.ndim != 2:
+        raise ValueError("selected_mask must be a two-dimensional array")
+    classes = tuple(int(mask_class) for mask_class in mask_classes)
+    if len(set(classes)) != len(classes):
+        raise ValueError("mask_classes must be unique")
+    image_x, image_y, x_values, y_values, close_kernel = _birdseye_geometry(
+        labels.shape[0], labels.shape[1], config
+    )
+    birdseye_labels = cv2.remap(
+        labels.astype(np.uint8, copy=False),
+        image_x,
+        image_y,
+        interpolation=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    estimates: dict[int, LocalPathEstimate | None] = {}
+    for mask_class in classes:
+        birdseye = np.where(birdseye_labels == mask_class, 255, 0).astype(np.uint8)
+        if close_kernel is not None:
+            birdseye = cv2.morphologyEx(birdseye, cv2.MORPH_CLOSE, close_kernel)
+        estimates[mask_class] = _extract_centerline_from_birdseye(
+            birdseye, x_values, y_values, config
+        )
+    return estimates
+
+
+def _extract_centerline_from_birdseye(
+    birdseye: np.ndarray,
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    config: LocalPathConfig,
+) -> LocalPathEstimate | None:
+    """Fit one path from an already projected binary bird's-eye mask."""
+
     meters_per_column = (
         2.0 * config.search_half_width_m / max(config.bev_width_px - 1, 1)
     )
@@ -441,7 +517,11 @@ def pointcloud2_xyz(message: Any) -> np.ndarray:
             "itemsize": point_step,
         }
     )
-    raw = memoryview(bytes(message.data))
+    try:
+        raw = memoryview(message.data)
+    except TypeError:
+        # Some test doubles expose a generic sequence instead of a buffer.
+        raw = memoryview(bytes(message.data))
     required = row_step * height
     if len(raw) < required:
         raise ValueError("PointCloud2 data is shorter than row_step * height")
@@ -469,9 +549,21 @@ class LidarSafetyMonitor:
         points = np.asarray(points_xyz, dtype=np.float32)
         if points.ndim != 2 or points.shape[1] != 3:
             raise ValueError("points_xyz must have shape [N, 3]")
-        finite = np.all(np.isfinite(points), axis=1)
+        relevant = np.logical_and.reduce(
+            (
+                np.all(np.isfinite(points), axis=1),
+                points[:, 0] > 0.05,
+                points[:, 0] <= self.config.obstacle_distance_m,
+                points[:, 2] >= self.config.z_min_m,
+                points[:, 2] <= self.config.z_max_m,
+            )
+        )
+        stored = np.ascontiguousarray(points[relevant])
+        stored.setflags(write=False)
         with self._lock:
-            self._points = np.ascontiguousarray(points[finite])
+            # Updates replace the immutable array, so evaluate() can safely keep
+            # a reference without copying the complete scan at output_hz.
+            self._points = stored
             self._timestamp = float(timestamp_sec)
 
     def invalidate(self) -> None:
@@ -486,7 +578,7 @@ class LidarSafetyMonitor:
     ) -> LidarSafetyResult:
         with self._lock:
             scan_timestamp = self._timestamp
-            scan_points = None if self._points is None else self._points.copy()
+            scan_points = self._points
         if scan_timestamp is None or scan_points is None:
             return LidarSafetyResult(
                 stop=True,
@@ -519,16 +611,7 @@ class LidarSafetyMonitor:
                 reason="path_unavailable",
             )
 
-        points = scan_points
-        in_bounds = np.logical_and.reduce(
-            (
-                points[:, 0] > 0.05,
-                points[:, 0] <= self.config.obstacle_distance_m,
-                points[:, 2] >= self.config.z_min_m,
-                points[:, 2] <= self.config.z_max_m,
-            )
-        )
-        candidates = points[in_bounds]
+        candidates = scan_points
         if candidates.size == 0:
             return LidarSafetyResult(
                 stop=False,

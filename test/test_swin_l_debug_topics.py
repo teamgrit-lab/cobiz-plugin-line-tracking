@@ -85,3 +85,7 @@ def test_debug_mode_creates_only_path_metrics_and_safety_publishers(monkeypatch)
     task_args = debug.parse_args(["task-drive"])
     assert task_args.overlay_topic
     assert task_args.clearance_topic
+    assert not task_args.enable_overlay
+
+    overlay_args = debug.parse_args(["task-drive", "--enable-overlay"])
+    assert overlay_args.enable_overlay

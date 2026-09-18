@@ -61,6 +61,7 @@ from local_path import (
     LocalPathEstimate,
     LocalPathSmoother,
     SmoothedPath,
+    extract_class_centerlines,
     extract_sidewalk_centerline,
     ground_to_pixel,
     normalized_polygon_pixels,
@@ -127,6 +128,15 @@ def _env_int(name: str, default: int) -> int:
     return int(_env(name, str(default)))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = _env(name, "true" if default else "false").lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
 def selected_path_region(selected_mask: np.ndarray, path_mask_class: int) -> np.ndarray:
     """Select only the configured drivable class; background is never a path."""
 
@@ -149,13 +159,9 @@ def update_path_smoothers(
 ) -> dict[int, LocalPathEstimate | None]:
     """Keep both task-mode path candidates current for safe task preflight."""
 
-    estimates = {}
+    estimates = extract_class_centerlines(selected_mask, smoothers, config)
     for mask_class, smoother in smoothers.items():
-        estimate = extract_sidewalk_centerline(
-            selected_path_region(selected_mask, mask_class), config
-        )
-        smoother.update(estimate, timestamp_sec)
-        estimates[mask_class] = estimate
+        smoother.update(estimates[mask_class], timestamp_sec)
     return estimates
 
 
@@ -648,6 +654,34 @@ def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
         raise ValueError("task-drive mode requires at least 10 Hz zero-command updates")
 
 
+def next_inference_deadline(
+    previous_deadline: float,
+    started_at: float,
+    completed_at: float,
+    inference_hz: float,
+) -> float:
+    """Keep start-to-start cadence without adding inference time to the period."""
+
+    if inference_hz <= 0.0:
+        raise ValueError("inference_hz must be positive")
+    period = 1.0 / inference_hz
+    scheduled = previous_deadline + period
+    if scheduled <= started_at:
+        scheduled = started_at + period
+    return max(scheduled, completed_at)
+
+
+def _latency_summary_ms(values: list[float]) -> dict[str, float | int | None]:
+    if not values:
+        return {"samples": 0, "mean_ms": None, "p95_ms": None}
+    milliseconds = np.asarray(values, dtype=np.float64) * 1000.0
+    return {
+        "samples": int(milliseconds.size),
+        "mean_ms": float(np.mean(milliseconds)),
+        "p95_ms": float(np.percentile(milliseconds, 95)),
+    }
+
+
 def run_ros2(args: argparse.Namespace) -> int:
     try:
         import rclpy
@@ -663,8 +697,9 @@ def run_ros2(args: argparse.Namespace) -> int:
         ) from error
 
     task_mode = args.mode == "task-drive"
-    # Inspection mode keeps only lightweight path, safety and metrics outputs.
-    extended_diagnostics = task_mode
+    # Full-frame overlays are opt-in because copying, rendering and publishing
+    # them at output_hz can materially affect control latency on Jetson.
+    overlay_enabled = task_mode and args.enable_overlay
     if task_mode:
         _validate_task_drive_preflight(args)
     task_armed = _env("SWIN_L_DRIVE_ENABLED", "false").lower() in {
@@ -692,6 +727,10 @@ def run_ros2(args: argparse.Namespace) -> int:
         "sequence": 0,
         "inference_count": 0,
         "inference_times": deque(maxlen=32),
+        "model_inference_times": deque(maxlen=32),
+        "postprocess_times": deque(maxlen=32),
+        "path_update_times": deque(maxlen=32),
+        "inference_completed_at": deque(maxlen=32),
         "last_image_at": None,
         "last_inference_at": None,
         "last_image_stamp_ns": None,
@@ -757,7 +796,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             self.overlay_publisher = (
                 self.create_publisher(Image, args.overlay_topic, input_qos)
-                if extended_diagnostics
+                if overlay_enabled
                 else None
             )
             self.safety_publisher = self.create_publisher(
@@ -765,7 +804,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             self.clearance_publisher = (
                 self.create_publisher(Float32, args.clearance_topic, output_qos)
-                if extended_diagnostics
+                if task_mode
                 else None
             )
             self.metrics_publisher = self.create_publisher(
@@ -1035,23 +1074,25 @@ def run_ros2(args: argparse.Namespace) -> int:
             with state_lock:
                 frame = (
                     state["frame"].copy()
-                    if extended_diagnostics and state["frame"] is not None
+                    if overlay_enabled and state["frame"] is not None
                     else None
                 )
                 selected = (
                     state["selected_mask"].copy()
-                    if extended_diagnostics and state["selected_mask"] is not None
+                    if overlay_enabled and state["selected_mask"] is not None
                     else None
                 )
                 estimate = (
-                    state["estimates"].get(mask_class) if extended_diagnostics else None
+                    state["estimates"].get(mask_class) if overlay_enabled else None
                 )
                 header = state["header"]
-                sequence = int(state["sequence"]) if extended_diagnostics else 0
+                sequence = int(state["sequence"]) if overlay_enabled else 0
                 inference_count = int(state["inference_count"])
-                inference_times = (
-                    list(state["inference_times"]) if extended_diagnostics else []
-                )
+                inference_times = list(state["inference_times"])
+                model_inference_times = list(state["model_inference_times"])
+                postprocess_times = list(state["postprocess_times"])
+                path_update_times = list(state["path_update_times"])
+                completed_at = list(state["inference_completed_at"])
             now = time.monotonic()
             drive_decision = None
             if self.drive_config is not None:
@@ -1114,6 +1155,18 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "lidar": asdict(safety),
                 "queue_overwritten": latest.overwritten,
                 "inference_count": inference_count,
+                "performance": {
+                    "model_inference": _latency_summary_ms(model_inference_times),
+                    "model_postprocess": _latency_summary_ms(postprocess_times),
+                    "path_update": _latency_summary_ms(path_update_times),
+                    "pipeline_total": _latency_summary_ms(inference_times),
+                    "effective_inference_hz": (
+                        (len(completed_at) - 1) / (completed_at[-1] - completed_at[0])
+                        if len(completed_at) >= 2
+                        and completed_at[-1] > completed_at[0]
+                        else 0.0
+                    ),
+                },
                 "drive_reason": drive_decision.reason if drive_decision else None,
                 "ready_reason": self.last_ready_reason if task_mode else None,
                 "task_active": self.tasks.active is not None if self.tasks else None,
@@ -1163,34 +1216,47 @@ def run_ros2(args: argparse.Namespace) -> int:
         next_allowed = time.monotonic()
         try:
             while rclpy.ok():
-                packet = latest.get()
-                if packet is None:
-                    break
                 delay = next_allowed - time.monotonic()
                 if delay > 0.0:
                     time.sleep(delay)
-                started = time.perf_counter() if extended_diagnostics else 0.0
+                # Dequeue after rate limiting so inference receives the newest
+                # available frame rather than one captured before the sleep.
+                packet = latest.get()
+                if packet is None:
+                    break
+                inference_started = time.monotonic()
+                pipeline_started = time.perf_counter()
                 result: BestSoFarResult = segmenter.segment(packet.frame_bgr)
+                path_started = time.perf_counter()
+                estimates = update_path_smoothers(
+                    result.selected_mask,
+                    smoothers,
+                    local_config,
+                    packet.timestamp_sec,
+                )
+                path_elapsed = time.perf_counter() - path_started
+                pipeline_elapsed = time.perf_counter() - pipeline_started
+                completed = time.monotonic()
                 with state_lock:
-                    estimates = update_path_smoothers(
-                        result.selected_mask,
-                        smoothers,
-                        local_config,
-                        packet.timestamp_sec,
-                    )
-                    if extended_diagnostics:
+                    if overlay_enabled:
                         state["frame"] = packet.frame_bgr
                         state["selected_mask"] = result.selected_mask
                         state["estimates"] = estimates
-                        state["inference_times"].append(time.perf_counter() - started)
+                    state["inference_times"].append(pipeline_elapsed)
+                    state["model_inference_times"].append(result.inference_seconds)
+                    state["postprocess_times"].append(result.postprocess_seconds)
+                    state["path_update_times"].append(path_elapsed)
+                    state["inference_completed_at"].append(completed)
                     state["header"] = packet.source_header
                     state["inference_count"] += 1
-                    state["last_inference_at"] = time.monotonic()
+                    state["last_inference_at"] = completed
                     if task_mode:
                         state["last_inference_stamp_ns"] = _stamp_ns(
                             packet.source_header
                         )
-                next_allowed = time.monotonic() + 1.0 / args.inference_hz
+                next_allowed = next_inference_deadline(
+                    next_allowed, inference_started, completed, args.inference_hz
+                )
         except BaseException as error:  # noqa: BLE001 - forward to main thread.
             worker_error.append(error)
             if task_mode:
@@ -1390,6 +1456,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument(
                 "--overlay-topic",
                 default=_env("SWIN_L_OVERLAY_TOPIC", DEFAULT_OVERLAY_TOPIC),
+            )
+            live.add_argument(
+                "--enable-overlay",
+                action=argparse.BooleanOptionalAction,
+                default=_env_bool("SWIN_L_ENABLE_OVERLAY", False),
+                help="publish the expensive full-frame debug overlay (disabled by default)",
             )
         live.add_argument(
             "--local-path-topic",

@@ -1,5 +1,10 @@
 # cobiz-plugin-line-tracking
 
+Jetson 실행 경로의 C++/TensorRT 전환 순서와 검증 기준은
+[`docs/CPP_TENSORRT_MIGRATION.md`](docs/CPP_TENSORRT_MIGRATION.md)에 정리되어
+있습니다. Python 구현은 C++ shadow mode의 결과가 MCAP 기준을 통과할 때까지
+동작 기준으로 유지합니다.
+
 기본 Docker Compose 서비스 `actual-activate`는 Cobiz 서버의 커스텀 액션
 `LINE_TRACKING`을 기다립니다. 작업이 도착하고 현장 보정·카메라·LiDAR 안전
 검사를 통과한 경우에만 Swin-L `swin-l-aspect-224x384`의 선택된 영역 중심 경로로
@@ -226,14 +231,20 @@ LiDAR가 오래되었거나 path corridor 안에 3m 이내의 점이 3개 이상
 | 입력 영상 | `SWIN_L_IMAGE_TOPIC` | `/a2/front_camera/image_raw` |
 | 입력 LiDAR | `SWIN_L_LIDAR_TOPIC` | `/unitree/slam_lidar/points1` |
 | 경로 대상 클래스 | `SWIN_L_PATH_MASK_CLASS` | `2`=인도(기본), `1`=차도 |
-| 출력 overlay (actual-activate only) | `SWIN_L_OVERLAY_TOPIC` | `/line_tracking/swin_l/overlay` |
+| 운영 overlay 활성화 | `SWIN_L_ENABLE_OVERLAY` | `false` (보정 시에만 `true`) |
+| 출력 overlay (actual-activate, opt-in) | `SWIN_L_OVERLAY_TOPIC` | `/line_tracking/swin_l/overlay` |
 | 출력 경로 | `SWIN_L_LOCAL_PATH_TOPIC` | `/line_tracking/swin_l/local_path` |
 | 안전 상태 | `SWIN_L_SAFETY_STOP_TOPIC` | `/line_tracking/swin_l/safety_stop` |
 | 여유 거리 (actual-activate only) | `SWIN_L_CLEARANCE_TOPIC` | `/line_tracking/swin_l/clearance_m` |
 | 진단 metrics | `SWIN_L_METRICS_TOPIC` | `/line_tracking/swin_l/metrics` |
 
-`debugging-swin-l`에서는 경로·안전 상태·metrics만 발행한다. LiDAR 여유 거리의
+`debugging-swin-l`에서는 경로·안전 상태·metrics만 발행한다. `actual-activate`의
+전체 프레임 overlay도 Jetson의 복사·렌더링·DDS 부하를 피하기 위해 기본적으로
+꺼져 있다. 정지 상태에서 보정을 확인할 때만 `SWIN_L_ENABLE_OVERLAY=true`로 켠다.
+LiDAR 여유 거리의
 상세값은 별도 토픽 대신 `metrics.lidar.clearance_m`에서 확인할 수 있다.
+`metrics.performance`에는 최근 32회 기준 model inference, model postprocess,
+path update, 전체 pipeline의 mean/p95 밀리초와 실제 inference Hz가 포함된다.
 `metrics.path_mask_class`와 `metrics.path_surface`에서 현재 선택을 확인할 수 있다.
 `0`(배경)과 그 밖의 `.env` 값은 시작 시 거부한다. `.env`를 바꾼 뒤에는 해당 컨테이너를
 재생성해야 적용된다. Cobiz `LINE_TRACKING` 작업의 `payload.selected_mask`로는

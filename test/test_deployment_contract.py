@@ -59,6 +59,7 @@ def test_default_compose_is_cobiz_task_listener():
     assert listener["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384"
     assert listener["environment"]["SWIN_L_DRIVE_ENABLED"].endswith(":-false}")
     assert listener["environment"]["SWIN_L_CALIBRATION_CONFIRMED"].endswith(":-false}")
+    assert listener["environment"]["SWIN_L_ENABLE_OVERLAY"].endswith(":-false}")
     assert listener["environment"]["LINE_TRACKING_TASK_EVENT_TOPIC"].endswith(
         "/task_event}"
     )

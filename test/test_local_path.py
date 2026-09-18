@@ -14,9 +14,11 @@ from local_path import (  # noqa: E402
     LocalPathEstimate,
     LocalPathSmoother,
     SmoothedPath,
+    extract_class_centerlines,
     extract_sidewalk_centerline,
     pointcloud2_xyz,
 )
+import local_path  # noqa: E402
 
 
 def test_extracts_a_centerline_from_a_metric_straight_sidewalk():
@@ -42,6 +44,48 @@ def test_extracts_a_centerline_from_a_metric_straight_sidewalk():
     # a left-of-robot path in the configured x-forward/y-left convention.
     mean_lateral = float(np.mean(estimate.points_xy[:, 1]))
     assert 1.0 < mean_lateral < config.max_path_lateral_m
+
+
+def test_birdseye_geometry_is_cached_for_repeated_frames(monkeypatch):
+    config = LocalPathConfig()
+    mask = np.ones((360, 640), dtype=np.uint8)
+    calls = 0
+    original = local_path.pixel_to_ground_homography
+
+    def counted(frame_shape, selected_config):
+        nonlocal calls
+        calls += 1
+        return original(frame_shape, selected_config)
+
+    local_path._birdseye_geometry.cache_clear()
+    monkeypatch.setattr(local_path, "pixel_to_ground_homography", counted)
+
+    first = extract_sidewalk_centerline(mask, config)
+    second = extract_sidewalk_centerline(mask, config)
+
+    assert first is not None and second is not None
+    assert calls == 1
+
+
+def test_multiple_classes_share_one_birdseye_remap(monkeypatch):
+    config = LocalPathConfig()
+    labels = np.zeros((360, 640), dtype=np.uint8)
+    labels[:, :320] = 1
+    labels[:, 320:] = 2
+    calls = 0
+    original = local_path.cv2.remap
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(local_path.cv2, "remap", counted)
+
+    estimates = extract_class_centerlines(labels, (1, 2), config)
+
+    assert estimates[1] is not None and estimates[2] is not None
+    assert calls == 1
 
 
 def test_smoother_limits_update_and_holds_last_path():
@@ -104,6 +148,28 @@ def test_lidar_gate_detects_multiple_points_in_path():
     assert result.obstacle_in_path
     assert result.obstacle_count == 2
     assert result.clearance_m == pytest.approx(2.5)
+
+
+def test_lidar_update_discards_irrelevant_points_before_repeated_evaluation():
+    monitor = LidarSafetyMonitor(
+        LidarSafetyConfig(obstacle_distance_m=8.0, z_min_m=-0.4, z_max_m=0.8)
+    )
+    points = np.asarray(
+        [
+            [2.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [9.0, 0.0, 0.0],
+            [2.0, 0.0, 1.0],
+            [np.nan, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    monitor.update(points, 1.0)
+
+    assert monitor._points is not None
+    np.testing.assert_array_equal(monitor._points, [[2.0, 0.0, 0.0]])
+    assert not monitor._points.flags.writeable
 
 
 def test_invalidated_lidar_scan_stops_immediately():

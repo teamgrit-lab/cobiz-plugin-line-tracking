@@ -151,6 +151,21 @@ def test_task_drive_preflight_requires_pinned_model():
         debug._validate_task_drive_preflight(args)
 
 
+def test_inference_deadline_uses_start_to_start_cadence():
+    assert debug.next_inference_deadline(10.0, 10.0, 10.18, 4.0) == pytest.approx(
+        10.25
+    )
+    assert debug.next_inference_deadline(10.0, 10.0, 10.30, 4.0) == pytest.approx(
+        10.30
+    )
+    # A source gap resets cadence from the actual start instead of causing a burst.
+    assert debug.next_inference_deadline(10.0, 11.0, 11.18, 4.0) == pytest.approx(
+        11.25
+    )
+    with pytest.raises(ValueError, match="positive"):
+        debug.next_inference_deadline(10.0, 10.0, 10.1, 0.0)
+
+
 def test_cobiz_task_listener_starts_unarmed_but_still_pins_swin(monkeypatch):
     monkeypatch.setitem(debug.ENV, "SWIN_L_DRIVE_ENABLED", "false")
     monkeypatch.setitem(debug.ENV, "SWIN_L_CALIBRATION_CONFIRMED", "false")

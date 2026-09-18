@@ -60,6 +60,7 @@ services:
       SWIN_L_PATH_FRAME_ID: ${SWIN_L_PATH_FRAME_ID:-base_link}
       SWIN_L_INPUT_RELIABILITY: ${SWIN_L_INPUT_RELIABILITY:-best_effort}
       SWIN_L_OVERLAY_TOPIC: ${SWIN_L_OVERLAY_TOPIC:-/line_tracking/swin_l/overlay}
+      SWIN_L_ENABLE_OVERLAY: ${SWIN_L_ENABLE_OVERLAY:-false}
       SWIN_L_LOCAL_PATH_TOPIC: ${SWIN_L_LOCAL_PATH_TOPIC:-/line_tracking/swin_l/local_path}
       SWIN_L_SAFETY_STOP_TOPIC: ${SWIN_L_SAFETY_STOP_TOPIC:-/line_tracking/swin_l/safety_stop}
       SWIN_L_CLEARANCE_TOPIC: ${SWIN_L_CLEARANCE_TOPIC:-/line_tracking/swin_l/clearance_m}

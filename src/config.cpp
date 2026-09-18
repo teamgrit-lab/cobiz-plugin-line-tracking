@@ -32,6 +32,19 @@ std::string trim(std::string value) {
 
 } // namespace
 
+const std::array<double, 8> &
+offline_search_roi_polygon(const int path_mask_class) {
+  switch (path_mask_class) {
+  case 1:
+    return kOfflineRoadSearchRoiPolygon;
+  case 2:
+    return kOfflineSidewalkSearchRoiPolygon;
+  default:
+    throw std::invalid_argument(
+        "path_mask_class must be 1 (road) or 2 (sidewalk)");
+  }
+}
+
 void LocalPathConfig::validate() const {
   require_positive(near_distance_m, "near_distance_m");
   if (!std::isfinite(far_distance_m) || far_distance_m <= near_distance_m) {

@@ -48,6 +48,9 @@ private:
 
 [[nodiscard]] cv::Mat select_path_region(const cv::Mat &selected_mask,
                                          int path_mask_class);
+[[nodiscard]] cv::Mat
+apply_search_roi(const cv::Mat &binary_mask,
+                 const std::array<double, 8> &roi_polygon);
 [[nodiscard]] cv::Mat remove_small_components(const cv::Mat &binary_mask,
                                               int minimum_area);
 

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -75,7 +76,11 @@ void print_help() {
       << "  line_tracking_cli segment-video --input VIDEO --output MP4 --model "
          "MODEL.onnx [--overwrite]\n"
       << "  line_tracking_cli local-path-video --input VIDEO --output MP4 "
-         "--model MODEL.onnx [--path-mask-class 1|2] [--overwrite]\n"
+         "--model MODEL.onnx [--path-mask-class 1|2] "
+         "[--search-roi BLx,BLy,BRx,BRy,TRx,TRy,TLx,TLy] [--overwrite]\n"
+      << "  line_tracking_cli roi-preview --input IMAGE_OR_VIDEO --output "
+         "IMAGE "
+         "[--path-mask-class 1|2] [--overwrite]\n"
       << "  line_tracking_cli benchmark --input VIDEO --model MODEL.onnx "
          "[--max-frames N]\n"
       << "  line_tracking_cli evaluate --candidate MASK --reference MASK\n\n"
@@ -89,6 +94,36 @@ line_tracking::SegmenterConfig segmenter_config(const Arguments &arguments) {
                        .value_or(std::string{line_tracking::kDefaultProfile});
   config.prefer_cuda = !arguments.has("--cpu");
   return config;
+}
+
+std::array<double, 8> search_roi(const Arguments &arguments,
+                                 const int path_class) {
+  const auto &preset = line_tracking::offline_search_roi_polygon(path_class);
+  std::array<double, 8> polygon = preset;
+  if (const auto override = arguments.optional("--search-roi")) {
+    polygon = line_tracking::parse_roi_polygon(*override);
+  }
+  for (const double value : polygon) {
+    if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
+      throw std::invalid_argument(
+          "search ROI must use normalized coordinates in [0, 1]");
+    }
+  }
+  return polygon;
+}
+
+void draw_search_roi(cv::Mat &image, const std::array<double, 8> &polygon) {
+  const auto vertices =
+      line_tracking::normalized_polygon_pixels(polygon, image.size());
+  std::vector<cv::Point> pixels;
+  pixels.reserve(vertices.size());
+  for (const auto &vertex : vertices) {
+    pixels.emplace_back(cvRound(vertex.x), cvRound(vertex.y));
+  }
+  cv::polylines(image, pixels, true, cv::Scalar{255, 255, 0}, 3, cv::LINE_AA);
+  cv::putText(image, "OFFLINE SEARCH ROI", {20, std::max(30, image.rows - 20)},
+              cv::FONT_HERSHEY_SIMPLEX, 0.65, cv::Scalar{255, 255, 0}, 2,
+              cv::LINE_AA);
 }
 
 void write_json(const std::filesystem::path &path,
@@ -133,6 +168,11 @@ VideoRun run_video(const Arguments &arguments, const bool local_path) {
     throw std::invalid_argument(
         "output exists; pass --overwrite to replace it");
   }
+  const int path_class = arguments.integer("--path-mask-class", 2);
+  const auto search_polygon =
+      local_path ? std::optional{search_roi(arguments, path_class)}
+                 : std::nullopt;
+  line_tracking::SurfaceSegmenter segmenter{segmenter_config(arguments)};
   if (output.has_parent_path()) {
     std::filesystem::create_directories(output.parent_path());
   }
@@ -151,10 +191,8 @@ VideoRun run_video(const Arguments &arguments, const bool local_path) {
     throw std::runtime_error("could not open output video: " + output.string());
   }
 
-  line_tracking::SurfaceSegmenter segmenter{segmenter_config(arguments)};
   line_tracking::LocalPathConfig path_config;
   line_tracking::LocalPathSmoother smoother{path_config};
-  const int path_class = arguments.integer("--path-mask-class", 2);
   const auto started = std::chrono::steady_clock::now();
   VideoRun run;
   cv::Mat frame;
@@ -165,7 +203,9 @@ VideoRun run_video(const Arguments &arguments, const bool local_path) {
     if (local_path) {
       const double timestamp = run.frames / fps;
       const auto estimate = line_tracking::extract_surface_centerline(
-          line_tracking::select_path_region(result.selected_mask, path_class),
+          line_tracking::apply_search_roi(line_tracking::select_path_region(
+                                              result.selected_mask, path_class),
+                                          *search_polygon),
           path_config);
       const auto path = smoother.update(estimate, timestamp);
       const line_tracking::LidarSafetyResult safety{
@@ -181,6 +221,7 @@ VideoRun run_video(const Arguments &arguments, const bool local_path) {
           run.frames, run.frames + 1,
           result.total_seconds > 0.0 ? 1.0 / result.total_seconds : 0.0,
           path_class);
+      draw_search_roi(rendered, *search_polygon);
     } else {
       rendered = line_tracking::render_segmentation_overlay(
           frame, result.selected_mask, run.frames, fps);
@@ -198,22 +239,61 @@ VideoRun run_video(const Arguments &arguments, const bool local_path) {
     throw std::runtime_error("input video contained no frames");
   }
   if (const auto report = arguments.optional("--report")) {
-    write_json(
-        *report,
-        {{"schema_version", 2},
-         {"runtime", "cpp-opencv-dnn"},
-         {"input", std::filesystem::absolute(input).string()},
-         {"output", std::filesystem::absolute(output).string()},
-         {"mode", local_path ? "local-path-video" : "segment-video"},
-         {"frames", run.frames},
-         {"source_fps", fps},
-         {"total_seconds", run.total_seconds},
-         {"inference_seconds", run.total_inference_seconds},
-         {"mean_inference_seconds",
-          run.total_inference_seconds / static_cast<double>(run.frames)}});
+    write_json(*report,
+               {{"schema_version", 2},
+                {"runtime", "cpp-opencv-dnn"},
+                {"input", std::filesystem::absolute(input).string()},
+                {"output", std::filesystem::absolute(output).string()},
+                {"mode", local_path ? "local-path-video" : "segment-video"},
+                {"frames", run.frames},
+                {"source_fps", fps},
+                {"total_seconds", run.total_seconds},
+                {"inference_seconds", run.total_inference_seconds},
+                {"mean_inference_seconds",
+                 run.total_inference_seconds / static_cast<double>(run.frames)},
+                {"offline_search_roi_polygon",
+                 search_polygon ? nlohmann::json{*search_polygon}
+                                : nlohmann::json{nullptr}},
+                {"ground_projection_roi_polygon",
+                 local_path ? nlohmann::json{path_config.roi_polygon}
+                            : nlohmann::json{nullptr}}});
   }
   std::cout << std::filesystem::absolute(output).string() << '\n';
   return run;
+}
+
+int roi_preview(const Arguments &arguments) {
+  const std::filesystem::path input = arguments.required("--input");
+  const std::filesystem::path output = arguments.required("--output");
+  if (!std::filesystem::is_regular_file(input)) {
+    throw std::invalid_argument("input image/video does not exist: " +
+                                input.string());
+  }
+  if (std::filesystem::exists(output) && !arguments.has("--overwrite")) {
+    throw std::invalid_argument(
+        "output exists; pass --overwrite to replace it");
+  }
+  const int path_class = arguments.integer("--path-mask-class", 2);
+  const auto polygon = search_roi(arguments, path_class);
+  cv::Mat frame = cv::imread(input.string(), cv::IMREAD_COLOR);
+  if (frame.empty()) {
+    cv::VideoCapture capture{input.string()};
+    if (!capture.isOpened() || !capture.read(frame)) {
+      throw std::runtime_error("could not read first frame: " + input.string());
+    }
+  }
+  // Reuse the same coordinate validation as the offline mask gate.
+  (void)line_tracking::apply_search_roi(
+      cv::Mat(frame.size(), CV_8UC1, cv::Scalar{255}), polygon);
+  draw_search_roi(frame, polygon);
+  if (output.has_parent_path()) {
+    std::filesystem::create_directories(output.parent_path());
+  }
+  if (!cv::imwrite(output.string(), frame)) {
+    throw std::runtime_error("could not write ROI preview: " + output.string());
+  }
+  std::cout << std::filesystem::absolute(output).string() << '\n';
+  return 0;
 }
 
 int benchmark(const Arguments &arguments) {
@@ -313,6 +393,9 @@ int main(const int argc, char **argv) {
     if (command == "local-path-video") {
       (void)run_video(arguments, true);
       return 0;
+    }
+    if (command == "roi-preview") {
+      return roi_preview(arguments);
     }
     if (command == "benchmark") {
       return benchmark(arguments);

@@ -1,8 +1,12 @@
 #include "line_tracking/segmenter.hpp"
 
+#include "line_tracking/local_path.hpp"
+
 #include <opencv2/imgproc.hpp>
 
+#include <cmath>
 #include <stdexcept>
+#include <vector>
 
 namespace line_tracking {
 
@@ -14,6 +18,32 @@ cv::Mat select_path_region(const cv::Mat &selected_mask,
   }
   cv::Mat result;
   cv::compare(selected_mask, path_mask_class, result, cv::CMP_EQ);
+  return result;
+}
+
+cv::Mat apply_search_roi(const cv::Mat &binary_mask,
+                         const std::array<double, 8> &roi_polygon) {
+  if (binary_mask.empty() || binary_mask.type() != CV_8UC1) {
+    throw std::invalid_argument(
+        "search mask must be a non-empty CV_8UC1 image");
+  }
+  for (const double value : roi_polygon) {
+    if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
+      throw std::invalid_argument("search ROI must use normalized coordinates");
+    }
+  }
+  const auto vertices =
+      normalized_polygon_pixels(roi_polygon, binary_mask.size());
+  std::vector<cv::Point> polygon;
+  polygon.reserve(vertices.size());
+  for (const auto &vertex : vertices) {
+    polygon.emplace_back(cvRound(vertex.x), cvRound(vertex.y));
+  }
+  cv::Mat search_mask = cv::Mat::zeros(binary_mask.size(), CV_8UC1);
+  cv::fillPoly(search_mask, std::vector<std::vector<cv::Point>>{polygon},
+               cv::Scalar{255});
+  cv::Mat result;
+  cv::bitwise_and(binary_mask, search_mask, result);
   return result;
 }
 

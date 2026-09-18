@@ -92,6 +92,12 @@ ctest --test-dir build-cpp --output-on-failure
 ```
 
 경로 overlay는 영상에 LiDAR가 없으므로 화면에 fail-closed LiDAR 상태를 표시합니다.
+`local-path-video`는 `--path-mask-class 1`이면 차도 ROI
+`0.12,0.95,0.88,0.95,0.68,0.42,0.32,0.42`, `2`이면 인도 ROI
+`0.03,0.95,0.62,0.95,0.58,0.42,0.30,0.42`를 오프라인 검색 마스크로
+적용합니다. 좌표 순서는 `좌하, 우하, 우상, 좌상`이며 화면에는 청록색 경계로
+표시됩니다. 이 좌표는 영상 위치만 고려한 출발값으로, 원근 변환에 사용하는
+`SWIN_L_ROI_POLYGON`이나 실주행 보정값을 바꾸지 않습니다.
 
 ```bash
 ./build-cpp/line_tracking_cli local-path-video \
@@ -100,6 +106,20 @@ ctest --test-dir build-cpp --output-on-failure
   --model models/mask2former-swin-l-mapillary-224x384.onnx \
   --path-mask-class 2
 ```
+
+모델 없이 첫 프레임에서 검색 ROI 위치를 확인하려면:
+
+```bash
+./build-cpp/line_tracking_cli roi-preview \
+  --input videos/input.mp4 \
+  --output results/road-roi.png \
+  --path-mask-class 1
+```
+
+영상에 맞게 탐색 범위를 조정할 때는 `local-path-video` 또는 `roi-preview`에
+`--search-roi 좌하x,좌하y,우하x,우하y,우상x,우상y,좌상x,좌상y`를 넘길 수
+있습니다. `local-path-video --report` JSON에는 적용한 검색 ROI와 별도 원근
+변환 ROI가 각각 기록됩니다.
 
 benchmark와 mask IoU 평가:
 

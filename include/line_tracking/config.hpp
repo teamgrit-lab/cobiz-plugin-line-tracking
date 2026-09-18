@@ -13,6 +13,16 @@ namespace line_tracking {
 inline constexpr std::array<double, 8> kDefaultRoiPolygon{
     0.08, 1.00, 0.92, 1.00, 0.62, 0.22, 0.38, 0.22};
 
+// Image-position-only offline search regions, ordered BL, BR, TR, TL.
+// These are not camera-to-ground calibration or live driving defaults.
+inline constexpr std::array<double, 8> kOfflineRoadSearchRoiPolygon{
+    0.12, 0.95, 0.88, 0.95, 0.68, 0.42, 0.32, 0.42};
+inline constexpr std::array<double, 8> kOfflineSidewalkSearchRoiPolygon{
+    0.03, 0.95, 0.62, 0.95, 0.58, 0.42, 0.30, 0.42};
+
+[[nodiscard]] const std::array<double, 8> &
+offline_search_roi_polygon(int path_mask_class);
+
 struct LocalPathConfig {
   double near_distance_m{3.0};
   double far_distance_m{8.0};

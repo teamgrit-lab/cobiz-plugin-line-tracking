@@ -150,14 +150,19 @@ if ((${#record_topics[@]} == 0)); then
   record_topics+=("${extra_topics[@]}")
 fi
 
+# 1. 출력 디렉토리 생성
 mkdir -p "${output_dir}"
-bag_path="${output_dir%/}/${bag_name}"
 
-echo "[record-swin-l] recording ${#record_topics[@]} topic(s) to ${bag_path}"
-printf '  %s\n' "${record_topics[@]}"
+echo "[record-swin-l] Starting ros2 bag record in ${output_dir}/${bag_name}"
+echo "[record-swin-l] Press Ctrl+C to stop cleanly."
 
+# 2. 실제 ros2 bag 녹화 실행 (이전 질문의 캐시/용량 제한 옵션 추가 반영)
 exec ros2 bag record \
-  --storage mcap \
-  --output "${bag_path}" \
+  -o "${output_dir}/${bag_name}" \
+  -s mcap \
+  --max-cache-size 536870912 \
+  --max-bag-size 2147483648 \
   "${record_topics[@]}"
+
+# 3. Heredoc 종료 태그 (반드시 줄의 맨 앞에 공백 없이 위치해야 함)
 CONTAINER_SCRIPT

@@ -143,7 +143,7 @@ if ((${#record_topics[@]} == 0)); then
     /line_tracking/swin_l/safety_stop
     /line_tracking/swin_l/metrics
     /a2_control
-    /detection
+    /detections
   )
 
   declare -a extra_topics=()

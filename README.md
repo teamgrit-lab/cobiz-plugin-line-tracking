@@ -148,6 +148,13 @@ docker compose up -d --build
 docker compose logs -f actual-activate
 ```
 
+이미지 빌드 시 고정 revision의 Mask2Former 원본 가중치와 설정을 Hugging Face에서
+다운로드하여 이미지 내부
+`/opt/cobiz-line-tracking/share/source-mask2former/`에 보관합니다. 이 파일들은
+ONNX가 아니며, Compose가 호스트 `./models`를 `/models`에 마운트하므로 호스트
+`models/`에 자동으로 생기지 않습니다. 노드 실행에는 별도로 변환·검증한
+`models/mask2former-swin-l-mapillary-224x384.onnx`가 여전히 필요합니다.
+
 기본 서비스는 `actual-activate` 하나이며, `.env`의 두 arm 변수가 `false`이면
 작업을 `drive_not_armed`로 거절합니다. inspection-only 노드는 명시적으로 실행합니다.
 

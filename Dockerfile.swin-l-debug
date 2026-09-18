@@ -1,4 +1,18 @@
 ARG SWIN_L_BASE_IMAGE=cobiz:jetson-swin-l-l4t-r36.5.0
+
+# Fetch the pinned source checkpoint in a separate stage so the runtime does
+# not need the Hugging Face CLI or its Python dependencies.
+FROM python:3.11-slim AS source-model
+WORKDIR /model-download
+RUN python -m pip install --no-cache-dir huggingface_hub==1.32.0
+RUN hf download facebook/mask2former-swin-large-mapillary-vistas-semantic \
+        model.safetensors config.json preprocessor_config.json \
+        --revision 4772b6bf101d91f2534c106dc524d906aeb3c68a \
+        --local-dir models/source-mask2former \
+    && test -s models/source-mask2former/model.safetensors \
+    && test -s models/source-mask2former/config.json \
+    && test -s models/source-mask2former/preprocessor_config.json
+
 FROM ${SWIN_L_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -36,6 +50,7 @@ RUN source /opt/ros/humble/setup.bash \
     && cmake -S /workspace -B /workspace/build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/cobiz-line-tracking \
+        -DPython3_EXECUTABLE=/usr/bin/python3 \
         -DLINE_TRACKING_BUILD_ROS2=ON \
         -DLINE_TRACKING_BUILD_TESTS=OFF \
     && cmake --build /workspace/build \
@@ -43,5 +58,9 @@ RUN source /opt/ros/humble/setup.bash \
     && test -x /opt/cobiz-line-tracking/lib/cobiz_line_tracking/line_tracking_node \
     && chmod +x /entrypoint-swin-l-debug.sh \
     && rm -rf /workspace/build
+
+# Keep the original checkpoint outside /models: Compose bind-mounts that path
+# from the host, and this checkpoint is not the ONNX file used by the node.
+COPY --from=source-model /model-download/models/source-mask2former/ /opt/cobiz-line-tracking/share/source-mask2former/
 
 ENTRYPOINT ["/entrypoint-swin-l-debug.sh"]

@@ -2,6 +2,7 @@
 .env
 /.cache/
 /build*/
+/models/
 /results/
 /rosbag-results/
 /videos/

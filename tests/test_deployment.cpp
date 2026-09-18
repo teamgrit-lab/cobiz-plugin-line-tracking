@@ -47,9 +47,26 @@ LT_TEST("debug service cannot publish control by configuration") {
 LT_TEST("container builds and launches native binaries") {
   const auto dockerfile = read("Dockerfile.swin-l-debug");
   const auto entrypoint = read("docker/swin_l_debug_entrypoint.sh");
+  const auto runtime_stage = dockerfile.find("FROM ${SWIN_L_BASE_IMAGE}");
+  LT_REQUIRE(runtime_stage != std::string::npos);
+  LT_REQUIRE(dockerfile.find("FROM python:3.11-slim AS source-model") !=
+             std::string::npos);
+  LT_REQUIRE(dockerfile.find("huggingface_hub==1.32.0") != std::string::npos);
+  LT_REQUIRE(dockerfile.find("hf download facebook/mask2former-swin-large-"
+                              "mapillary-vistas-semantic") !=
+             std::string::npos);
+  LT_REQUIRE(dockerfile.find("4772b6bf101d91f2534c106dc524d906aeb3c68a") !=
+             std::string::npos);
+  LT_REQUIRE(dockerfile.find("--local-dir models/source-mask2former") !=
+             std::string::npos);
+  LT_REQUIRE(dockerfile.find("COPY --from=source-model ") !=
+             std::string::npos);
   LT_REQUIRE(dockerfile.find("cmake --build") != std::string::npos);
+  LT_REQUIRE(dockerfile.find("-DPython3_EXECUTABLE=/usr/bin/python3") !=
+             std::string::npos);
   LT_REQUIRE(dockerfile.find("line_tracking_node") != std::string::npos);
-  LT_REQUIRE(dockerfile.find("pip install") == std::string::npos);
+  LT_REQUIRE(dockerfile.substr(runtime_stage).find("pip install") ==
+             std::string::npos);
   LT_REQUIRE(dockerfile.find("COPY tools") == std::string::npos);
   LT_REQUIRE(entrypoint.find("line_tracking_node") != std::string::npos);
   LT_REQUIRE(entrypoint.find("python") == std::string::npos);

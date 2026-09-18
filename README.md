@@ -155,6 +155,21 @@ docker compose logs -f actual-activate
 docker compose --profile debug up -d --build debugging-swin-l
 ```
 
+실행 중인 `debugging-swin-l`의 입력과 디버그 출력 토픽을 MCAP으로 기록할 수
+있습니다. 기본 저장 위치는 호스트의 `./rosbags`입니다.
+
+```bash
+./docker/record_swin_l.sh
+./docker/record_swin_l.sh --name field-run-01
+```
+
+`record_swin_l.sh`는 컨테이너를 시작하지 않고, 이미 실행 중인
+`debugging-swin-l` 컨테이너에 접속해서 기록을 시작합니다.
+인자 없이 실행하면 `/tf`, `/tf_static`, `/rosout`, 720p 카메라 영상·정보,
+line-tracking 출력 3개, `/a2_control`을 기록합니다. 기본 목록 대신 특정
+토픽을 기록하거나 `SWIN_L_RECORD_EXTRA_TOPICS`로 토픽을 추가할 수 있습니다.
+기록은 `Ctrl-C`로 종료합니다.
+
 네이티브 CLI를 같은 Jetson 이미지에서 실행하려면 다음처럼 command를 덮어씁니다.
 
 ```bash

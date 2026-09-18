@@ -18,6 +18,7 @@ services:
     volumes:
       - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
       - ${SWIN_L_MODEL_DIR:-./models}:/models:ro
+      - ${SWIN_L_BAG_DIR:-./rosbags}:/rosbags
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}

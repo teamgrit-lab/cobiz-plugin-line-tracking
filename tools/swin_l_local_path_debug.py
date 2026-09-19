@@ -20,8 +20,8 @@ camera-rate MP4 overlay.  Swin-L is intentionally scheduled at a lower rate;
 the smoothed path is reused between inference frames.  With ``--overlay-mode
 sidewalk``, every camera frame is inferred without path or LiDAR processing.
 The ``ros2`` mode publishes only path, metrics and safety-stop topics. The
-task-driven mode publishes fail-closed, low-speed A2 Joy commands only for an
-accepted Cobiz task after explicit calibration checks.
+task-driven mode publishes fail-closed, low-speed Unitree Sport Move requests
+only for an accepted Cobiz task after explicit calibration checks.
 Both live modes require a Jetson ROS/PyTorch environment.
 """
 
@@ -45,7 +45,7 @@ import numpy as np
 from best_so_far_runtime import (
     DEFAULT_EVALUATION_SIZE,
     PROFILE_NAMES,
-    SWIN_L_ASPECT_PROFILE,
+    SWIN_L_ASPECT_FP16_PROFILE,
     resolve_profile,
     BestSoFarConfig,
     BestSoFarResult,
@@ -73,6 +73,7 @@ from swin_l_drive_control import (
     decide_drive,
     lidar_frame_matches_base,
 )
+from unitree_sport_api import drive_to_sport_move, populate_move_request
 from cobiz_line_tracking_task import (
     ActiveTask,
     LineTrackingTasks,
@@ -632,9 +633,9 @@ def _path_message(path: SmoothedPath | None, header: Any, frame_id: str) -> Any:
 def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
     """Reject task-driven control unless its model and calibration are explicit."""
 
-    pinned = resolve_profile(SWIN_L_ASPECT_PROFILE)
-    if args.profile != SWIN_L_ASPECT_PROFILE:
-        raise ValueError("task-drive mode is pinned to swin-l-aspect-224x384")
+    pinned = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
+    if args.profile != SWIN_L_ASPECT_FP16_PROFILE:
+        raise ValueError("task-drive mode is pinned to swin-l-aspect-224x384-fp16")
     if args.model_id not in (None, pinned.model_id) or args.model_revision not in (
         None,
         pinned.model_revision,
@@ -654,7 +655,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         from cv_bridge import CvBridge
         from rclpy.node import Node
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-        from sensor_msgs.msg import Image, Joy, PointCloud2
+        from sensor_msgs.msg import Image, PointCloud2
         from std_msgs.msg import Bool, Float32, String
     except ImportError as error:
         raise RuntimeError(
@@ -663,6 +664,14 @@ def run_ros2(args: argparse.Namespace) -> int:
         ) from error
 
     task_mode = args.mode == "task-drive"
+    Request = None
+    if task_mode:
+        try:
+            from unitree_api.msg import Request
+        except ImportError as error:
+            raise RuntimeError(
+                "task-drive mode requires the sourced unitree_api ROS interface"
+            ) from error
     # Inspection mode keeps only lightweight path, safety and metrics outputs.
     extended_diagnostics = task_mode
     if task_mode:
@@ -710,7 +719,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 and self.has_parameter("use_sim_time")
                 and bool(self.get_parameter("use_sim_time").value)
             ):
-                raise RuntimeError("task-drive mode requires live system time, not /clock")
+                raise RuntimeError(
+                    "task-drive mode requires live system time, not /clock"
+                )
             self.bridge = CvBridge()
             self.drive_config = DriveConfig() if task_mode else None
             self.tasks = (
@@ -774,7 +785,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.command_qos = QoSProfile(
                 history=HistoryPolicy.KEEP_LAST,
                 depth=10,
-                reliability=ReliabilityPolicy.BEST_EFFORT,
+                reliability=ReliabilityPolicy.RELIABLE,
             )
             self.command_publisher = None
             self.task_state_publisher = (
@@ -811,7 +822,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             if task_mode:
                 self.get_logger().info(
-                    "Cobiz LINE_TRACKING task listener ready; Joy publisher is absent until a safe task is accepted"
+                    "Cobiz LINE_TRACKING task listener ready; direct Sport request "
+                    "publisher is absent until a safe task is accepted"
                 )
 
         def publish_task_state(self, body: dict[str, Any]) -> None:
@@ -859,7 +871,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         (clock_now_ns - last_lidar_stamp_ns) / 1_000_000_000,
                     ),
                 )
-            publisher_count = self.count_publishers(args.joy_topic)
+            publisher_count = self.count_publishers(args.sport_request_topic)
             other_publishers = publisher_count > (
                 1 if self.command_publisher is not None else 0
             )
@@ -907,12 +919,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             if body["type"] == "TASK_STARTED":
                 try:
+                    assert Request is not None
                     self.command_publisher = self.create_publisher(
-                        Joy, args.joy_topic, self.command_qos
+                        Request, args.sport_request_topic, self.command_qos
                     )
                     self.publish_drive(DriveDecision.stop("startup_hold"))
                 except Exception as error:  # noqa: BLE001 - never report start without control.
-                    self.get_logger().error(f"failed to acquire Joy control: {error}")
+                    self.get_logger().error(
+                        f"failed to acquire direct Sport control: {error}"
+                    )
                     failed = self.tasks.finish(
                         "TASK_REJECTED", "control_publisher_error"
                     )
@@ -929,11 +944,15 @@ def run_ros2(args: argparse.Namespace) -> int:
         def publish_drive(self, decision: DriveDecision) -> None:
             if self.command_publisher is None:
                 return
-            message = Joy()
-            message.header.stamp = self.get_clock().now().to_msg()
-            message.header.frame_id = "swin_l_drive"
-            message.axes = decision.joy_axes()
-            message.buttons = [0] * 10
+            assert Request is not None
+            message = populate_move_request(
+                Request(),
+                drive_to_sport_move(
+                    vx=decision.vx,
+                    vy=decision.vy,
+                    yaw_rate=decision.yaw_rate,
+                ),
+            )
             self.command_publisher.publish(message)
 
         def on_image(self, message: Any) -> None:
@@ -1230,7 +1249,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--profile",
         choices=PROFILE_NAMES,
-        default=_env("SWIN_L_PROFILE", SWIN_L_ASPECT_PROFILE),
+        default=_env("SWIN_L_PROFILE", SWIN_L_ASPECT_FP16_PROFILE),
     )
     parser.add_argument("--model-id", default=_env("SWIN_L_MODEL_ID", "") or None)
     parser.add_argument(
@@ -1382,7 +1401,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     for mode, help_text in (
         ("ros2", "publish live ROS 2 path and debug topics without control"),
-        ("task-drive", "wait for a Cobiz LINE_TRACKING task before Joy control"),
+        (
+            "task-drive",
+            "wait for a Cobiz LINE_TRACKING task before direct Unitree Sport control",
+        ),
     ):
         live = subparsers.add_parser(mode, help=help_text)
         _add_common_arguments(live)
@@ -1420,7 +1442,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             default=_env("SWIN_L_INPUT_RELIABILITY", "best_effort"),
         )
         if mode == "task-drive":
-            live.add_argument("--joy-topic", default=_env("JOY_TOPIC", "/a2_control"))
+            live.add_argument(
+                "--sport-request-topic",
+                default=_env("LINE_TRACKING_SPORT_REQUEST_TOPIC", "/api/sport/request"),
+            )
         if mode == "task-drive":
             live.add_argument(
                 "--task-event-topic",

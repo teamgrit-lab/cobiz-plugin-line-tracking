@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import swin_l_local_path_debug as debug
 import swin_l_rosbag_overlay as cli
-from best_so_far_runtime import SWIN_L_ASPECT_PROFILE, resolve_profile
+from best_so_far_runtime import SWIN_L_ASPECT_FP16_PROFILE, resolve_profile
 
 
 @pytest.mark.parametrize("mode,updates", [("sidewalk", 12), ("local-path", 4)])
@@ -40,7 +40,7 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
             return frame
 
         def metadata(self):
-            return {"profile": SWIN_L_ASPECT_PROFILE}
+            return {"profile": SWIN_L_ASPECT_FP16_PROFILE}
 
     def events(path, topics, start_time_ns=0):
         assert path == source
@@ -90,10 +90,10 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
         )
         == 0
     )
-    profile = resolve_profile(SWIN_L_ASPECT_PROFILE)
+    profile = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
     config = configurations[0]
     assert (config.profile, config.model_id, config.model_revision) == (
-        SWIN_L_ASPECT_PROFILE,
+        SWIN_L_ASPECT_FP16_PROFILE,
         profile.model_id,
         profile.model_revision,
     )

@@ -4,12 +4,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_compose_uses_host_network_and_a2_joy_contract():
-    compose = (ROOT / "docker-compose.yml").read_text()
+def test_compose_uses_host_network_and_direct_sport_contract():
+    import yaml
+
+    compose_path = ROOT / "docker-compose.yml"
+    compose = compose_path.read_text()
+    listener = yaml.safe_load(compose)["services"]["actual-activate"]
 
     assert "network_mode: host" in compose
     assert "SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-" in compose
-    assert "JOY_TOPIC: ${JOY_TOPIC:-/a2_control}" in compose
+    assert listener["environment"]["LINE_TRACKING_SPORT_REQUEST_TOPIC"].endswith(
+        ":-/api/sport/request}"
+    )
+    assert "JOY_TOPIC" not in listener["environment"]
     assert "CMD_VEL_TOPIC" not in compose
 
 
@@ -33,8 +40,10 @@ def test_swin_l_debug_service_is_explicit_and_has_no_drive_contract():
     assert "Dockerfile.swin-l-debug" in compose
     assert "runtime: nvidia" in compose
     debug_service = yaml.safe_load(compose)["services"]["debugging-swin-l"]
-    assert "JOY_TOPIC" not in debug_service["environment"]
-    assert debug_service["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384"
+    assert "LINE_TRACKING_SPORT_REQUEST_TOPIC" not in debug_service["environment"]
+    assert (
+        debug_service["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384-fp16"
+    )
     assert "SWIN_L_MODE:-ros2" in entrypoint
     assert 'swin_l_local_path_debug.py "${mode}"' in entrypoint
     assert "/workspace/tools" in entrypoint
@@ -56,7 +65,7 @@ def test_default_compose_is_cobiz_task_listener():
     listener = services["actual-activate"]
     assert "profiles" not in listener
     assert listener["environment"]["SWIN_L_MODE"] == "task-drive"
-    assert listener["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384"
+    assert listener["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384-fp16"
     assert listener["environment"]["SWIN_L_DRIVE_ENABLED"].endswith(":-false}")
     assert listener["environment"]["SWIN_L_CALIBRATION_CONFIRMED"].endswith(":-false}")
     assert listener["environment"]["LINE_TRACKING_TASK_EVENT_TOPIC"].endswith(
@@ -98,6 +107,34 @@ def test_jetson_swin_l_base_build_contract():
     assert "ros-humble-cv-bridge" in debug_dockerfile
     assert "ros-humble-rmw-cyclonedds-cpp" in debug_dockerfile
     assert '"transformers==5.16.1"' in debug_dockerfile
+
+
+def test_jetson_image_builds_and_sources_unitree_request_interface():
+    dockerfile = (ROOT / "Dockerfile.swin-l-debug").read_text()
+    entrypoint = (ROOT / "docker" / "swin_l_debug_entrypoint.sh").read_text()
+    package_root = ROOT / "third_party" / "unitree_msgs" / "unitree_api"
+
+    assert (ROOT / "third_party" / "unitree_msgs" / "LICENSE").is_file()
+    assert (package_root / "package.xml").is_file()
+    assert (package_root / "msg" / "Request.msg").read_text().splitlines() == [
+        "RequestHeader header",
+        "string parameter",
+        "uint8[] binary",
+    ]
+    assert (package_root / "msg" / "RequestIdentity.msg").read_text().splitlines() == [
+        "int64 id",
+        "int64 api_id",
+    ]
+    assert "python3-colcon-common-extensions" in dockerfile
+    assert "ros-humble-rosidl-default-generators" in dockerfile
+    assert "ros-humble-rosidl-generator-dds-idl" in dockerfile
+    assert (
+        "COPY third_party/unitree_msgs/unitree_api /unitree_ws/src/unitree_api"
+        in dockerfile
+    )
+    assert "colcon build --merge-install --packages-select unitree_api" in dockerfile
+    assert "from unitree_api.msg import Request" in dockerfile
+    assert 'source "/unitree_ws/install/setup.bash"' in entrypoint
 
 
 def test_offline_swin_l_service_reuses_cuda_without_starting_ros():

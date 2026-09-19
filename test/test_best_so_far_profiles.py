@@ -17,6 +17,7 @@ from best_so_far_runtime import (  # noqa: E402
     R50_ROAD_LABELS,
     R50_SIDEWALK_LABELS,
     ROAD_ISLAND_ACTIONS,
+    SWIN_L_ASPECT_FP16_PROFILE,
     SWIN_L_ASPECT_PROFILE,
     SWIN_L_ASPECT_QUALITY_PROFILE,
     SWIN_L_PROFILE,
@@ -27,15 +28,32 @@ from best_so_far_runtime import (  # noqa: E402
 )
 
 
-def test_swin_l_aspect_is_the_selected_default_profile():
-    assert DEFAULT_PROFILE == SWIN_L_ASPECT_PROFILE
+def test_swin_l_aspect_fp16_is_the_selected_default_profile():
+    assert DEFAULT_PROFILE == SWIN_L_ASPECT_FP16_PROFILE
     profile = resolve_profile(DEFAULT_PROFILE)
     assert profile.model_family == "mask2former"
     assert profile.input_height == 224
     assert profile.input_width == 384
-    assert profile.precision == "fp32"
+    assert profile.precision == "fp16"
     assert profile.temporal_alpha == pytest.approx(0.62)
     assert profile.temporal_hysteresis_margin == pytest.approx(0.07)
+
+
+def test_swin_l_aspect_fp16_changes_only_name_and_precision():
+    fp32 = resolve_profile(SWIN_L_ASPECT_PROFILE)
+    fp16 = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
+
+    assert fp16.name == "swin-l-aspect-224x384-fp16"
+    assert fp16.precision == "fp16"
+    assert fp16.model_family == fp32.model_family
+    assert fp16.model_id == fp32.model_id
+    assert fp16.model_revision == fp32.model_revision
+    assert (fp16.input_height, fp16.input_width) == (
+        fp32.input_height,
+        fp32.input_width,
+    )
+    assert fp16.temporal_alpha == fp32.temporal_alpha
+    assert fp16.temporal_hysteresis_margin == fp32.temporal_hysteresis_margin
 
 
 def test_realtime_r50_uses_swin_aligned_surface_mapping_and_cleanup():
@@ -170,8 +188,6 @@ def test_changed_pixel_hysteresis_matches_full_frame_topk():
     full_margin = (top_scores[0] - top_scores[1]).numpy()
     expected = (selected != previous) & (full_margin < margin)
 
-    actual = _changed_pixel_hysteresis_hold_mask(
-        scores, selected, previous, margin
-    )
+    actual = _changed_pixel_hysteresis_hold_mask(scores, selected, previous, margin)
 
     assert np.array_equal(actual, expected)

@@ -6,6 +6,7 @@ set -euo pipefail
 # Source them with nounset disabled, then restore the strict shell for the node.
 set +u
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
+source "/unitree_ws/install/setup.bash"
 
 TEAMGRIT_DDS_ENV="/opt/ros/teamgrit/dds/teamgrit_dds_env.sh"
 if [[ ! -f "${TEAMGRIT_DDS_ENV}" ]]; then

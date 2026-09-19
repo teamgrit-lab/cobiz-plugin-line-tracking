@@ -52,7 +52,6 @@ def test_debug_mode_creates_only_path_metrics_and_safety_publishers(monkeypatch)
     cv_bridge.CvBridge = object
     sensor_msgs = ModuleType("sensor_msgs.msg")
     sensor_msgs.Image = type("Image", (), {})
-    sensor_msgs.Joy = type("Joy", (), {})
     sensor_msgs.PointCloud2 = type("PointCloud2", (), {})
     std_msgs = ModuleType("std_msgs.msg")
     std_msgs.Bool = type("Bool", (), {})

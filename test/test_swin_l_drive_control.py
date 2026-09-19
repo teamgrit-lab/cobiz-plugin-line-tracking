@@ -59,27 +59,13 @@ def test_calibrated_fresh_path_generates_capped_a2_command():
     assert command.vx == pytest.approx(0.10)
     assert command.vy == 0.0
     assert 0.0 < command.yaw_rate <= 0.18
-    assert command.joy_axes() == pytest.approx([0.0, -0.10, command.yaw_rate])
-    # a2_control_node negates axes[2], compensating the observed yaw reversal.
-    assert -command.joy_axes()[2] == pytest.approx(-command.yaw_rate)
 
 
-def test_right_path_turns_right_without_lateral_joy():
+def test_right_path_turns_right_without_lateral_velocity():
     command = _decide(_path(lateral=-0.2))
     assert command.reason == "tracking"
     assert command.vy == 0.0
     assert -0.18 <= command.yaw_rate < 0.0
-    assert command.joy_axes()[2] < 0.0
-
-
-def test_a2_joy_axes_correct_both_observed_left_right_reversals():
-    from swin_l_drive_control import DriveDecision
-
-    command = DriveDecision(vx=0.10, vy=0.04, yaw_rate=0.08, reason="tracking")
-    axes = command.joy_axes()
-    assert axes == pytest.approx([0.04, -0.10, 0.08])
-    # This is exactly what cobiz-plugin-a2 passes to SportClient::Move.
-    assert (-axes[1], -axes[0], -axes[2]) == pytest.approx((0.10, -0.04, -0.08))
 
 
 @pytest.mark.parametrize(
@@ -100,12 +86,12 @@ def test_a2_joy_axes_correct_both_observed_left_right_reversals():
         ({"safety": _safety(clearance=2.0)}, "lidar_clearance_low"),
     ],
 )
-def test_unsafe_inputs_publish_zero_joy(override, reason):
+def test_unsafe_inputs_return_zero_velocity(override, reason):
     path = override.pop("path", _path())
     safety = override.pop("safety", _safety())
     command = _decide(path, safety, **override)
     assert command.reason == reason
-    assert command.joy_axes() == [0.0, 0.0, 0.0]
+    assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
 
 
 def test_missing_or_malformed_path_stops():
@@ -140,12 +126,12 @@ def test_drive_rejects_untransformed_lidar_frames():
 
 def test_task_drive_preflight_requires_pinned_model():
     args = debug.parse_args(["task-drive"])
-    assert args.profile == "swin-l-aspect-224x384"
+    assert args.profile == "swin-l-aspect-224x384-fp16"
     debug._validate_task_drive_preflight(args)
     args.profile = "swin-l-best-so-far"
     with pytest.raises(ValueError, match="pinned"):
         debug._validate_task_drive_preflight(args)
-    args.profile = "swin-l-aspect-224x384"
+    args.profile = "swin-l-aspect-224x384-fp16"
     args.output_hz = 5.0
     with pytest.raises(ValueError, match="at least 10 Hz"):
         debug._validate_task_drive_preflight(args)

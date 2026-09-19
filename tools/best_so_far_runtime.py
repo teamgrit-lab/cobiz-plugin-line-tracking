@@ -6,8 +6,11 @@ Named profiles are intentionally kept here:
   restores the exact model revision, 384x384 model input, 640x360 score map,
   temporal alpha 0.62, and hysteresis margin 0.07 used by the retained
   full-video results.
-* ``swin-l-aspect-224x384`` is the selected default. It keeps the same
-  checkpoint and temporal settings but preserves the wide camera aspect ratio.
+* ``swin-l-aspect-224x384`` is the FP32 rollback profile. It keeps the same
+  checkpoint and temporal settings while preserving the wide camera aspect
+  ratio.
+* ``swin-l-aspect-224x384-fp16`` is the CUDA/MPS deployment default. It changes
+  only model/input precision and preserves the FP32 profile as a rollback.
 * ``swin-l-aspect-448x768`` is a slower, quality-first experimental profile
   validated on the two test-one videos; it retains the same Swin-L contract.
 * ``r50-fp16-640x360`` is the previous realtime candidate. It uses MaskFormer R50 at
@@ -44,9 +47,10 @@ from transformers import (
 
 SWIN_L_PROFILE = "swin-l-best-so-far"
 SWIN_L_ASPECT_PROFILE = "swin-l-aspect-224x384"
+SWIN_L_ASPECT_FP16_PROFILE = "swin-l-aspect-224x384-fp16"
 SWIN_L_ASPECT_QUALITY_PROFILE = "swin-l-aspect-448x768"
 R50_PROFILE = "r50-fp16-640x360"
-DEFAULT_PROFILE = SWIN_L_ASPECT_PROFILE
+DEFAULT_PROFILE = SWIN_L_ASPECT_FP16_PROFILE
 DEFAULT_EVALUATION_SIZE = (360, 640)
 R50_ROAD_LABELS = tuple(
     label
@@ -94,6 +98,17 @@ PROFILE_SPECS = {
         input_height=224,
         input_width=384,
         precision="fp32",
+        temporal_alpha=0.62,
+        temporal_hysteresis_margin=0.07,
+    ),
+    SWIN_L_ASPECT_FP16_PROFILE: ProfileSpec(
+        name=SWIN_L_ASPECT_FP16_PROFILE,
+        model_family="mask2former",
+        model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
+        model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
+        input_height=224,
+        input_width=384,
+        precision="fp16",
         temporal_alpha=0.62,
         temporal_hysteresis_margin=0.07,
     ),

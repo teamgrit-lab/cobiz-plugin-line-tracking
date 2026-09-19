@@ -2,26 +2,26 @@
 
 기본 Docker Compose 서비스 `actual-activate`는 Cobiz 서버의 커스텀 액션
 `LINE_TRACKING`을 기다립니다. 작업이 도착하고 현장 보정·카메라·LiDAR 안전
-검사를 통과한 경우에만 Swin-L `swin-l-aspect-224x384`의 선택된 영역 중심 경로로
-Unitree A2용 `sensor_msgs/Joy` 명령을 생성합니다. 작업이 없으면 Joy publisher도
-없습니다. 기본은 인도(`SWIN_L_PATH_MASK_CLASS=2`)이며, `.env`에서 차도(`1`)로
+검사를 통과한 경우에만 FP16 Swin-L `swin-l-aspect-224x384-fp16`의 선택된 영역
+중심 경로로 Unitree A2 Sport Move 요청을 생성합니다. 작업이 없으면 command
+publisher도 없습니다. 기본은 인도(`SWIN_L_PATH_MASK_CLASS=2`)이며, `.env`에서 차도(`1`)로
 선택할 수 있습니다. Cobiz 작업의 `payload.selected_mask`가 있으면 그 작업에만
 적용합니다.
 
 ## 안전 계약
 
-작업 수신형 Swin-L 서비스는 `/a2_control`에 명령을 보내기 전에 작업 ID·보정
+작업 수신형 Swin-L 서비스는 `/api/sport/request`에 명령을 보내기 전에 작업 ID·보정
 플래그·센서 freshness·LiDAR 프레임·제어 publisher 단독 소유를 확인합니다.
 
-- 출력 기본 토픽은 `/a2_control`이며 `cobiz-plugin-a2`의 `a2_control_node`가
-  Unitree Sport API 명령으로 변환합니다.
-- `cobiz-plugin-a2`는 Joy를 `Move(vx=-axes[1], vy=-axes[0], yaw=-axes[2])`로
-  해석합니다. 이 플러그인은 `[vy, -vx, yaw_rate]`를 발행해 A2의 좌우 이동과
-  회전축 부호를 보정합니다. 버튼 10개는 항상 0으로 유지합니다.
-- 실제 주행 전 `perspective_source`, 지면 폭/거리와 Joy 축 부호를 현장 카메라
+- 출력 기본 토픽은 `/api/sport/request`, 형식은 `unitree_api/msg/Request`, Move API
+  ID는 `1008`입니다.
+- 기존 현장 축 보정을 유지해 Move payload를
+  `x=vx`, `y=-vy`, `z=-yaw_rate`로 직렬화합니다.
+- 실제 주행 전 `perspective_source`, 지면 폭/거리와 A2 축 부호를 현장 카메라
   장착 상태에 맞춰 보정해야 합니다.
-- `/a2_control`은 로봇으로 직접 이어지므로 다른 gamepad publisher 또는 Navigation
-  제어와 동시에 사용하지 않아야 합니다.
+- 이 방안은 `teamgrit-navigation`의 emergency-stop 전달 노드를 **우회**합니다.
+  Navigation, emergency-stop 출력, gamepad 등 다른 `/api/sport/request` publisher를
+  모두 중지하고 물리 비상정지를 준비한 상태에서만 활성화해야 합니다.
 
 현재 제공된 원근점은 기능 확인용 초기값입니다. 측량하지 않은 기본값으로 무인
 주행을 시작하면 안 됩니다.
@@ -32,13 +32,13 @@ Unitree A2용 `sensor_msgs/Joy` 명령을 생성합니다. 작업이 없으면 J
 |---|---|---|---|
 | 입력 | `/a2/front_camera/image_raw` | `sensor_msgs/Image` | A2 전방 영상 |
 | 입력 | `/unitree/slam_lidar/points1` | `sensor_msgs/PointCloud2` | A2 LiDAR |
-| 출력 | `/a2_control` | `sensor_msgs/Joy` | 작업 승인 후 A2 속도 제어 명령 |
+| 출력 | `/api/sport/request` | `unitree_api/Request` | 작업 승인 후 A2 Sport Move 요청 |
 | 출력 | `/line_tracking/swin_l/local_path` | `nav_msgs/Path` | `base_link` 기준 중심 경로 |
 | 출력 | `/line_tracking/swin_l/safety_stop` | `std_msgs/Bool` | LiDAR 안전 정지 상태 |
 | 출력 | `/line_tracking/swin_l/metrics` | `std_msgs/String` | 경로·LiDAR·작업 상태 JSON |
 
-`debugging-swin-l`은 `/a2_control`을 발행하지 않으며 경로·안전 상태·metrics만
-확인합니다. `actual-activate`는 승인된 `LINE_TRACKING` 작업이 있을 때만 Joy를
+`debugging-swin-l`은 `/api/sport/request`를 발행하지 않으며 경로·안전 상태·metrics만
+확인합니다. `actual-activate`는 승인된 `LINE_TRACKING` 작업이 있을 때만 Move 요청을
 발행합니다.
 
 로봇 좌표는 `x=전방`, `y=왼쪽`, `yaw=반시계 방향 양수`를 사용합니다.
@@ -55,7 +55,7 @@ Unitree A2용 `sensor_msgs/Joy` 명령을 생성합니다. 작업이 없으면 J
 Jetson에서 먼저 Swin-L용 CUDA 베이스 이미지, DDS 설정 파일, 카메라·LiDAR
 토픽을 준비합니다. `cp .env.example .env` 후 실제 토픽과 카메라-to-`base_link`
 homography, LiDAR-to-`base_link` 변환 및 장애물 범위를 **실측**해야 합니다.
-`.env.example`은 보정값이 아닙니다. 물리 비상정지와 `/a2_control` 단독 소유를
+`.env.example`은 보정값이 아닙니다. 물리 비상정지와 `/api/sport/request` 단독 소유를
 검증한 뒤에만 `.env`의 `SWIN_L_CALIBRATION_CONFIRMED=true`와
 `SWIN_L_DRIVE_ENABLED=true`를 설정합니다. 두 값이 `false`면 컨테이너는
 대기하지만 작업을 `drive_not_armed`로 거절합니다.
@@ -74,13 +74,12 @@ ros2 topic echo /task_state
 추종합니다. 인도는 `2`이며, `selected_mask`를 생략하면 `.env`의
 `SWIN_L_PATH_MASK_CLASS`를 사용합니다. `0`·그 밖의 값은 `invalid_selected_mask`로
 거절합니다. 작업 종료 후에는 `.env` 기본값으로 돌아갑니다. 센서·모델 경로가 준비되지
-않았거나 다른 `/a2_control` publisher가 있으면 작업을 거절합니다. 수락 시
+않았거나 다른 `/api/sport/request` publisher가 있으면 작업을 거절합니다. 수락 시
 2초간 0 명령을 보낸 뒤 추종하고, 서버 취소·시간 만료·안전 조건 위반 2초 지속 시
 0 명령 후 종료 상태를 보고합니다. 무한 주행 작업은 지원하지 않습니다.
 정상 종료와 `SIGTERM`에도 0 명령을 시도하지만 전원 차단·`SIGKILL` 시에는
-발행할 수 없습니다. 현재 A2 제어 노드의 Joy 미수신 watchdog은 경고 로그만
-남기므로, 무인 실주행 전 독립적인 하위 제어 정지 장치/물리 비상정지를 확인해야
-합니다.
+발행할 수 없습니다. 직접 API 방안에는 별도 command-timeout 보장이 없으므로,
+무인 실주행 전 독립적인 하위 제어 정지 장치/물리 비상정지를 확인해야 합니다.
 
 ## MCAP 카메라 토픽을 MP4로 변환
 
@@ -127,8 +126,9 @@ docker compose config --quiet
 
 ## Mapillary segmentation profile 전환과 Swin-L 복구
 
-선택된 Mapillary 기본 profile은 **`swin-l-aspect-224x384`**입니다. 같은
-checkpoint의 기존 정사각형 `swin-l-best-so-far`와 R50은 비교·복구용으로
+선택된 Mapillary 기본 profile은 **`swin-l-aspect-224x384-fp16`**입니다. 같은
+checkpoint의 FP32 `swin-l-aspect-224x384`, 기존 정사각형
+`swin-l-best-so-far`와 R50은 비교·복구용으로
 남겨 두었습니다. 이 기본값은 benchmark/전체 영상/Swin-L 디버그·MCAP 도구와
 `actual-activate` 작업 주행에 적용됩니다.
 
@@ -140,17 +140,18 @@ uv run tools/benchmark_best_so_far.py mcap \
   --output-report rosbag-results/benchmarks/swin-l-restored.json
 ```
 
-선택된 `swin-l-aspect-224x384`의 고정 계약은 다음과 같습니다.
+선택된 `swin-l-aspect-224x384-fp16`의 고정 계약은 다음과 같습니다.
 
 - model: `facebook/mask2former-swin-large-mapillary-vistas-semantic`
 - revision: `4772b6bf101d91f2534c106dc524d906aeb3c68a`
-- model input: `224x384`, score map: `640x360`, precision: FP32
+- model input: `224x384`, score map: `640x360`, precision: FP16 on CUDA/MPS
+- CPU에서는 호환성을 위해 FP32로 자동 fallback
 - temporal alpha `0.62`, hysteresis margin `0.07`
 - Road/Bike Lane/Crosswalk/Parking/Service Lane/Lane Marking을 Road로 통합
 - Sidewalk/Pedestrian Area/Curb Cut을 Sidewalk로 통합
 
 2026-09-16 전방 카메라 `test-one` 검증에서 16:9에 가까운 입력 크기를 쓰는
-`swin-l-aspect-224x384`는 16:9 카메라에 가까운 모델 입력을 사용하며,
+`swin-l-aspect-224x384-fp16`는 검증된 FP32 프로필과 같은 16:9 모델 입력을 사용하며,
 위 결과를 재현하기 위해 기본값으로 고정했습니다. 구형 384×384 프로필은
 명시적으로 선택할 때만 사용합니다. 두 참조 overlay는
 ADE20K B5 모델 출력이므로 정확한 수동 라벨이 아니며, 실제로 27초와 57~58초
@@ -167,8 +168,8 @@ ADE20K B5 모델 출력이므로 정확한 수동 라벨이 아니며, 실제로
 
 Mac/일반 PC에서는 저장소 루트에서 `uv`로 실행한다. Jetson은 아래의
 [MCAP 테스트 컨테이너](#jetson에서-mcap-overlay-테스트)를 사용한다.
-두 명령 모두 위의 `swin-l-aspect-224x384`
-모델·revision·FP32·224×384 입력·temporal 설정을 고정한다. `.env`의
+두 명령 모두 위의 `swin-l-aspect-224x384-fp16`
+모델·revision·FP16·224×384 입력·temporal 설정을 고정한다. `.env`의
 다른 모델 선택은 적용하지 않으며, Local Path 기하 설정은 기존 `.env`를 사용한다.
 
 ```bash
@@ -211,7 +212,7 @@ mask를 카메라 전방 3~8m의 metric bird's-eye grid로 옮긴 뒤, 각 거�
 homography가 맞지 않으면 이 상태가 된다.
 
 LiDAR가 오래되었거나 path corridor 안에 3m 이내의 점이 3개 이상 있으면
-`safety_stop` 디버그 토픽이 `true`가 된다. 이 프로세스는 `/a2_control`을 발행하지
+`safety_stop` 디버그 토픽이 `true`가 된다. 이 프로세스는 `/api/sport/request`를 발행하지
 않으므로 기존 제어 노드와 분리된 검사 전용이다.
 
 ### 토픽과 주요 설정
@@ -275,7 +276,7 @@ LiDAR frame 정렬, 장애물 z 범위를 검증해야 한다.
 ## Swin-L 실제 주행 모드 (보정 확인 전에는 비활성)
 
 `actual-activate`는 Cobiz 작업 수신형이며, 승인된 `LINE_TRACKING` 작업이 있는
-동안에만 Swin-L 경로와 LiDAR gate를 이용해 `/a2_control` Joy를 **최대
+동안에만 Swin-L 경로와 LiDAR gate를 이용해 `/api/sport/request` Move를 **최대
 0.10m/s, 0.18rad/s**로 발행한다.
 카메라/추론/경로가 오래되거나 경로 신뢰도가 낮거나 LiDAR가 없거나 장애물이
 가깝거나 다른 control publisher가 보이면 10Hz로 영속적인 0 명령을 보낸다.
@@ -283,7 +284,7 @@ LiDAR frame 정렬, 장애물 z 범위를 검증해야 한다.
 `base_link`가 아니면 변환 없이 사용하는 대신 즉시 정지한다.
 카메라와 LiDAR의 ROS timestamp가 현재 시스템 시각과 맞지 않거나 `/clock`
 시뮬레이션 시간이 활성화되어 있어도 주행하지 않는다.
-`debugging-swin-l`에는 Joy publisher가 없다.
+`debugging-swin-l`에는 Sport request publisher가 없다.
 
 현재 `.env.example`의 카메라 homography 및 LiDAR `base_link` 정렬은 현장
 실측값이 아니므로 **이 저장소에서는 주행 플래그를 켜지 않는다.** Jetson에서
@@ -301,14 +302,14 @@ docker compose logs -f actual-activate
 docker compose stop actual-activate
 ```
 
-ROS metrics의 `drive_reason`이 `tracking`일 때만 비영(非零) Joy가 발행된다.
+ROS metrics의 `drive_reason`이 `tracking`일 때만 비영(非零) Move가 발행된다.
 앱의 실주행 검증을 실행했다는 뜻은 아니며, 현장 보정·비상정지·속도 검증이
 끝나기 전에는 두 플래그를 활성화하지 말아야 한다.
 
 ## Docker debug 컨테이너
 
 아래 구성은 Jetson에서 `debugging-swin-l`만 실행해 local path와 metrics를 확인하고
-로봇을 주행시키지 않는 절차다. `debugging-swin-l`은 `/a2_control`을 발행하지
+로봇을 주행시키지 않는 절차다. `debugging-swin-l`은 `/api/sport/request`를 발행하지
 않으므로 작업 주행용 `actual-activate`와 분리해서 사용할 수 있다.
 
 `jetson-containers`는 이 저장소 안에 있을 필요가 없다. Jetson 호스트의 별도
@@ -483,7 +484,7 @@ Jetson의 `enP8p1s0`↔A2 `eth0` 링크는 1Gbps full-duplex이고, 직접 TCP �
 ### 종료와 주행 안전
 
 일반 `docker compose up -d`는 `actual-activate` 작업 수신기를 시작하지만
-보정 플래그가 꺼져 있거나 수락된 작업이 없으면 Joy publisher는 없다. 현장
+보정 플래그가 꺼져 있거나 수락된 작업이 없으면 Sport request publisher는 없다. 현장
 보정 완료 후 서버의 `LINE_TRACKING` 작업을 받으면 실제 움직임을 유발할 수
 있다. local path만 확인할 때는 debug 서비스를 명시한다.
 

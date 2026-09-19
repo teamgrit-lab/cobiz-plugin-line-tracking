@@ -34,7 +34,7 @@ import numpy as np
 from best_so_far_runtime import (
     BestSoFarConfig,
     BestSoFarSegmenter,
-    SWIN_L_ASPECT_PROFILE,
+    DEFAULT_PROFILE,
 )
 from local_path import (
     LocalPathConfig,
@@ -239,7 +239,7 @@ def main() -> int:
     path_config.validate()
     drive_config.validate()
     segmenter = BestSoFarSegmenter(
-        BestSoFarConfig(profile=SWIN_L_ASPECT_PROFILE, device=args.device)
+        BestSoFarConfig(profile=DEFAULT_PROFILE, device=args.device)
     )
     smoother = LocalPathSmoother(path_config)
     capture = cv2.VideoCapture(str(source))
@@ -396,7 +396,7 @@ def main() -> int:
         "elapsed_seconds": time.perf_counter() - started,
         "limitations": [
             "No LiDAR, odometry, or camera extrinsic calibration in the MP4.",
-            "Steering is a hypothetical image-based preview; no ROS Joy is published.",
+            "Steering is a hypothetical image-based preview; no robot command is published.",
             "Source variable timestamps are approximated using average frame rate.",
         ],
     }

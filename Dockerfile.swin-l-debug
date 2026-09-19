@@ -18,12 +18,15 @@ ARG SWIN_L_TORCHVISION_VERSION=0.23.0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         python3-pip \
+        python3-colcon-common-extensions \
         python3-numpy \
         python3-opencv \
         ros-humble-cv-bridge \
         ros-humble-geometry-msgs \
         ros-humble-nav-msgs \
         ros-humble-rmw-cyclonedds-cpp \
+        ros-humble-rosidl-default-generators \
+        ros-humble-rosidl-generator-dds-idl \
         ros-humble-sensor-msgs \
         ros-humble-std-msgs \
     && rm -rf /var/lib/apt/lists/*
@@ -59,6 +62,14 @@ RUN /opt/venv/bin/python -c \
      cuda = torch.version.cuda; \
      assert cuda and cuda.startswith("12.6"), f"expected CUDA 12.6 PyTorch, got {cuda!r}"; \
      print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} transformers={transformers.__version__} opencv={cv2.__version__}")'
+
+WORKDIR /unitree_ws
+COPY third_party/unitree_msgs/unitree_api /unitree_ws/src/unitree_api
+RUN source /opt/ros/humble/setup.bash \
+    && colcon build --merge-install --packages-select unitree_api \
+    && source /unitree_ws/install/setup.bash \
+    && /opt/venv/bin/python -c \
+       'from unitree_api.msg import Request; request = Request(); request.header.identity.api_id = 1008; print("[swin-l-debug] unitree_api Request ready")'
 
 ENV PATH=/opt/venv/bin:${PATH}
 WORKDIR /workspace

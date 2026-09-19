@@ -1,4 +1,4 @@
-"""Fail-closed, low-speed Joy commands from a calibrated Swin-L local path.
+"""Fail-closed, low-speed drive decisions from a calibrated Swin-L local path.
 
 This module has no ROS dependency so the control and stop gates can be tested
 without a robot. It does not establish camera or LiDAR extrinsic calibration.
@@ -57,17 +57,6 @@ class DriveDecision:
     @classmethod
     def stop(cls, reason: str) -> DriveDecision:
         return cls(0.0, 0.0, 0.0, reason)
-
-    def joy_axes(self) -> list[float]:
-        """Encode field-corrected A2 Joy axes for left/right motion.
-
-        a2_control_node decodes Move(vx=-axes[1], vy=-axes[0], yaw=-axes[2]).
-        Per the reported A2 field behavior, lateral motion and yaw are
-        reversed relative to the path frame. Move therefore gets -vy and
-        -yaw_rate; forward motion keeps its existing sign.
-        """
-
-        return [self.vy, -self.vx, self.yaw_rate]
 
 
 def lidar_frame_matches_base(message_frame: str, path_frame: str) -> bool:

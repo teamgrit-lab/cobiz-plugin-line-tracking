@@ -21,3 +21,4 @@ models/*.pth
 /rosbags/
 rosbag-results/
 /.cache/
+/.worktrees/

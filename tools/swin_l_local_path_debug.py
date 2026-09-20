@@ -700,7 +700,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.latest_apriltag_ids: tuple[int, ...] = ()
             self.latest_apriltag_frame_key = 0
             self.terminal_apriltag_status: AprilTagDecision | None = None
-            self.apriltag_window_resolved = False
+            self.apriltag_window_resolved_at: float | None = None
             if self.drive_config is not None:
                 self.drive_config.validate()
             reliability = (
@@ -826,6 +826,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.stop_until = time.monotonic() + 1.0
 
         def on_apriltag_detections(self, message: Any) -> None:
+            now = time.monotonic()
             stamp_ns = _stamp_ns(message.header)
             self.apriltag_callback_sequence += 1
             frame_key = stamp_ns if stamp_ns > 0 else self.apriltag_callback_sequence
@@ -836,12 +837,13 @@ def run_ros2(args: argparse.Namespace) -> int:
             decision = self.apriltags.observe(
                 ids=self.latest_apriltag_ids,
                 frame_key=frame_key,
-                now=time.monotonic(),
+                now=now,
                 task_active=self.tasks.active is not None,
             )
-            # A new candidate can immediately follow a failed window. Remember
-            # that boundary so it cannot defer lifecycle deadlines indefinitely.
-            self.apriltag_window_resolved |= decision.false_positive
+            # Evaluate deadlines at this boundary, not a later timer's time:
+            # a newly seeded window still owns its full confirmation period.
+            if decision.false_positive:
+                self.apriltag_window_resolved_at = now
             if decision.stop_now and not self.publish_hard_stop("apriltag_verifying"):
                 self.abort_active_task("stop_publish_error")
                 return
@@ -860,7 +862,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             body = self.tasks.finish("TASK_ABORTED", reason)
             if body is not None:
                 self.apriltags.reset_task()
-                self.apriltag_window_resolved = False
+                self.apriltag_window_resolved_at = None
                 self.terminal_apriltag_status = None
                 try:
                     self.publish_task_state(body)
@@ -925,7 +927,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             if body["type"] == "TASK_STARTED":
                 self.terminal_apriltag_status = None
-                self.apriltag_window_resolved = False
+                self.apriltag_window_resolved_at = None
                 try:
                     assert Request is not None
                     self.command_publisher = self.create_publisher(
@@ -956,7 +958,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     return
             elif previous_task is not None and self.tasks.active is None:
                 self.apriltags.reset_task()
-                self.apriltag_window_resolved = False
+                self.apriltag_window_resolved_at = None
                 self.release_task_control("task_aborted_by_server")
             self.publish_task_state(body)
 
@@ -1089,15 +1091,19 @@ def run_ros2(args: argparse.Namespace) -> int:
                 )
                 if task_mode:
                     if task_active is not None:
+                        lifecycle_now = (
+                            self.apriltag_window_resolved_at
+                            if tag_status.state == "verifying"
+                            else now
+                        )
                         terminal = (
                             None
-                            if tag_status.state == "verifying"
-                            and not self.apriltag_window_resolved
+                            if lifecycle_now is None
                             else self.tasks.tick(
-                                now=now, drive_reason=drive_decision.reason
+                                now=lifecycle_now, drive_reason=drive_decision.reason
                             )
                         )
-                        self.apriltag_window_resolved = False
+                        self.apriltag_window_resolved_at = None
                         if terminal is not None:
                             self.apriltags.reset_task()
                             tag_status = self.apriltags.snapshot(now=now)

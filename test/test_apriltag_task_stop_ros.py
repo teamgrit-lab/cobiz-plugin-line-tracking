@@ -786,6 +786,55 @@ def test_chained_failed_windows_cannot_postpone_lifecycle_deadlines(ros, phase):
     ros.run(scenario)
 
 
+@pytest.mark.parametrize("timer_at_boundary", [None, "before", "after"])
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_old_window_boundary_cannot_shorten_the_next_confirmation_window(
+    ros, timer_at_boundary, confirmed
+):
+    def scenario(node):
+        ros.establish_tracking(duration=3.5)
+        command_start = len(ros.published[SPORT])
+        ros.now = 2.45
+        ros.detect(tag_id=7, frame=1)
+        ros.now = 2.95
+        ros.detect(tag_id=7, frame=2)
+        ros.now = 3.45
+        if timer_at_boundary == "before":
+            node.publish_state()
+        ros.detect(tag_id=7, frame=3)
+        if timer_at_boundary == "after":
+            node.publish_state()
+        for frame, stamp in ((4, 3.46), (5, 3.47)):
+            ros.now = stamp
+            ros.detect(tag_id=7 if confirmed else None, frame=frame)
+        for stamp in (3.5, 4.44):
+            ros.now = stamp
+            node.publish_state()
+            assert node.tasks.active is not None
+            assert ros.task_state()["type"] == "TASK_STARTED"
+            assert ros.metrics()["drive_reason"] == "apriltag_verifying"
+        ros.now = 4.45
+        if not confirmed:
+            ros.detect(frame=6)
+        node.publish_state()
+        assert node.tasks.active is None
+        assert ros.task_state()["type"] == (
+            "TASK_COMPLETED" if confirmed else "TASK_ABORTED"
+        )
+        assert ros.task_state()["reason"] == (
+            "apriltag_confirmed:7"
+            if confirmed
+            else "tracking_unavailable:camera_stale"
+        )
+        assert all(
+            json.loads(message.parameter) == ZERO
+            for message in ros.published[SPORT][command_start:]
+            if message.header.identity.api_id == 1008
+        )
+
+    ros.run(scenario)
+
+
 @pytest.mark.parametrize("source", ["candidate", "confirmation", "abort", "shutdown"])
 @pytest.mark.parametrize("failed_ids", [{1003}, {1008}, {1003, 1008}])
 def test_stop_publication_failure_attempts_zero_and_deactivates_task(

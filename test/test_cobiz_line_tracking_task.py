@@ -26,49 +26,50 @@ def test_unrelated_events_and_missing_ids_do_not_start():
         tasks.handle_event(
             {**event(), "action_name": "Line_tracking"},
             now=0,
-            ready_reason="tracking",
+            rejection_reason=None,
         )
         is None
     )
     assert (
         tasks.handle_event(
-            {**event(), "action_name": "ARM_RESET"}, now=0, ready_reason="tracking"
+            {**event(), "action_name": "ARM_RESET"}, now=0, rejection_reason=None
         )
         is None
     )
     assert (
-        tasks.handle_event({**event(), "task_id": ""}, now=0, ready_reason="tracking")
+        tasks.handle_event({**event(), "task_id": ""}, now=0, rejection_reason=None)
         is None
     )
     assert (
         tasks.handle_event(
-            {**event(), "task_id": "../../bad"}, now=0, ready_reason="tracking"
+            {**event(), "task_id": "../../bad"}, now=0, rejection_reason=None
         )
         is None
     )
     assert tasks.active is None
 
 
-def test_calibration_or_sensor_failure_rejects_without_activation():
+def test_dynamic_inputs_do_not_reject_a_valid_task():
     tasks = LineTrackingTasks()
-    state = tasks.handle_event(event(), now=0, ready_reason="drive_not_armed")
-    assert state == {
-        "type": "TASK_REJECTED",
-        "task_id": 123,
-        "task_type": "reject",
-        "action_name": "LINE_TRACKING",
-        "device_id": 45,
-        "device_name": "Dangjin-A2",
-        "reason": "drive_not_armed",
-    }
+    state = tasks.handle_event(event(), now=0, rejection_reason=None)
+    assert state["type"] == "TASK_STARTED"
+    assert tasks.active is not None
+
+
+def test_static_control_conflict_rejects_without_activation():
+    tasks = LineTrackingTasks()
+    state = tasks.handle_event(
+        event(), now=0, rejection_reason="multiple_control_publishers"
+    )
+    assert state["type"] == "TASK_REJECTED"
+    assert state["reason"] == "multiple_control_publishers"
     assert tasks.active is None
-    assert tasks.handle_event(event(), now=1, ready_reason="tracking") is None
 
 
 def test_start_requires_tracking_then_completes_finite_task():
     tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=5, max_duration_sec=10))
     started = tasks.handle_event(
-        event(payload={"duration_sec": 4}), now=10, ready_reason="tracking"
+        event(payload={"duration_sec": 4}), now=10, rejection_reason=None
     )
     assert started["type"] == "TASK_STARTED"
     assert started["task_type"] == "start"
@@ -84,7 +85,7 @@ def test_start_requires_tracking_then_completes_finite_task():
 def test_task_selects_road_from_object_or_json_payload(payload):
     tasks = LineTrackingTasks(TaskPolicy(default_selected_mask=2))
 
-    started = tasks.handle_event(event(payload=payload), now=0, ready_reason="tracking")
+    started = tasks.handle_event(event(payload=payload), now=0, rejection_reason=None)
 
     assert started["type"] == "TASK_STARTED"
     assert tasks.active.selected_mask == 1
@@ -96,7 +97,7 @@ def test_task_uses_configured_mask_when_payload_omits_it():
     tasks = LineTrackingTasks(TaskPolicy(default_selected_mask=1))
 
     started = tasks.handle_event(
-        event(payload={"duration_sec": 30}), now=0, ready_reason="tracking"
+        event(payload={"duration_sec": 30}), now=0, rejection_reason=None
     )
 
     assert started["type"] == "TASK_STARTED"
@@ -104,13 +105,13 @@ def test_task_uses_configured_mask_when_payload_omits_it():
 
 
 @pytest.mark.parametrize("selected_mask", [0, 3, -1, True, 1.0, "1", None, {}, []])
-def test_invalid_selected_mask_rejected_even_when_path_is_unavailable(selected_mask):
+def test_invalid_selected_mask_rejected_before_static_control_conflict(selected_mask):
     tasks = LineTrackingTasks()
 
     state = tasks.handle_event(
         event(payload={"selected_mask": selected_mask}),
         now=0,
-        ready_reason="path_unavailable",
+        rejection_reason="multiple_control_publishers",
     )
 
     assert state["type"] == "TASK_REJECTED"
@@ -120,10 +121,10 @@ def test_invalid_selected_mask_rejected_even_when_path_is_unavailable(selected_m
 
 def test_server_abort_requires_active_matching_id_even_without_action_name():
     tasks = LineTrackingTasks()
-    tasks.handle_event(event(task_id="a-1"), now=0, ready_reason="tracking")
+    tasks.handle_event(event(task_id="a-1"), now=0, rejection_reason=None)
     assert (
         tasks.handle_event(
-            {"type": "TASK_ABORTED", "task_id": "other"}, now=1, ready_reason="tracking"
+            {"type": "TASK_ABORTED", "task_id": "other"}, now=1, rejection_reason=None
         )
         is None
     )
@@ -131,12 +132,12 @@ def test_server_abort_requires_active_matching_id_even_without_action_name():
         tasks.handle_event(
             {"type": "TASK_ABORTED", "task_id": "a-1", "action_name": "ARM_RESET"},
             now=1,
-            ready_reason="tracking",
+            rejection_reason=None,
         )
         is None
     )
     stopped = tasks.handle_event(
-        {"type": "TASK_ABORTED", "task_id": "a-1"}, now=1, ready_reason="tracking"
+        {"type": "TASK_ABORTED", "task_id": "a-1"}, now=1, rejection_reason=None
     )
     assert stopped["type"] == "TASK_ABORTED"
     assert stopped["task_type"] == "abort"
@@ -145,11 +146,11 @@ def test_server_abort_requires_active_matching_id_even_without_action_name():
 
 def test_busy_task_rejected_and_duplicate_id_ignored():
     tasks = LineTrackingTasks()
-    tasks.handle_event(event(), now=0, ready_reason="tracking")
-    second = tasks.handle_event(event(task_id=124), now=1, ready_reason="tracking")
+    tasks.handle_event(event(), now=0, rejection_reason=None)
+    second = tasks.handle_event(event(task_id=124), now=1, rejection_reason=None)
     assert second["type"] == "TASK_REJECTED"
     assert (
-        tasks.handle_event(event(task_id=124), now=2, ready_reason="tracking") is None
+        tasks.handle_event(event(task_id=124), now=2, rejection_reason=None) is None
     )
     assert tasks.active.task_id == 123
 
@@ -158,7 +159,7 @@ def test_busy_task_rejected_and_duplicate_id_ignored():
 def test_invalid_duration_rejected(duration):
     tasks = LineTrackingTasks()
     state = tasks.handle_event(
-        event(payload={"duration_sec": duration}), now=0, ready_reason="tracking"
+        event(payload={"duration_sec": duration}), now=0, rejection_reason=None
     )
     assert state["type"] == "TASK_REJECTED"
     assert tasks.active is None
@@ -166,38 +167,47 @@ def test_invalid_duration_rejected(duration):
 
 def test_sustained_unsafe_state_aborts_but_short_blockage_pauses():
     tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
-    tasks.handle_event(event(), now=0, ready_reason="tracking")
+    tasks.handle_event(event(), now=0, rejection_reason=None)
     assert tasks.tick(now=2.1, drive_reason="tracking") is None
-    assert tasks.tick(now=3, drive_reason="lidar_clearance_low") is None
+    assert tasks.tick(now=3, drive_reason="path_unavailable") is None
     assert tasks.tick(now=4, drive_reason="tracking") is None
-    assert tasks.tick(now=5, drive_reason="lidar_unavailable") is None
-    stopped = tasks.tick(now=7.1, drive_reason="lidar_unavailable")
+    assert tasks.tick(now=5, drive_reason="camera_stale") is None
+    stopped = tasks.tick(now=7.1, drive_reason="camera_stale")
     assert stopped["type"] == "TASK_ABORTED"
-    assert stopped["reason"] == "unsafe:lidar_unavailable"
+    assert stopped["reason"] == "unsafe:camera_stale"
+
+
+def test_startup_hold_aborts_at_deadline_when_never_ready():
+    tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
+    tasks.handle_event(event(), now=0, rejection_reason=None)
+    assert tasks.tick(now=1.99, drive_reason="path_unavailable") is None
+    stopped = tasks.tick(now=2.0, drive_reason="path_unavailable")
+    assert stopped["type"] == "TASK_ABORTED"
+    assert stopped["reason"] == "startup:path_unavailable"
 
 
 def test_never_tracked_cannot_report_completed():
     tasks = LineTrackingTasks(
         TaskPolicy(default_duration_sec=3, max_duration_sec=10, unsafe_timeout_sec=5)
     )
-    tasks.handle_event(event(), now=0, ready_reason="tracking")
+    tasks.handle_event(event(), now=0, rejection_reason=None)
     result = tasks.tick(now=3.1, drive_reason="path_unavailable")
     assert result["type"] == "TASK_ABORTED"
 
 
 def test_first_tracking_tick_at_deadline_is_not_false_completion():
     tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=3, max_duration_sec=10))
-    tasks.handle_event(event(), now=0, ready_reason="tracking")
+    tasks.handle_event(event(), now=0, rejection_reason=None)
     result = tasks.tick(now=3, drive_reason="tracking")
     assert result["type"] == "TASK_ABORTED"
 
 
 def test_string_task_id_is_normalized_before_core_report():
     tasks = LineTrackingTasks()
-    started = tasks.handle_event(event(task_id=" 123 "), now=0, ready_reason="tracking")
+    started = tasks.handle_event(event(task_id=" 123 "), now=0, rejection_reason=None)
     assert started["task_id"] == "123"
     stopped = tasks.handle_event(
-        {"type": "TASK_ABORTED", "task_id": 123}, now=1, ready_reason="tracking"
+        {"type": "TASK_ABORTED", "task_id": 123}, now=1, rejection_reason=None
     )
     assert stopped["task_type"] == "abort"
 

@@ -896,7 +896,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.get_logger().warning("ignored malformed /task_event JSON")
                 return
             now = time.monotonic()
-            ready_reason = "inputs_not_ready"
+            rejection_reason = None
             if (
                 isinstance(event, dict)
                 and event.get("type") == "TASK_REGISTERED"
@@ -910,11 +910,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                 except ValueError:
                     pass  # The task lifecycle reports the precise payload error.
                 else:
-                    ready_reason = self.drive_readiness(mask_class, now)[2].reason
+                    drive_reason = self.drive_readiness(mask_class, now)[2].reason
+                    if drive_reason == "multiple_control_publishers":
+                        rejection_reason = drive_reason
             if self.command_publisher is not None and self.tasks.active is None:
-                ready_reason = "control_release_pending"
+                rejection_reason = "control_release_pending"
             previous_task = self.tasks.active
-            body = self.tasks.handle_event(event, now=now, ready_reason=ready_reason)
+            body = self.tasks.handle_event(
+                event, now=now, rejection_reason=rejection_reason
+            )
             if body is None:
                 return
             if body["type"] == "TASK_STARTED":

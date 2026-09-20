@@ -166,7 +166,7 @@ class LineTrackingTasks:
         event: Any,
         *,
         now: float,
-        ready_reason: str,
+        rejection_reason: str | None = None,
     ) -> dict[str, Any] | None:
         if not isinstance(event, Mapping):
             return None
@@ -213,8 +213,8 @@ class LineTrackingTasks:
             duration = _duration(payload, self.policy)
         except ValueError as error:
             return self._state(candidate, "TASK_REJECTED", str(error))
-        if ready_reason != "tracking":
-            return self._state(candidate, "TASK_REJECTED", ready_reason)
+        if rejection_reason is not None:
+            return self._state(candidate, "TASK_REJECTED", rejection_reason)
         self.active = ActiveTask(
             raw_id, key, device_id, device_name, now, duration, selected_mask
         )
@@ -229,6 +229,8 @@ class LineTrackingTasks:
         elapsed = now - active.started_at
         if elapsed < self.policy.startup_hold_sec:
             return None
+        if not self.tracking_seen and drive_reason != "tracking":
+            return self.finish("TASK_ABORTED", f"startup:{drive_reason}")
         tracked_before_this_tick = self.tracking_seen
         if drive_reason == "tracking":
             self.tracking_seen = True

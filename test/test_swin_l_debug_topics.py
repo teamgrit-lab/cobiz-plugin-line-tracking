@@ -11,15 +11,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import swin_l_local_path_debug as debug  # noqa: E402
 
 
-def test_task_drive_apriltag_defaults(monkeypatch):
+def test_task_drive_defaults(monkeypatch):
     for name in tuple(debug.ENV):
         if name.startswith("SWIN_L_APRILTAG_"):
             monkeypatch.delitem(debug.ENV, name)
+    monkeypatch.delitem(debug.ENV, "LINE_TRACKING_DEFAULT_DURATION_SEC", raising=False)
+    monkeypatch.delitem(debug.ENV, "LINE_TRACKING_MAX_DURATION_SEC", raising=False)
     args = debug.parse_args(["task-drive"])
     assert args.apriltag_detections_topic == "/detections"
     assert args.apriltag_max_age_sec == 1.0
     assert args.apriltag_confirm_window_sec == 1.0
     assert args.apriltag_confirm_min_hits == 3
+    assert args.default_task_duration_sec == 500.0
+    assert args.max_task_duration_sec == 1000.0
     assert not hasattr(args, "drive_enabled")
     assert not hasattr(args, "calibration_confirmed")
     assert not hasattr(args, "safety_topic")

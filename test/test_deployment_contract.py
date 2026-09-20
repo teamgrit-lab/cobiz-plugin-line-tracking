@@ -82,6 +82,24 @@ def test_default_compose_is_cobiz_task_listener():
     assert listener["environment"]["LINE_TRACKING_TASK_STATE_TOPIC"].endswith(
         "/task_state}"
     )
+    assert listener["environment"]["LINE_TRACKING_MAX_FORWARD_MPS"].endswith(
+        ":-0.50}"
+    )
+    assert listener["environment"]["LINE_TRACKING_DEFAULT_DURATION_SEC"].endswith(
+        ":-500}"
+    )
+    assert listener["environment"]["LINE_TRACKING_MAX_DURATION_SEC"].endswith(
+        ":-1000}"
+    )
+    assert "LINE_TRACKING_MAX_FORWARD_MPS=0.50" in (
+        ROOT / ".env.example"
+    ).read_text()
+    assert "LINE_TRACKING_DEFAULT_DURATION_SEC=500" in (
+        ROOT / ".env.example"
+    ).read_text()
+    assert "LINE_TRACKING_MAX_DURATION_SEC=1000" in (
+        ROOT / ".env.example"
+    ).read_text()
 
 
 def test_active_deployment_has_no_manual_arm_or_lidar_contract():

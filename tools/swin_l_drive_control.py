@@ -14,9 +14,12 @@ import numpy as np
 from local_path import SmoothedPath
 
 
+MAX_FORWARD_MPS_HARD_LIMIT = 1.00
+
+
 @dataclass(frozen=True)
 class DriveConfig:
-    max_forward_mps: float = 0.10
+    max_forward_mps: float = 0.50
     max_yaw_rps: float = 0.18
     heading_gain: float = 1.0
     lookahead_m: float = 4.0
@@ -39,6 +42,8 @@ class DriveConfig:
         )
         if not all(math.isfinite(value) and value > 0.0 for value in positive):
             raise ValueError("drive limits must be finite and positive")
+        if self.max_forward_mps > MAX_FORWARD_MPS_HARD_LIMIT:
+            raise ValueError("max_forward_mps must be at most 1.0 m/s")
         if not 0.0 < self.min_confidence <= 1.0:
             raise ValueError("min_confidence must be in (0, 1]")
 

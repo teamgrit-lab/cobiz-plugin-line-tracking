@@ -42,9 +42,27 @@ def _decide(path=None, **overrides):
 def test_fresh_path_generates_capped_a2_command():
     command = _decide()
     assert command.reason == "tracking"
-    assert command.vx == pytest.approx(0.10)
+    assert command.vx == pytest.approx(0.50)
     assert command.vy == 0.0
     assert 0.0 < command.yaw_rate <= 0.18
+
+
+def test_task_drive_forward_speed_comes_from_environment(monkeypatch):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_MAX_FORWARD_MPS", "0.35")
+
+    args = debug.parse_args(["task-drive"])
+    command = _decide(config=debug._drive_config_from_args(args))
+
+    assert args.max_forward_mps == pytest.approx(0.35)
+    assert command.vx == pytest.approx(0.35)
+
+
+def test_forward_speed_hard_limit_is_one_meter_per_second():
+    command = _decide(config=DriveConfig(max_forward_mps=1.00))
+    assert command.vx == pytest.approx(1.00)
+
+    with pytest.raises(ValueError, match="1.0"):
+        DriveConfig(max_forward_mps=1.0001).validate()
 
 
 def test_right_path_turns_right_without_lateral_velocity():

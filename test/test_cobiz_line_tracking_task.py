@@ -56,6 +56,30 @@ def test_dynamic_inputs_do_not_reject_a_valid_task():
     assert tasks.active is not None
 
 
+def test_missing_duration_uses_five_hundred_seconds():
+    tasks = LineTrackingTasks()
+
+    state = tasks.handle_event(event(), now=0, rejection_reason=None)
+
+    assert state["type"] == "TASK_STARTED"
+    assert tasks.active.duration_sec == 500.0
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [(1000, 1000.0), (1000.1, 1000.0), (5000, 1000.0)],
+)
+def test_duration_is_capped_at_one_thousand_seconds(requested, expected):
+    tasks = LineTrackingTasks()
+
+    state = tasks.handle_event(
+        event(payload={"duration_sec": requested}), now=0, rejection_reason=None
+    )
+
+    assert state["type"] == "TASK_STARTED"
+    assert tasks.active.duration_sec == expected
+
+
 def test_static_control_conflict_rejects_without_activation():
     tasks = LineTrackingTasks()
     state = tasks.handle_event(
@@ -155,7 +179,9 @@ def test_busy_task_rejected_and_duplicate_id_ignored():
     assert tasks.active.task_id == 123
 
 
-@pytest.mark.parametrize("duration", [0, -1, 2, 301, float("nan"), True, "20"])
+@pytest.mark.parametrize(
+    "duration", [0, -1, 2, float("nan"), float("inf"), True, "20"]
+)
 def test_invalid_duration_rejected(duration):
     tasks = LineTrackingTasks()
     state = tasks.handle_event(

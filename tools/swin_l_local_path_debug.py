@@ -196,6 +196,12 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
     )
 
 
+def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
+    config = DriveConfig(max_forward_mps=args.max_forward_mps)
+    config.validate()
+    return config
+
+
 def _runtime_config(args: argparse.Namespace) -> BestSoFarConfig:
     return BestSoFarConfig(
         profile=args.profile,
@@ -599,6 +605,7 @@ def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
         raise ValueError("task-drive mode requires a calibrated base_link path")
     if args.output_hz < 10.0:
         raise ValueError("task-drive mode requires at least 10 Hz zero-command updates")
+    _drive_config_from_args(args)
 
 
 def run_ros2(args: argparse.Namespace) -> int:
@@ -670,7 +677,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "task-drive mode requires live system time, not /clock"
                 )
             self.bridge = CvBridge()
-            self.drive_config = DriveConfig() if task_mode else None
+            self.drive_config = _drive_config_from_args(args) if task_mode else None
             self.tasks = (
                 LineTrackingTasks(
                     TaskPolicy(
@@ -1452,6 +1459,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 "--sport-request-topic",
                 default=_env("LINE_TRACKING_SPORT_REQUEST_TOPIC", "/api/sport/request"),
             )
+            live.add_argument(
+                "--max-forward-mps",
+                type=float,
+                default=_env_float("LINE_TRACKING_MAX_FORWARD_MPS", 0.50),
+            )
         if mode == "task-drive":
             live.add_argument(
                 "--task-event-topic",
@@ -1464,12 +1476,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument(
                 "--default-task-duration-sec",
                 type=float,
-                default=_env_float("LINE_TRACKING_DEFAULT_DURATION_SEC", 60.0),
+                default=_env_float("LINE_TRACKING_DEFAULT_DURATION_SEC", 500.0),
             )
             live.add_argument(
                 "--max-task-duration-sec",
                 type=float,
-                default=_env_float("LINE_TRACKING_MAX_DURATION_SEC", 300.0),
+                default=_env_float("LINE_TRACKING_MAX_DURATION_SEC", 1000.0),
             )
             live.add_argument(
                 "--unsafe-timeout-sec",

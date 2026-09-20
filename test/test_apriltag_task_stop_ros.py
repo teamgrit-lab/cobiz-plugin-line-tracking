@@ -247,7 +247,7 @@ class RosHarness:
         self.camera_ready()
         self.node.publish_state()
         assert self.metrics()["drive_reason"] == "tracking"
-        assert json.loads(self.published[SPORT][-1].parameter)["x"] == 0.1
+        assert json.loads(self.published[SPORT][-1].parameter)["x"] == 0.5
 
 
 @pytest.fixture
@@ -358,7 +358,7 @@ def test_false_positive_resumes_only_after_camera_and_path_recover(ros):
         ros.camera_ready()
         node.publish_state()
         assert ros.metrics()["drive_reason"] == "tracking"
-        assert json.loads(ros.published[SPORT][-1].parameter)["x"] == 0.1
+        assert json.loads(ros.published[SPORT][-1].parameter)["x"] == 0.5
 
     ros.run(scenario)
 

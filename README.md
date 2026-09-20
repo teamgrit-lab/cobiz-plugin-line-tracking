@@ -32,7 +32,10 @@ mean that the detector is alive but sees no tag.
 The direct Sport interface is `/api/sport/request` (`unitree_api/msg/Request`,
 Move API ID `1008`). It bypasses navigation-level command arbitration, so stop
 all other publishers before an operational run. Move serialization preserves
-the existing calibrated axes: `x=vx`, `y=-vy`, and `z=-yaw_rate`.
+the existing calibrated axes: `x=vx`, `y=-vy`, and `z=-yaw_rate`. Forward speed
+defaults to `0.50 m/s`, can be adjusted through
+`LINE_TRACKING_MAX_FORWARD_MPS`, and is rejected above the hard `1.00 m/s`
+limit.
 
 ## Topics and settings
 
@@ -53,6 +56,7 @@ SWIN_L_APRILTAG_DETECTIONS_TOPIC=/detections
 SWIN_L_APRILTAG_MAX_AGE_SEC=1.0
 SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC=1.0
 SWIN_L_APRILTAG_CONFIRM_MIN_HITS=3
+LINE_TRACKING_MAX_FORWARD_MPS=0.50
 ```
 
 `debugging-swin-l` is an explicit debug profile and never publishes Sport
@@ -83,7 +87,8 @@ Use a finite task payload such as:
 {"duration_sec": 30, "selected_mask": 2}
 ```
 
-The default duration is 60 seconds and the maximum is 300 seconds. The listener
+The default duration is 500 seconds. Requests above 1000 seconds are capped at
+1000 seconds. The listener
 reports task state on `/task_state`; core owns any corresponding HTTP report.
 It hard-stops on server cancellation, `SIGTERM`, publish errors, stale required
 inputs, confirmation, or detector-heartbeat loss after the stream has started.

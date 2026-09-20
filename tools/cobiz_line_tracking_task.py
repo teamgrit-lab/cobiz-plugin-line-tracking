@@ -22,8 +22,8 @@ _ROUTES = {
 
 @dataclass(frozen=True)
 class TaskPolicy:
-    default_duration_sec: float = 60.0
-    max_duration_sec: float = 300.0
+    default_duration_sec: float = 500.0
+    max_duration_sec: float = 1000.0
     unsafe_timeout_sec: float = 2.0
     startup_hold_sec: float = 2.0
     default_selected_mask: int = 2
@@ -101,12 +101,9 @@ def _duration(payload: Mapping[str, Any], policy: TaskPolicy) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("invalid_duration_sec")
     duration = float(value)
-    if (
-        not math.isfinite(duration)
-        or not policy.startup_hold_sec + 1.0 <= duration <= policy.max_duration_sec
-    ):
+    if not math.isfinite(duration) or duration < policy.startup_hold_sec + 1.0:
         raise ValueError("duration_sec_out_of_range")
-    return duration
+    return min(duration, policy.max_duration_sec)
 
 
 def task_state(

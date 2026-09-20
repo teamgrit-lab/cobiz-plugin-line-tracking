@@ -9,6 +9,7 @@ from typing import Any
 
 
 ROBOT_SPORT_API_ID_MOVE = 1008
+ROBOT_SPORT_API_ID_STOP_MOVE = 1003
 
 
 def _finite_zero_normalized(value: float) -> float:
@@ -49,4 +50,12 @@ def populate_move_request(request: Any, move: SportMove) -> Any:
 
     request.header.identity.api_id = ROBOT_SPORT_API_ID_MOVE
     request.parameter = move.parameter_json()
+    return request
+
+
+def populate_stop_move_request(request: Any) -> Any:
+    """Fill a generated request with one Unitree Sport StopMove command."""
+
+    request.header.identity.api_id = ROBOT_SPORT_API_ID_STOP_MOVE
+    request.parameter = "{}"
     return request

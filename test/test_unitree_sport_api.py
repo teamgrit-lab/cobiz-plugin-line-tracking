@@ -9,8 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from unitree_sport_api import (  # noqa: E402
     ROBOT_SPORT_API_ID_MOVE,
+    ROBOT_SPORT_API_ID_STOP_MOVE,
     drive_to_sport_move,
     populate_move_request,
+    populate_stop_move_request,
 )
 
 
@@ -48,3 +50,18 @@ def test_populate_move_request_sets_unitree_move_contract():
     assert ROBOT_SPORT_API_ID_MOVE == 1008
     assert request.header.identity.api_id == 1008
     assert request.parameter == '{"x":0.1,"y":-0.04,"z":-0.08}'
+
+
+def test_populate_stop_move_request_sets_unitree_contract():
+    request = SimpleNamespace(
+        header=SimpleNamespace(identity=SimpleNamespace(api_id=0)),
+        parameter="",
+        binary=[],
+    )
+
+    returned = populate_stop_move_request(request)
+
+    assert returned is request
+    assert ROBOT_SPORT_API_ID_STOP_MOVE == 1003
+    assert request.header.identity.api_id == 1003
+    assert request.parameter == "{}"

@@ -65,11 +65,12 @@ RUN /opt/venv/bin/python -c \
 
 WORKDIR /unitree_ws
 COPY third_party/unitree_msgs/unitree_api /unitree_ws/src/unitree_api
+COPY third_party/apriltag_msgs/apriltag_msgs /unitree_ws/src/apriltag_msgs
 RUN source /opt/ros/humble/setup.bash \
-    && colcon build --merge-install --packages-select unitree_api \
+    && colcon build --merge-install --packages-select unitree_api apriltag_msgs \
     && source /unitree_ws/install/setup.bash \
     && /opt/venv/bin/python -c \
-       'from unitree_api.msg import Request; request = Request(); request.header.identity.api_id = 1008; print("[swin-l-debug] unitree_api Request ready")'
+       'from unitree_api.msg import Request; from apriltag_msgs.msg import AprilTagDetectionArray; request = Request(); request.header.identity.api_id = 1008; detections = AprilTagDetectionArray(); print("[swin-l-debug] ROS interfaces ready")'
 
 ENV PATH=/opt/venv/bin:${PATH}
 WORKDIR /workspace

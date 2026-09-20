@@ -113,6 +113,7 @@ def test_jetson_image_builds_and_sources_unitree_request_interface():
     dockerfile = (ROOT / "Dockerfile.swin-l-debug").read_text()
     entrypoint = (ROOT / "docker" / "swin_l_debug_entrypoint.sh").read_text()
     package_root = ROOT / "third_party" / "unitree_msgs" / "unitree_api"
+    apriltag_root = ROOT / "third_party" / "apriltag_msgs" / "apriltag_msgs"
 
     assert (ROOT / "third_party" / "unitree_msgs" / "LICENSE").is_file()
     assert (package_root / "package.xml").is_file()
@@ -135,6 +136,28 @@ def test_jetson_image_builds_and_sources_unitree_request_interface():
     assert "colcon build --merge-install --packages-select unitree_api" in dockerfile
     assert "from unitree_api.msg import Request" in dockerfile
     assert 'source "/unitree_ws/install/setup.bash"' in entrypoint
+    assert (apriltag_root / "LICENSE").is_file()
+    assert "d03bbf21724f35b4304c688793b05c28e98802a0" in (
+        ROOT / "third_party" / "apriltag_msgs" / "README.md"
+    ).read_text()
+    assert (apriltag_root / "msg" / "Point.msg").read_text().splitlines() == [
+        "float64 x",
+        "float64 y",
+    ]
+    assert (
+        apriltag_root / "msg" / "AprilTagDetectionArray.msg"
+    ).read_text().splitlines() == [
+        "std_msgs/Header header",
+        "AprilTagDetection[] detections",
+    ]
+    assert (
+        "COPY third_party/apriltag_msgs/apriltag_msgs "
+        "/unitree_ws/src/apriltag_msgs"
+    ) in dockerfile
+    assert (
+        "colcon build --merge-install --packages-select unitree_api apriltag_msgs"
+    ) in dockerfile
+    assert "from apriltag_msgs.msg import AprilTagDetectionArray" in dockerfile
 
 
 def test_offline_swin_l_service_reuses_cuda_without_starting_ros():

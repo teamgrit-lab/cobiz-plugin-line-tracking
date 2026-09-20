@@ -94,8 +94,9 @@ No process can publish a final command after power loss or `SIGKILL`.
 `.env.example` is not a calibrated deployment file. Before operation, validate
 the camera-to-`base_link` geometry and Swin-L path against the installed A2.
 
-1. In the debug profile, adjust `SWIN_L_ROI_POLYGON` while viewing the local
-   path overlay.
+1. In the debug profile, adjust `SWIN_L_ROI_POLYGON` while inspecting the
+   `nav_msgs/Path` local path in RViz; use the offline overlay workflow for a
+   rendered camera view.
 2. Measure known ground points to tune `SWIN_L_NEAR_DISTANCE_M`,
    `SWIN_L_FAR_DISTANCE_M`, and `SWIN_L_GROUND_HALF_WIDTH_M`.
 3. Select `SWIN_L_PATH_MASK_CLASS=1` for road or `2` for sidewalk.

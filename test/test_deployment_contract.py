@@ -66,14 +66,36 @@ def test_default_compose_is_cobiz_task_listener():
     assert "profiles" not in listener
     assert listener["environment"]["SWIN_L_MODE"] == "task-drive"
     assert listener["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384-fp16"
-    assert listener["environment"]["SWIN_L_DRIVE_ENABLED"].endswith(":-false}")
-    assert listener["environment"]["SWIN_L_CALIBRATION_CONFIRMED"].endswith(":-false}")
+    assert listener["environment"]["SWIN_L_APRILTAG_DETECTIONS_TOPIC"].endswith(
+        "/detections}"
+    )
+    assert listener["environment"]["SWIN_L_APRILTAG_MAX_AGE_SEC"].endswith(":-1.0}")
+    assert listener["environment"]["SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC"].endswith(
+        ":-1.0}"
+    )
+    assert listener["environment"]["SWIN_L_APRILTAG_CONFIRM_MIN_HITS"].endswith(
+        ":-3}"
+    )
     assert listener["environment"]["LINE_TRACKING_TASK_EVENT_TOPIC"].endswith(
         "/task_event}"
     )
     assert listener["environment"]["LINE_TRACKING_TASK_STATE_TOPIC"].endswith(
         "/task_state}"
     )
+
+
+def test_active_deployment_has_no_manual_arm_or_lidar_contract():
+    active = "\n".join(
+        (ROOT / path).read_text() for path in ("docker-compose.yml", ".env.example")
+    )
+    for forbidden in (
+        "SWIN_L_" + "DRIVE_ENABLED",
+        "SWIN_L_" + "CALIBRATION_CONFIRMED",
+        "SWIN_L_" + "LIDAR_",
+        "SWIN_L_" + "SAFETY_" + "STOP_TOPIC",
+        "SWIN_L_" + "CLEARANCE_TOPIC",
+    ):
+        assert forbidden not in active
 
 
 def test_jetson_swin_l_base_build_contract():

@@ -113,9 +113,7 @@ def test_task_drive_preflight_requires_pinned_model():
         debug._validate_task_drive_preflight(args)
 
 
-def test_cobiz_task_listener_starts_unarmed_but_still_pins_swin(monkeypatch):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_DRIVE_ENABLED", "false")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_CALIBRATION_CONFIRMED", "false")
+def test_cobiz_task_listener_pins_swin_profile():
     args = debug.parse_args(["task-drive"])
     assert args.task_event_topic == "/task_event"
     assert args.task_state_topic == "/task_state"

@@ -152,7 +152,6 @@ def test_active_parsers_expose_no_lidar_arguments():
     for argv in (["ros2"], ["task-drive"]):
         args = debug.parse_args(argv)
         assert not any("lidar" in name.lower() for name in vars(args))
-        assert not hasattr(args, "safety_stop_topic")
         assert not hasattr(args, "clearance_topic")
 
 

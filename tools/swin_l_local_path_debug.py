@@ -889,9 +889,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 and event.get("type") == "TASK_REGISTERED"
                 and event.get("action_name") == "LINE_TRACKING"
                 and self.tasks.active is None
+                and self.count_publishers(args.sport_request_topic) > 0
             ):
-                if self.count_publishers(args.sport_request_topic) > 0:
-                    rejection_reason = "multiple_control_publishers"
+                rejection_reason = "multiple_control_publishers"
             if self.command_publisher is not None and self.tasks.active is None:
                 rejection_reason = "control_release_pending"
             previous_task = self.tasks.active

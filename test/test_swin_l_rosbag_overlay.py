@@ -158,7 +158,7 @@ def test_active_parsers_expose_no_lidar_arguments():
 def test_overlay_renders_optional_status_without_safety_object():
     frame = np.zeros((360, 640, 3), np.uint8)
     mask = np.zeros((360, 640), np.uint8)
-    kwargs = dict(frame_index=1, inference_count=0, inference_hz=0.0)
+    kwargs = {"frame_index": 1, "inference_count": 0, "inference_hz": 0.0}
     plain = debug.render_local_path_overlay(
         frame, mask, None, None, debug.LocalPathConfig(), **kwargs
     )

@@ -18,11 +18,11 @@ from swin_l_drive_control import DriveDecision  # noqa: E402
 
 
 @pytest.mark.parametrize(
-    ("preexisting_control_publishers", "armed", "expected_state"),
-    [(0, True, "TASK_STARTED"), (1, False, "TASK_REJECTED")],
+    ("preexisting_control_publishers", "expected_state"),
+    [(0, "TASK_STARTED"), (1, "TASK_REJECTED")],
 )
 def test_task_control_rejects_external_publisher_before_readiness(
-    monkeypatch, preexisting_control_publishers, armed, expected_state
+    monkeypatch, preexisting_control_publishers, expected_state
 ):
     published: dict[str, list] = {}
     publisher_qos = {}
@@ -174,6 +174,7 @@ def test_task_control_rejects_external_publisher_before_readiness(
         "rclpy.qos": SimpleNamespace(
             HistoryPolicy=SimpleNamespace(KEEP_LAST=object()),
             ReliabilityPolicy=SimpleNamespace(RELIABLE=reliable, BEST_EFFORT=object()),
+            DurabilityPolicy=SimpleNamespace(VOLATILE=object()),
             QoSProfile=FakeQoS,
         ),
         "cv_bridge": SimpleNamespace(
@@ -188,6 +189,7 @@ def test_task_control_rejects_external_publisher_before_readiness(
         "std_msgs.msg": SimpleNamespace(String=Message),
         "nav_msgs.msg": SimpleNamespace(Path=Message),
         "unitree_api.msg": SimpleNamespace(Request=Request),
+        "apriltag_msgs.msg": SimpleNamespace(AprilTagDetectionArray=Message),
     }
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
@@ -202,8 +204,6 @@ def test_task_control_rejects_external_publisher_before_readiness(
         ),
     )
     monkeypatch.setattr(debug, "_path_message", lambda *_args: Message())
-    monkeypatch.setitem(debug.ENV, "SWIN_L_DRIVE_ENABLED", str(armed).lower())
-    monkeypatch.setitem(debug.ENV, "SWIN_L_CALIBRATION_CONFIRMED", str(armed).lower())
     monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", "2")
 
     assert debug.run_ros2(debug.parse_args(["task-drive"])) == 0

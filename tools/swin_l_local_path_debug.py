@@ -68,7 +68,12 @@ from swin_l_drive_control import (
     DriveDecision,
     decide_drive,
 )
-from unitree_sport_api import drive_to_sport_move, populate_move_request
+from apriltag_stop import AprilTagPolicy, AprilTagStopMonitor
+from unitree_sport_api import (
+    drive_to_sport_move,
+    populate_move_request,
+    populate_stop_move_request,
+)
 from cobiz_line_tracking_task import (
     ActiveTask,
     LineTrackingTasks,
@@ -614,10 +619,13 @@ def run_ros2(args: argparse.Namespace) -> int:
     Request = None
     if task_mode:
         try:
+            from apriltag_msgs.msg import AprilTagDetectionArray
+            from rclpy.qos import DurabilityPolicy
             from unitree_api.msg import Request
         except ImportError as error:
             raise RuntimeError(
-                "task-drive mode requires the sourced unitree_api ROS interface"
+                "task-drive mode requires the sourced unitree_api and apriltag_msgs "
+                "ROS interfaces"
             ) from error
     # Inspection mode keeps only lightweight path and metrics outputs.
     extended_diagnostics = task_mode
@@ -677,6 +685,20 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             self.last_ready_reason = "inputs_not_ready"
             self.stop_until = 0.0
+            self.apriltags = (
+                AprilTagStopMonitor(
+                    AprilTagPolicy(
+                        max_age_sec=args.apriltag_max_age_sec,
+                        confirm_window_sec=args.apriltag_confirm_window_sec,
+                        min_hits=args.apriltag_confirm_min_hits,
+                    )
+                )
+                if task_mode
+                else None
+            )
+            self.apriltag_callback_sequence = 0
+            self.latest_apriltag_ids: tuple[int, ...] = ()
+            self.latest_apriltag_frame_key = 0
             if self.drive_config is not None:
                 self.drive_config.validate()
             reliability = (
@@ -728,6 +750,19 @@ def run_ros2(args: argparse.Namespace) -> int:
                 if task_mode
                 else None
             )
+            if task_mode:
+                apriltag_qos = QoSProfile(
+                    history=HistoryPolicy.KEEP_LAST,
+                    depth=1,
+                    reliability=ReliabilityPolicy.RELIABLE,
+                    durability=DurabilityPolicy.VOLATILE,
+                )
+                self.apriltag_subscription = self.create_subscription(
+                    AprilTagDetectionArray,
+                    args.apriltag_detections_topic,
+                    self.on_apriltag_detections,
+                    apriltag_qos,
+                )
             self.timer = self.create_timer(1.0 / args.output_hz, self.publish_state)
             self.started = time.monotonic()
             self.get_logger().info(
@@ -755,17 +790,54 @@ def run_ros2(args: argparse.Namespace) -> int:
                     String(data=json.dumps(body, separators=(",", ":")))
                 )
 
+        def publish_zero_move(self, reason: str) -> None:
+            self.publish_drive(DriveDecision.stop(reason))
+
+        def publish_hard_stop(self, reason: str) -> None:
+            if self.command_publisher is None:
+                return
+            assert Request is not None
+            self.command_publisher.publish(populate_stop_move_request(Request()))
+            self.publish_zero_move(reason)
+
+        def complete_apriltag_task(self, tag_id: int) -> None:
+            reason = f"apriltag_confirmed:{tag_id}"
+            self.publish_hard_stop(reason)
+            body = self.tasks.finish("TASK_COMPLETED", reason)
+            if body is not None:
+                self.publish_task_state(body)
+            self.stop_until = time.monotonic() + 1.0
+
+        def on_apriltag_detections(self, message: Any) -> None:
+            stamp_ns = _stamp_ns(message.header)
+            self.apriltag_callback_sequence += 1
+            frame_key = stamp_ns if stamp_ns > 0 else self.apriltag_callback_sequence
+            self.latest_apriltag_ids = tuple(
+                int(detection.id) for detection in message.detections
+            )
+            self.latest_apriltag_frame_key = frame_key
+            decision = self.apriltags.observe(
+                ids=self.latest_apriltag_ids,
+                frame_key=frame_key,
+                now=time.monotonic(),
+                task_active=self.tasks.active is not None,
+            )
+            if decision.stop_now:
+                self.publish_hard_stop("apriltag_verifying")
+            if decision.just_confirmed:
+                self.complete_apriltag_task(decision.confirmed_id)
+
         def release_task_control(self, reason: str) -> None:
             if self.command_publisher is not None:
-                self.publish_drive(DriveDecision.stop(reason))
+                self.publish_hard_stop(reason)
                 self.stop_until = time.monotonic() + 1.0
 
         def abort_active_task(self, reason: str) -> None:
             if self.tasks is None:
                 return
+            self.release_task_control(reason)
             body = self.tasks.finish("TASK_ABORTED", reason)
             if body is not None:
-                self.release_task_control(reason)
                 self.publish_task_state(body)
 
         def drive_readiness(
@@ -793,8 +865,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 camera_age_sec=camera_age_sec,
                 inference_age_sec=inference_age_sec,
                 other_control_publishers=other_publishers,
-                # Task 6 replaces this fail-closed placeholder with live heartbeat state.
-                detections_ready=False,
+                detections_ready=self.apriltags.stream_ready(now),
                 config=self.drive_config,
             )
             return path, decision
@@ -831,7 +902,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.command_publisher = self.create_publisher(
                         Request, args.sport_request_topic, self.command_qos
                     )
-                    self.publish_drive(DriveDecision.stop("startup_hold"))
+                    tag_status = self.apriltags.begin_task(
+                        ids=self.latest_apriltag_ids,
+                        frame_key=self.latest_apriltag_frame_key,
+                        now=now,
+                    )
+                    if tag_status.stop_now:
+                        self.publish_hard_stop("apriltag_verifying")
+                    else:
+                        self.publish_zero_move("startup_hold")
                 except Exception as error:  # noqa: BLE001 - never report start without control.
                     self.get_logger().error(
                         f"failed to acquire direct Sport control: {error}"
@@ -915,6 +994,28 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.get_logger().error(f"Swin-L output failed: {error}")
 
         def _publish_state(self) -> None:
+            now = time.monotonic()
+            tag_status = None
+            if self.apriltags is not None:
+                tag_status = (
+                    self.apriltags.tick(now=now, task_active=True)
+                    if self.tasks.active is not None
+                    else self.apriltags.snapshot(now=now)
+                )
+                if tag_status.just_confirmed:
+                    self.complete_apriltag_task(tag_status.confirmed_id)
+                if self.tasks.active is not None:
+                    if self.count_publishers(args.sport_request_topic) > (
+                        1 if self.command_publisher is not None else 0
+                    ):
+                        self.abort_active_task("multiple_control_publishers")
+                    elif self.apriltags.message_age_sec(
+                        now
+                    ) is not None and not self.apriltags.stream_ready(now):
+                        # A received heartbeat becoming stale is detector loss,
+                        # including during startup or tag verification. A stream
+                        # never seen at all still gets the normal startup hold.
+                        self.abort_active_task("apriltag_detections_stale")
             task_active = self.tasks.active if self.tasks is not None else None
             mask_class = active_path_mask_class(task_active, args.path_mask_class)
             with state_lock:
@@ -937,7 +1038,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 inference_times = (
                     list(state["inference_times"]) if extended_diagnostics else []
                 )
-            now = time.monotonic()
             drive_decision = None
             if self.drive_config is not None:
                 path, ready_decision = self.drive_readiness(mask_class, now)
@@ -948,14 +1048,20 @@ def run_ros2(args: argparse.Namespace) -> int:
                     < self.tasks.policy.startup_hold_sec
                 )
                 drive_decision = (
-                    DriveDecision.stop("startup_hold")
+                    DriveDecision.stop("apriltag_verifying")
+                    if tag_status.state == "verifying"
+                    else DriveDecision.stop("startup_hold")
                     if startup_hold
                     else ready_decision
                 )
                 if task_mode:
                     if task_active is not None:
-                        terminal = self.tasks.tick(
-                            now=now, drive_reason=drive_decision.reason
+                        terminal = (
+                            None
+                            if tag_status.state == "verifying"
+                            else self.tasks.tick(
+                                now=now, drive_reason=drive_decision.reason
+                            )
                         )
                         if terminal is not None:
                             self.release_task_control(
@@ -970,6 +1076,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         if now >= self.stop_until:
                             self.destroy_publisher(self.command_publisher)
                             self.command_publisher = None
+                            self.apriltags.reset_task()
                     else:
                         drive_decision = DriveDecision.stop("task_idle")
                 else:
@@ -995,6 +1102,16 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "ready_reason": self.last_ready_reason if task_mode else None,
                 "task_active": self.tasks.active is not None if self.tasks else None,
             }
+            if tag_status is not None:
+                metrics["apriltag"] = {
+                    "topic": args.apriltag_detections_topic,
+                    "stream_ready": self.apriltags.stream_ready(now),
+                    "message_age_sec": self.apriltags.message_age_sec(now),
+                    "state": tag_status.state,
+                    "hit_counts": dict(tag_status.hit_counts),
+                    "confirmed_id": tag_status.confirmed_id,
+                    "window_elapsed_sec": tag_status.window_elapsed_sec,
+                }
             self.metrics_publisher.publish(String(data=json.dumps(metrics)))
             if header is None:
                 return
@@ -1004,6 +1121,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             mean_total = float(np.mean(inference_times)) if inference_times else 0.0
             inference_hz = 1.0 / mean_total if mean_total > 0.0 else 0.0
+            status_text = drive_decision.reason if drive_decision else None
+            if tag_status is not None:
+                if tag_status.state == "verifying":
+                    hits = max((count for _, count in tag_status.hit_counts), default=0)
+                    status_text = (
+                        f"APRILTAG VERIFY {hits}/{self.apriltags.policy.min_hits}"
+                    )
+                elif tag_status.state == "confirmed":
+                    status_text = f"APRILTAG CONFIRMED ID {tag_status.confirmed_id}"
             overlay = render_local_path_overlay(
                 frame,
                 selected,
@@ -1014,7 +1140,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 inference_count=inference_count,
                 inference_hz=inference_hz,
                 path_mask_class=mask_class,
-                status_text=drive_decision.reason if drive_decision else None,
+                status_text=status_text,
             )
             overlay_message = self.bridge.cv2_to_imgmsg(overlay, encoding="bgr8")
             overlay_message.header = header
@@ -1027,7 +1153,6 @@ def run_ros2(args: argparse.Namespace) -> int:
     def stop_on_sigterm(_signum: int, _frame: Any) -> None:
         if task_mode:
             try:
-                node.publish_drive(DriveDecision.stop("sigterm"))
                 node.abort_active_task("sigterm")
             except Exception as error:  # noqa: BLE001 - still terminate the process.
                 node.get_logger().error(f"SIGTERM stop publish failed: {error}")
@@ -1072,7 +1197,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             worker_error.append(error)
             if task_mode:
                 try:
-                    node.publish_drive(DriveDecision.stop("inference_error"))
                     node.abort_active_task("inference_error")
                 except Exception:  # noqa: BLE001 - shutdown must still proceed.
                     pass
@@ -1088,7 +1212,6 @@ def run_ros2(args: argparse.Namespace) -> int:
     finally:
         if task_mode:
             try:
-                node.publish_drive(DriveDecision.stop("shutdown"))
                 node.abort_active_task("shutdown")
             except Exception as error:  # noqa: BLE001 - complete shutdown regardless.
                 node.get_logger().error(f"shutdown stop publish failed: {error}")
@@ -1257,6 +1380,25 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             default=_env("SWIN_L_INPUT_RELIABILITY", "best_effort"),
         )
         if mode == "task-drive":
+            live.add_argument(
+                "--apriltag-detections-topic",
+                default=_env("SWIN_L_APRILTAG_DETECTIONS_TOPIC", "/detections"),
+            )
+            live.add_argument(
+                "--apriltag-max-age-sec",
+                type=float,
+                default=_env_float("SWIN_L_APRILTAG_MAX_AGE_SEC", 1.0),
+            )
+            live.add_argument(
+                "--apriltag-confirm-window-sec",
+                type=float,
+                default=_env_float("SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC", 1.0),
+            )
+            live.add_argument(
+                "--apriltag-confirm-min-hits",
+                type=int,
+                default=_env_int("SWIN_L_APRILTAG_CONFIRM_MIN_HITS", 3),
+            )
             live.add_argument(
                 "--sport-request-topic",
                 default=_env("LINE_TRACKING_SPORT_REQUEST_TOPIC", "/api/sport/request"),

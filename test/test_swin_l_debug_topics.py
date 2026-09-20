@@ -11,6 +11,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import swin_l_local_path_debug as debug  # noqa: E402
 
 
+def test_task_drive_apriltag_defaults(monkeypatch):
+    for name in tuple(debug.ENV):
+        if name.startswith("SWIN_L_APRILTAG_"):
+            monkeypatch.delitem(debug.ENV, name)
+    args = debug.parse_args(["task-drive"])
+    assert args.apriltag_detections_topic == "/detections"
+    assert args.apriltag_max_age_sec == 1.0
+    assert args.apriltag_confirm_window_sec == 1.0
+    assert args.apriltag_confirm_min_hits == 3
+    assert not hasattr(args, "drive_enabled")
+    assert not hasattr(args, "calibration_confirmed")
+    assert not hasattr(args, "safety_topic")
+    assert not hasattr(args, "clearance_topic")
+
+
+def test_task_drive_apriltag_environment_and_cli(monkeypatch):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_DETECTIONS_TOPIC", "/tags")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MAX_AGE_SEC", "0.8")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC", "1.5")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_CONFIRM_MIN_HITS", "4")
+    args = debug.parse_args(["task-drive"])
+    assert (
+        args.apriltag_detections_topic,
+        args.apriltag_max_age_sec,
+        args.apriltag_confirm_window_sec,
+        args.apriltag_confirm_min_hits,
+    ) == ("/tags", 0.8, 1.5, 4)
+    args = debug.parse_args(["task-drive", "--apriltag-confirm-min-hits", "5"])
+    assert args.apriltag_confirm_min_hits == 5
+
+
 def test_debug_mode_creates_only_camera_subscription_and_path_metrics_publishers(
     monkeypatch,
 ):
@@ -86,6 +117,7 @@ def test_debug_mode_creates_only_camera_subscription_and_path_metrics_publishers
 
     task_args = debug.parse_args(["task-drive"])
     assert task_args.overlay_topic
+    assert not hasattr(task_args, "safety_topic")
     assert not hasattr(task_args, "clearance_topic")
     assert subscribed_topics == [args.image_topic]
     metrics = json.loads(published_messages[args.metrics_topic][-1].data)

@@ -76,7 +76,10 @@ def test_same_id_three_frames_confirms_only_after_full_window():
     assert confirmed.state == "confirmed"
     assert confirmed.just_confirmed
     assert confirmed.confirmed_id == 7
-    assert tags.observe(ids=[], frame_key=4, now=1.1, task_active=True).state == "confirmed"
+    assert (
+        tags.observe(ids=[], frame_key=4, now=1.1, task_active=True).state
+        == "confirmed"
+    )
 
 
 def test_reset_task_clears_latch_but_preserves_fresh_heartbeat():
@@ -87,6 +90,34 @@ def test_reset_task_clears_latch_but_preserves_fresh_heartbeat():
     tags.reset_task()
     assert tags.snapshot(now=1.0).state == "no_tag"
     assert tags.stream_ready(1.0)
+
+
+def test_begin_task_seeds_fresh_candidate_without_refreshing_heartbeat():
+    tags = monitor()
+    tags.observe(ids=[7], frame_key=9, now=10.0, task_active=False)
+    seeded = tags.begin_task(ids=[7], frame_key=9, now=10.5)
+    assert seeded.stop_now
+    assert seeded.state == "verifying"
+    assert seeded.window_elapsed_sec == 0.0
+    assert dict(seeded.hit_counts) == {7: 1}
+    assert tags.message_age_sec(10.75) == 0.75
+    duplicate = tags.observe(ids=[7], frame_key=9, now=10.6, task_active=True)
+    assert dict(duplicate.hit_counts) == {7: 1}
+    tags.observe(ids=[7], frame_key=10, now=10.7, task_active=True)
+    tags.observe(ids=[7], frame_key=11, now=10.8, task_active=True)
+    assert tags.tick(now=11.49, task_active=True).state == "verifying"
+    assert tags.tick(now=11.5, task_active=True).just_confirmed
+
+
+@pytest.mark.parametrize(("ids", "now"), [([7], 11.01), ([], 10.5)])
+def test_begin_task_does_not_seed_stale_or_empty_cache(ids, now):
+    tags = monitor()
+    tags.observe(ids=[7], frame_key=9, now=10.0, task_active=True)
+    result = tags.begin_task(ids=ids, frame_key=9, now=now)
+    assert result.state == "no_tag"
+    assert not result.stop_now
+    assert not result.hit_counts
+    assert tags.message_age_sec(now) == pytest.approx(now - 10.0)
 
 
 @pytest.mark.parametrize(

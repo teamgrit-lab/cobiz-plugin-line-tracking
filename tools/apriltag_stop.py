@@ -68,8 +68,7 @@ class AprilTagStopMonitor:
             false_positive=false_positive,
             confirmed_id=self._confirmed_id,
             hit_counts=tuple(
-                (tag_id, len(frames))
-                for tag_id, frames in sorted(self._hits.items())
+                (tag_id, len(frames)) for tag_id, frames in sorted(self._hits.items())
             ),
             window_elapsed_sec=elapsed,
         )
@@ -91,6 +90,18 @@ class AprilTagStopMonitor:
     def _clear_window(self) -> None:
         self._window_started_at = None
         self._hits = {}
+
+    def begin_task(
+        self, *, ids: Iterable[int], frame_key: Hashable, now: float
+    ) -> AprilTagDecision:
+        """Seed fresh cached detections without refreshing their heartbeat."""
+
+        self.reset_task()
+        normalized = tuple(sorted({int(tag_id) for tag_id in ids}))
+        if self.stream_ready(now) and normalized:
+            self._start_window(normalized, frame_key, now)
+            return self._decision(now, stop_now=True)
+        return self.snapshot(now=now)
 
     def observe(
         self,

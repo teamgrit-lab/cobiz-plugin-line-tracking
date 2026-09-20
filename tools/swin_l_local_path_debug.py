@@ -13,15 +13,15 @@
 #   "transformers==5.16.1",
 # ]
 # ///
-"""Run Swin-L surface segmentation, local path smoothing and LiDAR gating.
+"""Run Swin-L surface segmentation and local path smoothing.
 
 The ``mcap`` mode replays the supplied rosbag without ROS 2 and writes a
 camera-rate MP4 overlay.  Swin-L is intentionally scheduled at a lower rate;
 the smoothed path is reused between inference frames.  With ``--overlay-mode
-sidewalk``, every camera frame is inferred without path or LiDAR processing.
-The ``ros2`` mode publishes only path, metrics and safety-stop topics. The
+sidewalk``, every camera frame is inferred without path processing.
+The ``ros2`` mode publishes only path and metrics topics. The
 task-driven mode publishes fail-closed, low-speed Unitree Sport Move requests
-only for an accepted Cobiz task after explicit calibration checks.
+only for an accepted Cobiz task with fresh perception inputs.
 Both live modes require a Jetson ROS/PyTorch environment.
 """
 
@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 import json
 import math
 import os
@@ -54,9 +54,6 @@ from best_so_far_runtime import (
 from evaluate_mapillary_temporal import upscale_mask
 from local_path import (
     DEFAULT_ROI_POLYGON,
-    LidarSafetyConfig,
-    LidarSafetyMonitor,
-    LidarSafetyResult,
     LocalPathConfig,
     LocalPathEstimate,
     LocalPathSmoother,
@@ -65,13 +62,11 @@ from local_path import (
     ground_to_pixel,
     normalized_polygon_pixels,
     pixel_to_ground_homography,
-    pointcloud2_xyz,
 )
 from swin_l_drive_control import (
     DriveConfig,
     DriveDecision,
     decide_drive,
-    lidar_frame_matches_base,
 )
 from unitree_sport_api import drive_to_sport_move, populate_move_request
 from cobiz_line_tracking_task import (
@@ -84,8 +79,6 @@ from cobiz_line_tracking_task import (
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
 DEFAULT_OVERLAY_TOPIC = "/line_tracking/swin_l/overlay"
 DEFAULT_LOCAL_PATH_TOPIC = "/line_tracking/swin_l/local_path"
-DEFAULT_SAFETY_STOP_TOPIC = "/line_tracking/swin_l/safety_stop"
-DEFAULT_CLEARANCE_TOPIC = "/line_tracking/swin_l/clearance_m"
 DEFAULT_METRICS_TOPIC = "/line_tracking/swin_l/metrics"
 PATH_MASK_CLASSES = {1: "ROAD", 2: "SIDEWALK"}
 
@@ -195,19 +188,6 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         max_lateral_update_m=args.max_lateral_update_m,
         path_hold_sec=args.path_hold_sec,
         path_duration_sec=args.path_duration_sec,
-    )
-
-
-def _lidar_config_from_args(args: argparse.Namespace) -> LidarSafetyConfig:
-    return LidarSafetyConfig(
-        topic=args.lidar_topic,
-        timeout_sec=args.lidar_timeout_sec,
-        obstacle_distance_m=args.obstacle_distance_m,
-        stop_distance_m=args.stop_distance_m,
-        corridor_half_width_m=args.corridor_half_width_m,
-        z_min_m=args.lidar_z_min_m,
-        z_max_m=args.lidar_z_max_m,
-        min_obstacle_points=args.min_obstacle_points,
     )
 
 
@@ -323,15 +303,15 @@ def render_local_path_overlay(
     selected_mask: np.ndarray,
     estimate: LocalPathEstimate | None,
     path: SmoothedPath | None,
-    safety: LidarSafetyResult,
     config: LocalPathConfig,
     *,
     frame_index: int,
     inference_count: int,
     inference_hz: float,
     path_mask_class: int = 2,
+    status_text: str | None = None,
 ) -> np.ndarray:
-    """Render segmentation, raw/final path and LiDAR state on the camera frame."""
+    """Render segmentation, raw/final path and optional status on the camera frame."""
 
     overlay = frame_bgr.copy()
     mask = upscale_mask(selected_mask, frame_bgr)
@@ -358,16 +338,6 @@ def render_local_path_overlay(
                     overlay, tuple(np.rint(pixel).astype(int)), 4, (255, 255, 255), -1
                 )
 
-    if safety.stop:
-        safety_text = f"LIDAR STOP: {safety.reason}"
-        safety_color = (0, 0, 255)
-    elif safety.lidar_available:
-        clearance = "--" if safety.clearance_m is None else f"{safety.clearance_m:.1f}m"
-        safety_text = f"LIDAR CLEAR: {clearance}"
-        safety_color = (0, 220, 0)
-    else:
-        safety_text = f"LIDAR: {safety.reason}"
-        safety_color = (0, 165, 255)
     lines = (
         f"SWIN-L {PATH_MASK_CLASSES[path_mask_class]} LOCAL PATH",
         f"raw={estimate.confidence:.2f} valid={estimate.valid_ratio:.2f}"
@@ -377,20 +347,19 @@ def render_local_path_overlay(
         if path
         else "path=LOST",
         f"inference={inference_hz:.2f}Hz updates={inference_count} frame={frame_index}",
-        safety_text,
+        *((status_text,) if status_text else ()),
         "white=smoothed path orange=raw | magenta=sidewalk",
     )
     panel_height = 22 * len(lines) + 12
     cv2.rectangle(overlay, (10, 10), (500, 10 + panel_height), (0, 0, 0), -1)
     for row, line in enumerate(lines):
-        color = safety_color if row == 4 else (255, 255, 255)
         cv2.putText(
             overlay,
             line,
             (20, 31 + row * 22),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
-            color,
+            (255, 255, 255),
             1,
             cv2.LINE_AA,
         )
@@ -427,10 +396,8 @@ def run_mcap(args: argparse.Namespace) -> int:
         raise FileNotFoundError(f"MCAP input does not exist: {path}")
     with_local_path = args.overlay_mode == "local-path"
     local_config = _local_path_config_from_args(args) if with_local_path else None
-    lidar_config = _lidar_config_from_args(args) if with_local_path else None
     segmenter = BestSoFarSegmenter(_runtime_config(args))
     smoother = LocalPathSmoother(local_config) if local_config else None
-    lidar = LidarSafetyMonitor(lidar_config) if lidar_config else None
     writer: cv2.VideoWriter | None = None
     inference_period = 1.0 / args.inference_hz
     next_inference = -math.inf
@@ -450,20 +417,9 @@ def run_mcap(args: argparse.Namespace) -> int:
         start_ns = int(summary.statistics.message_start_time + args.start_offset * 1e9)
 
     try:
-        topics = (
-            (args.image_topic, args.lidar_topic)
-            if with_local_path
-            else (args.image_topic,)
-        )
         for schema, channel, message, decoded in _iter_mcap_events(
-            path, topics, start_time_ns=start_ns
+            path, (args.image_topic,), start_time_ns=start_ns
         ):
-            if lidar is not None and channel.topic == args.lidar_topic:
-                try:
-                    lidar.update(pointcloud2_xyz(decoded), message.log_time / 1e9)
-                except ValueError:
-                    continue
-                continue
             if channel.topic != args.image_topic:
                 continue
             if schema.name != "sensor_msgs/msg/Image":
@@ -486,11 +442,7 @@ def run_mcap(args: argparse.Namespace) -> int:
                     fps=args.output_fps,
                 )
             else:
-                assert (
-                    local_config is not None
-                    and smoother is not None
-                    and lidar is not None
-                )
+                assert local_config is not None and smoother is not None
                 estimate = previous_estimate
                 if timestamp_sec >= next_inference:
                     result = segmenter.segment(frame)
@@ -507,13 +459,11 @@ def run_mcap(args: argparse.Namespace) -> int:
                     inference_times.append(result.total_seconds)
                     next_inference = timestamp_sec + inference_period
                 path_now = smoother.current(timestamp_sec)
-                safety = lidar.evaluate(path_now, timestamp_sec)
                 overlay = render_local_path_overlay(
                     frame,
                     previous_mask,
                     estimate,
                     path_now,
-                    safety,
                     local_config,
                     frame_index=frame_count,
                     inference_count=inference_count,
@@ -548,14 +498,12 @@ def run_mcap(args: argparse.Namespace) -> int:
             "inference_policy": "bag_time_rate" if with_local_path else "every_frame",
             "requested_inference_hz": args.inference_hz if with_local_path else None,
             "image_topic": args.image_topic,
-            "lidar_topic": args.lidar_topic if with_local_path else None,
             "frames_written": frame_count,
             "swin_l_updates": inference_count,
             "output": str(args.output.expanduser().resolve()),
             "model": segmenter.metadata(),
             "path_mask_class": args.path_mask_class if with_local_path else None,
             "local_path": asdict(local_config) if local_config else None,
-            "lidar_safety": asdict(lidar_config) if lidar_config else None,
         }
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -654,8 +602,8 @@ def run_ros2(args: argparse.Namespace) -> int:
         from cv_bridge import CvBridge
         from rclpy.node import Node
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-        from sensor_msgs.msg import Image, PointCloud2
-        from std_msgs.msg import Bool, Float32, String
+        from sensor_msgs.msg import Image
+        from std_msgs.msg import String
     except ImportError as error:
         raise RuntimeError(
             "ROS 2 mode requires sourced rclpy/cv_bridge/sensor_msgs/std_msgs "
@@ -671,17 +619,11 @@ def run_ros2(args: argparse.Namespace) -> int:
             raise RuntimeError(
                 "task-drive mode requires the sourced unitree_api ROS interface"
             ) from error
-    # Inspection mode keeps only lightweight path, safety and metrics outputs.
+    # Inspection mode keeps only lightweight path and metrics outputs.
     extended_diagnostics = task_mode
     if task_mode:
         _validate_task_drive_preflight(args)
-    task_armed = _env("SWIN_L_DRIVE_ENABLED", "false").lower() in {
-        "1",
-        "true",
-        "yes",
-    } and _env("SWIN_L_CALIBRATION_CONFIRMED", "false").lower() in {"1", "true", "yes"}
     local_config = _local_path_config_from_args(args)
-    lidar_config = _lidar_config_from_args(args)
     segmenter = BestSoFarSegmenter(_runtime_config(args))
     if task_mode and segmenter.device.type != "cuda":
         raise RuntimeError("Swin-L task-drive mode requires a CUDA model device")
@@ -689,7 +631,6 @@ def run_ros2(args: argparse.Namespace) -> int:
         mask_class: LocalPathSmoother(local_config)
         for mask_class in ((1, 2) if task_mode else (args.path_mask_class,))
     }
-    lidar = LidarSafetyMonitor(lidar_config)
     latest = LatestFrameQueue()
     state_lock = threading.Lock()
     state: dict[str, Any] = {
@@ -704,7 +645,6 @@ def run_ros2(args: argparse.Namespace) -> int:
         "last_inference_at": None,
         "last_image_stamp_ns": None,
         "last_inference_stamp_ns": None,
-        "last_lidar_stamp_ns": None,
     }
     worker_error: list[BaseException] = []
 
@@ -757,9 +697,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.image_subscription = self.create_subscription(
                 Image, args.image_topic, self.on_image, input_qos
             )
-            self.lidar_subscription = self.create_subscription(
-                PointCloud2, args.lidar_topic, self.on_lidar, input_qos
-            )
             self.path_publisher = self.create_publisher(
                 __import__("nav_msgs.msg", fromlist=["Path"]).Path,
                 args.local_path_topic,
@@ -767,14 +704,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             self.overlay_publisher = (
                 self.create_publisher(Image, args.overlay_topic, input_qos)
-                if extended_diagnostics
-                else None
-            )
-            self.safety_publisher = self.create_publisher(
-                Bool, args.safety_stop_topic, output_qos
-            )
-            self.clearance_publisher = (
-                self.create_publisher(Float32, args.clearance_topic, output_qos)
                 if extended_diagnostics
                 else None
             )
@@ -802,11 +731,10 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.timer = self.create_timer(1.0 / args.output_hz, self.publish_state)
             self.started = time.monotonic()
             self.get_logger().info(
-                "Swin-L local path debug started | image=%s lidar=%s profile=%s "
+                "Swin-L local path debug started | image=%s profile=%s "
                 "path_surface=%s inference_hz=%.2f output_hz=%.2f near=%.1fm far=%.1fm"
                 % (
                     args.image_topic,
-                    args.lidar_topic,
                     args.profile,
                     PATH_MASK_CLASSES[args.path_mask_class],
                     args.inference_hz,
@@ -814,10 +742,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                     local_config.near_distance_m,
                     local_config.far_distance_m,
                 )
-            )
-            self.get_logger().warning(
-                "LiDAR x/y are evaluated in the PointCloud2 frame; configure the "
-                "safety thresholds after confirming hesai_lidar-to-base_link alignment"
             )
             if task_mode:
                 self.get_logger().info(
@@ -846,15 +770,13 @@ def run_ros2(args: argparse.Namespace) -> int:
 
         def drive_readiness(
             self, mask_class: int, now: float
-        ) -> tuple[SmoothedPath | None, LidarSafetyResult, DriveDecision]:
+        ) -> tuple[SmoothedPath | None, DriveDecision]:
             with state_lock:
                 last_image_at = state["last_image_at"]
                 last_inference_at = state["last_inference_at"]
                 last_image_stamp_ns = state["last_image_stamp_ns"]
                 last_inference_stamp_ns = state["last_inference_stamp_ns"]
-                last_lidar_stamp_ns = state["last_lidar_stamp_ns"]
             path = smoothers[mask_class].current(now)
-            safety = lidar.evaluate(path, now)
             clock_now_ns = self.get_clock().now().nanoseconds
             camera_age_sec = _effective_source_age_sec(
                 last_image_at, last_image_stamp_ns, now, clock_now_ns
@@ -862,29 +784,20 @@ def run_ros2(args: argparse.Namespace) -> int:
             inference_age_sec = _effective_source_age_sec(
                 last_inference_at, last_inference_stamp_ns, now, clock_now_ns
             )
-            if safety.lidar_available and last_lidar_stamp_ns is not None:
-                safety = replace(
-                    safety,
-                    age_sec=max(
-                        safety.age_sec or 0.0,
-                        (clock_now_ns - last_lidar_stamp_ns) / 1_000_000_000,
-                    ),
-                )
             publisher_count = self.count_publishers(args.sport_request_topic)
             other_publishers = publisher_count > (
                 1 if self.command_publisher is not None else 0
             )
             decision = decide_drive(
                 path,
-                safety,
                 camera_age_sec=camera_age_sec,
                 inference_age_sec=inference_age_sec,
                 other_control_publishers=other_publishers,
-                enabled=True,
-                calibrated=task_armed if task_mode else True,
+                # Task 6 replaces this fail-closed placeholder with live heartbeat state.
+                detections_ready=False,
                 config=self.drive_config,
             )
-            return path, safety, decision
+            return path, decision
 
         def on_task_event(self, message: Any) -> None:
             if self.tasks is None:
@@ -990,48 +903,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.publish_drive(DriveDecision.stop("camera_conversion_error"))
                 self.get_logger().error(f"camera conversion failed: {error}")
 
-        def on_lidar(self, message: Any) -> None:
-            try:
-                source_stamp_ns = _stamp_ns(message.header) if task_mode else None
-                if task_mode and (
-                    not _live_source_stamp(
-                        source_stamp_ns,
-                        self.get_clock().now().nanoseconds,
-                        self.drive_config.max_lidar_age_sec,
-                    )
-                    or (
-                        state["last_lidar_stamp_ns"] is not None
-                        and source_stamp_ns <= state["last_lidar_stamp_ns"]
-                    )
-                ):
-                    lidar.invalidate()
-                    self.publish_drive(DriveDecision.stop("lidar_timestamp_invalid"))
-                    return
-                if task_mode and not lidar_frame_matches_base(
-                    str(message.header.frame_id), args.path_frame_id
-                ):
-                    self.get_logger().warning(
-                        "LiDAR scan is not in base_link; no transform is applied "
-                        "and drive remains stopped"
-                    )
-                    lidar.invalidate()
-                    self.publish_drive(DriveDecision.stop("lidar_frame_invalid"))
-                    return
-                points = pointcloud2_xyz(message)
-                if task_mode and not np.any(np.all(np.isfinite(points), axis=1)):
-                    lidar.invalidate()
-                    self.publish_drive(DriveDecision.stop("lidar_empty_scan"))
-                    return
-                lidar.update(points, time.monotonic())
-                if task_mode:
-                    with state_lock:
-                        state["last_lidar_stamp_ns"] = source_stamp_ns
-            except Exception as error:  # noqa: BLE001 - ignore malformed scan.
-                if task_mode:
-                    lidar.invalidate()
-                    self.publish_drive(DriveDecision.stop("lidar_decode_error"))
-                self.get_logger().warning(f"LiDAR decode failed: {error}")
-
         def publish_state(self) -> None:
             try:
                 self._publish_state()
@@ -1069,7 +940,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             now = time.monotonic()
             drive_decision = None
             if self.drive_config is not None:
-                path, safety, ready_decision = self.drive_readiness(mask_class, now)
+                path, ready_decision = self.drive_readiness(mask_class, now)
                 self.last_ready_reason = ready_decision.reason
                 startup_hold = (
                     task_active is not None
@@ -1107,16 +978,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.publish_drive(drive_decision)
             else:
                 path = smoothers[mask_class].current(now)
-                safety = lidar.evaluate(path, now)
-            self.safety_publisher.publish(Bool(data=bool(safety.stop)))
-            if self.clearance_publisher is not None:
-                self.clearance_publisher.publish(
-                    Float32(data=float(safety.clearance_m or 0.0))
-                )
             metrics = {
                 "profile": args.profile,
                 "camera_topic": args.image_topic,
-                "lidar_topic": args.lidar_topic,
                 "path_mask_class": mask_class,
                 "path_surface": PATH_MASK_CLASSES[mask_class],
                 "path_tracked": path is not None,
@@ -1125,7 +989,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_duration_sec": local_config.path_duration_sec,
                 "near_distance_m": local_config.near_distance_m,
                 "far_distance_m": local_config.far_distance_m,
-                "lidar": asdict(safety),
                 "queue_overwritten": latest.overwritten,
                 "inference_count": inference_count,
                 "drive_reason": drive_decision.reason if drive_decision else None,
@@ -1146,12 +1009,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                 selected,
                 estimate,
                 path,
-                safety,
                 local_config,
                 frame_index=sequence,
                 inference_count=inference_count,
                 inference_hz=inference_hz,
                 path_mask_class=mask_class,
+                status_text=drive_decision.reason if drive_decision else None,
             )
             overlay_message = self.bridge.cv2_to_imgmsg(overlay, encoding="bgr8")
             overlay_message.header = header
@@ -1265,9 +1128,6 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--image-topic", default=_env("SWIN_L_IMAGE_TOPIC", DEFAULT_IMAGE_TOPIC)
     )
     parser.add_argument(
-        "--lidar-topic", default=_env("SWIN_L_LIDAR_TOPIC", LidarSafetyConfig.topic)
-    )
-    parser.add_argument(
         "--path-mask-class",
         type=int,
         choices=tuple(PATH_MASK_CLASSES),
@@ -1339,37 +1199,6 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--output-fps", type=float, default=_env_float("SWIN_L_OUTPUT_FPS", 20.0)
     )
     parser.add_argument(
-        "--obstacle-distance-m",
-        type=float,
-        default=_env_float("SWIN_L_OBSTACLE_DISTANCE_M", 8.0),
-    )
-    parser.add_argument(
-        "--stop-distance-m",
-        type=float,
-        default=_env_float("SWIN_L_STOP_DISTANCE_M", 3.0),
-    )
-    parser.add_argument(
-        "--corridor-half-width-m",
-        type=float,
-        default=_env_float("SWIN_L_CORRIDOR_HALF_WIDTH_M", 0.55),
-    )
-    parser.add_argument(
-        "--lidar-timeout-sec",
-        type=float,
-        default=_env_float("SWIN_L_LIDAR_TIMEOUT_SEC", 0.35),
-    )
-    parser.add_argument(
-        "--lidar-z-min-m", type=float, default=_env_float("SWIN_L_LIDAR_Z_MIN_M", -0.40)
-    )
-    parser.add_argument(
-        "--lidar-z-max-m", type=float, default=_env_float("SWIN_L_LIDAR_Z_MAX_M", 0.80)
-    )
-    parser.add_argument(
-        "--min-obstacle-points",
-        type=int,
-        default=_env_int("SWIN_L_MIN_OBSTACLE_POINTS", 3),
-    )
-    parser.add_argument(
         "--roi-polygon",
         type=float,
         nargs=8,
@@ -1392,7 +1221,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--overlay-mode",
         choices=("sidewalk", "local-path"),
         default="local-path",
-        help="sidewalk infers every camera frame; local-path also smooths paths and checks LiDAR",
+        help="sidewalk infers every camera frame; local-path also smooths paths",
     )
     for mode, help_text in (
         ("ros2", "publish live ROS 2 path and debug topics without control"),
@@ -1412,15 +1241,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "--local-path-topic",
             default=_env("SWIN_L_LOCAL_PATH_TOPIC", DEFAULT_LOCAL_PATH_TOPIC),
         )
-        live.add_argument(
-            "--safety-stop-topic",
-            default=_env("SWIN_L_SAFETY_STOP_TOPIC", DEFAULT_SAFETY_STOP_TOPIC),
-        )
-        if mode != "ros2":
-            live.add_argument(
-                "--clearance-topic",
-                default=_env("SWIN_L_CLEARANCE_TOPIC", DEFAULT_CLEARANCE_TOPIC),
-            )
         live.add_argument(
             "--metrics-topic",
             default=_env("SWIN_L_METRICS_TOPIC", DEFAULT_METRICS_TOPIC),

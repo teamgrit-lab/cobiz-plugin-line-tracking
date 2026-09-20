@@ -1,4 +1,4 @@
-"""Sidewalk-center local path extraction and LiDAR safety helpers.
+"""Sidewalk-center local path extraction and smoothing helpers.
 
 The Swin-L runtime produces a Mapillary surface label map.  This module turns
 the Sidewalk part of that map into a short path in the robot convention
@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import threading
-from typing import Any, Iterable
+from typing import Iterable
 
 import cv2
 import numpy as np
@@ -116,47 +116,6 @@ class SmoothedPath:
     confidence: float
     age_sec: float
     source: str
-
-
-@dataclass(frozen=True)
-class LidarSafetyConfig:
-    """Conservative point-cloud obstacle gate for the local path."""
-
-    topic: str = "/unitree/slam_lidar/points2"
-    timeout_sec: float = 0.35
-    obstacle_distance_m: float = 8.0
-    stop_distance_m: float = 3.0
-    corridor_half_width_m: float = 0.55
-    z_min_m: float = -0.40
-    z_max_m: float = 0.80
-    min_obstacle_points: int = 3
-
-    def validate(self) -> None:
-        if self.timeout_sec <= 0.0:
-            raise ValueError("LiDAR timeout must be positive")
-        if self.obstacle_distance_m <= 0.0:
-            raise ValueError("obstacle_distance_m must be positive")
-        if not 0.0 < self.stop_distance_m <= self.obstacle_distance_m:
-            raise ValueError("stop_distance_m must be within obstacle_distance_m")
-        if self.corridor_half_width_m <= 0.0:
-            raise ValueError("corridor_half_width_m must be positive")
-        if self.z_min_m >= self.z_max_m:
-            raise ValueError("LiDAR z bounds are invalid")
-        if self.min_obstacle_points < 1:
-            raise ValueError("min_obstacle_points must be positive")
-
-
-@dataclass(frozen=True)
-class LidarSafetyResult:
-    """LiDAR gate result for a current path."""
-
-    stop: bool
-    lidar_available: bool
-    obstacle_in_path: bool
-    obstacle_count: int
-    clearance_m: float | None
-    age_sec: float | None
-    reason: str
 
 
 def normalized_polygon_pixels(
@@ -414,148 +373,4 @@ class LocalPathSmoother:
             confidence=float(self._confidence),
             age_sec=float(age),
             source="smoothed_hold" if age > 0.02 else "smoothed_update",
-        )
-
-
-def pointcloud2_xyz(message: Any) -> np.ndarray:
-    """Decode x/y/z from a ROS ``PointCloud2`` with arbitrary point padding."""
-
-    width = int(message.width)
-    height = int(message.height)
-    point_step = int(message.point_step)
-    row_step = int(message.row_step)
-    if width <= 0 or height <= 0 or point_step < 12 or row_step < width * point_step:
-        raise ValueError("invalid PointCloud2 dimensions or strides")
-    fields = {str(field.name): int(field.offset) for field in message.fields}
-    if any(name not in fields for name in ("x", "y", "z")):
-        raise ValueError("PointCloud2 does not contain x/y/z fields")
-    offsets = [fields["x"], fields["y"], fields["z"]]
-    if any(offset < 0 or offset + 4 > point_step for offset in offsets):
-        raise ValueError("PointCloud2 x/y/z fields exceed point_step")
-    endian = ">" if bool(message.is_bigendian) else "<"
-    dtype = np.dtype(
-        {
-            "names": ["x", "y", "z"],
-            "formats": [f"{endian}f4"] * 3,
-            "offsets": offsets,
-            "itemsize": point_step,
-        }
-    )
-    raw = memoryview(bytes(message.data))
-    required = row_step * height
-    if len(raw) < required:
-        raise ValueError("PointCloud2 data is shorter than row_step * height")
-    rows = []
-    for row in range(height):
-        row_bytes = raw[row * row_step:row * row_step + width * point_step]
-        rows.append(np.frombuffer(row_bytes, dtype=dtype, count=width))
-    values = np.concatenate(rows) if len(rows) > 1 else rows[0]
-    return np.column_stack((values["x"], values["y"], values["z"])).astype(
-        np.float32, copy=False
-    )
-
-
-class LidarSafetyMonitor:
-    """Evaluate a point cloud against the current path corridor."""
-
-    def __init__(self, config: LidarSafetyConfig) -> None:
-        config.validate()
-        self.config = config
-        self._lock = threading.Lock()
-        self._points: np.ndarray | None = None
-        self._timestamp: float | None = None
-
-    def update(self, points_xyz: np.ndarray, timestamp_sec: float) -> None:
-        points = np.asarray(points_xyz, dtype=np.float32)
-        if points.ndim != 2 or points.shape[1] != 3:
-            raise ValueError("points_xyz must have shape [N, 3]")
-        finite = np.all(np.isfinite(points), axis=1)
-        with self._lock:
-            self._points = np.ascontiguousarray(points[finite])
-            self._timestamp = float(timestamp_sec)
-
-    def invalidate(self) -> None:
-        """Immediately fail closed after a malformed or wrong-frame scan."""
-
-        with self._lock:
-            self._points = None
-            self._timestamp = None
-
-    def evaluate(
-        self, path: SmoothedPath | None, timestamp_sec: float
-    ) -> LidarSafetyResult:
-        with self._lock:
-            scan_timestamp = self._timestamp
-            scan_points = None if self._points is None else self._points.copy()
-        if scan_timestamp is None or scan_points is None:
-            return LidarSafetyResult(
-                stop=True,
-                lidar_available=False,
-                obstacle_in_path=False,
-                obstacle_count=0,
-                clearance_m=None,
-                age_sec=None,
-                reason="lidar_unavailable",
-            )
-        age = max(float(timestamp_sec - scan_timestamp), 0.0)
-        if age > self.config.timeout_sec:
-            return LidarSafetyResult(
-                stop=True,
-                lidar_available=False,
-                obstacle_in_path=False,
-                obstacle_count=0,
-                clearance_m=None,
-                age_sec=age,
-                reason="lidar_timeout",
-            )
-        if path is None:
-            return LidarSafetyResult(
-                stop=False,
-                lidar_available=True,
-                obstacle_in_path=False,
-                obstacle_count=0,
-                clearance_m=None,
-                age_sec=age,
-                reason="path_unavailable",
-            )
-
-        points = scan_points
-        in_bounds = np.logical_and.reduce(
-            (
-                points[:, 0] > 0.05,
-                points[:, 0] <= self.config.obstacle_distance_m,
-                points[:, 2] >= self.config.z_min_m,
-                points[:, 2] <= self.config.z_max_m,
-            )
-        )
-        candidates = points[in_bounds]
-        if candidates.size == 0:
-            return LidarSafetyResult(
-                stop=False,
-                lidar_available=True,
-                obstacle_in_path=False,
-                obstacle_count=0,
-                clearance_m=None,
-                age_sec=age,
-                reason="clear",
-            )
-        path_y = np.interp(candidates[:, 0], path.points_xy[:, 0], path.points_xy[:, 1])
-        on_path = np.abs(candidates[:, 1] - path_y) <= self.config.corridor_half_width_m
-        obstacles = candidates[on_path]
-        clearance = float(np.min(obstacles[:, 0])) if obstacles.size else None
-        enough_points = obstacles.shape[0] >= self.config.min_obstacle_points
-        has_close_obstacle = (
-            clearance is not None and clearance <= self.config.stop_distance_m
-        )
-        stop = bool(enough_points and has_close_obstacle)
-        return LidarSafetyResult(
-            stop=stop,
-            lidar_available=True,
-            obstacle_in_path=bool(obstacles.size),
-            obstacle_count=int(obstacles.shape[0]),
-            clearance_m=clearance,
-            age_sec=age,
-            reason="obstacle_in_path"
-            if stop
-            else ("obstacle_far" if obstacles.size else "clear"),
         )

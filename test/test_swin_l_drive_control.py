@@ -8,11 +8,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from local_path import LidarSafetyResult, SmoothedPath  # noqa: E402
+from local_path import SmoothedPath  # noqa: E402
 from swin_l_drive_control import (  # noqa: E402
     DriveConfig,
     decide_drive,
-    lidar_frame_matches_base,
 )
 import swin_l_local_path_debug as debug  # noqa: E402
 
@@ -28,32 +27,19 @@ def _path(*, lateral: float = 0.2, confidence: float = 0.9, age: float = 0.1):
     )
 
 
-def _safety(*, stop: bool = False, available: bool = True, clearance=None, age=0.1):
-    return LidarSafetyResult(
-        stop=stop,
-        lidar_available=available,
-        obstacle_in_path=clearance is not None,
-        obstacle_count=1 if clearance is not None else 0,
-        clearance_m=clearance,
-        age_sec=age if available else None,
-        reason="obstacle_in_path" if stop else "clear",
-    )
-
-
-def _decide(path=None, safety=None, **overrides):
+def _decide(path=None, **overrides):
     arguments = dict(
         camera_age_sec=0.1,
         inference_age_sec=0.1,
         other_control_publishers=False,
-        enabled=True,
-        calibrated=True,
+        detections_ready=True,
         config=DriveConfig(),
     )
     arguments.update(overrides)
-    return decide_drive(path or _path(), safety or _safety(), **arguments)
+    return decide_drive(path or _path(), **arguments)
 
 
-def test_calibrated_fresh_path_generates_capped_a2_command():
+def test_fresh_path_generates_capped_a2_command():
     command = _decide()
     assert command.reason == "tracking"
     assert command.vx == pytest.approx(0.10)
@@ -71,8 +57,7 @@ def test_right_path_turns_right_without_lateral_velocity():
 @pytest.mark.parametrize(
     "override,reason",
     [
-        ({"enabled": False}, "drive_not_armed"),
-        ({"calibrated": False}, "drive_not_armed"),
+        ({"detections_ready": False}, "apriltag_detections_stale"),
         ({"other_control_publishers": True}, "multiple_control_publishers"),
         ({"camera_age_sec": None}, "camera_stale"),
         ({"camera_age_sec": 0.6}, "camera_stale"),
@@ -80,16 +65,10 @@ def test_right_path_turns_right_without_lateral_velocity():
         ({"path": _path(age=0.6)}, "path_stale"),
         ({"path": _path(confidence=0.5)}, "path_low_confidence"),
         ({"path": _path(lateral=1.0)}, "path_lateral_target_large"),
-        ({"safety": _safety(stop=True)}, "lidar_obstacle_in_path"),
-        ({"safety": _safety(available=False)}, "lidar_unavailable"),
-        ({"safety": _safety(age=0.5)}, "lidar_stale"),
-        ({"safety": _safety(clearance=2.0)}, "lidar_clearance_low"),
     ],
 )
 def test_unsafe_inputs_return_zero_velocity(override, reason):
-    path = override.pop("path", _path())
-    safety = override.pop("safety", _safety())
-    command = _decide(path, safety, **override)
+    command = _decide(**override)
     assert command.reason == reason
     assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
 
@@ -98,12 +77,10 @@ def test_missing_or_malformed_path_stops():
     assert (
         decide_drive(
             None,
-            _safety(),
             camera_age_sec=0.1,
             inference_age_sec=0.1,
             other_control_publishers=False,
-            enabled=True,
-            calibrated=True,
+            detections_ready=True,
             config=DriveConfig(),
         ).reason
         == "path_unavailable"
@@ -117,11 +94,10 @@ def test_missing_or_malformed_path_stops():
     assert _decide(malformed).reason == "path_geometry_invalid"
 
 
-def test_drive_rejects_untransformed_lidar_frames():
-    assert lidar_frame_matches_base("base_link", "base_link")
-    assert lidar_frame_matches_base("/base_link", "base_link")
-    assert not lidar_frame_matches_base("hesai_lidar", "base_link")
-    assert not lidar_frame_matches_base("base_link", "map")
+def test_competing_publishers_take_precedence_over_detection_readiness():
+    command = _decide(other_control_publishers=True, detections_ready=False)
+    assert command.reason == "multiple_control_publishers"
+    assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
 
 
 def test_task_drive_preflight_requires_pinned_model():

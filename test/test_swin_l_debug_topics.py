@@ -1,6 +1,7 @@
 """Keep the inspection-only ROS mode limited to lightweight output topics."""
 
 from pathlib import Path
+import json
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -10,19 +11,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import swin_l_local_path_debug as debug  # noqa: E402
 
 
-def test_debug_mode_creates_only_path_metrics_and_safety_publishers(monkeypatch):
+def test_debug_mode_creates_only_camera_subscription_and_path_metrics_publishers(
+    monkeypatch,
+):
     published_topics = []
+    subscribed_topics = []
+    published_messages = {}
 
     class FakeNode:
         def __init__(self, _name):
             pass
 
-        def create_subscription(self, *_args):
+        def create_subscription(self, _type, topic, _callback, _qos):
+            subscribed_topics.append(topic)
             return object()
 
         def create_publisher(self, _type, topic, _qos):
             published_topics.append(topic)
-            return SimpleNamespace(publish=lambda _message: None)
+            messages = published_messages.setdefault(topic, [])
+            return SimpleNamespace(publish=messages.append)
 
         def create_timer(self, *_args):
             return object()
@@ -38,7 +45,7 @@ def test_debug_mode_creates_only_path_metrics_and_safety_publishers(monkeypatch)
     rclpy = ModuleType("rclpy")
     rclpy.init = lambda **_kwargs: None
     rclpy.ok = lambda: False
-    rclpy.spin = lambda _node: None
+    rclpy.spin = lambda node: node._publish_state()
     rclpy.shutdown = lambda: None
     node_module = ModuleType("rclpy.node")
     node_module.Node = FakeNode
@@ -52,11 +59,8 @@ def test_debug_mode_creates_only_path_metrics_and_safety_publishers(monkeypatch)
     cv_bridge.CvBridge = object
     sensor_msgs = ModuleType("sensor_msgs.msg")
     sensor_msgs.Image = type("Image", (), {})
-    sensor_msgs.PointCloud2 = type("PointCloud2", (), {})
     std_msgs = ModuleType("std_msgs.msg")
-    std_msgs.Bool = type("Bool", (), {})
-    std_msgs.Float32 = type("Float32", (), {})
-    std_msgs.String = type("String", (), {})
+    std_msgs.String = lambda **kwargs: SimpleNamespace(**kwargs)
     nav_msgs = ModuleType("nav_msgs.msg")
     nav_msgs.Path = type("Path", (), {})
     for name, module in (
@@ -77,10 +81,14 @@ def test_debug_mode_creates_only_path_metrics_and_safety_publishers(monkeypatch)
     assert debug.run_ros2(args) == 0
     assert published_topics == [
         args.local_path_topic,
-        args.safety_stop_topic,
         args.metrics_topic,
     ]
 
     task_args = debug.parse_args(["task-drive"])
     assert task_args.overlay_topic
-    assert task_args.clearance_topic
+    assert not hasattr(task_args, "clearance_topic")
+    assert subscribed_topics == [args.image_topic]
+    metrics = json.loads(published_messages[args.metrics_topic][-1].data)
+    assert metrics["path_tracked"] is False
+    assert "lidar" not in metrics
+    assert "lidar_topic" not in metrics

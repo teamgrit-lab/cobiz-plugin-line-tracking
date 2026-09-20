@@ -1,7 +1,7 @@
 """Fail-closed, low-speed drive decisions from a calibrated Swin-L local path.
 
 This module has no ROS dependency so the control and stop gates can be tested
-without a robot. It does not establish camera or LiDAR extrinsic calibration.
+without a robot. It does not establish camera extrinsic calibration.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import math
 
 import numpy as np
 
-from local_path import LidarSafetyResult, SmoothedPath
+from local_path import SmoothedPath
 
 
 @dataclass(frozen=True)
@@ -25,8 +25,6 @@ class DriveConfig:
     max_camera_age_sec: float = 0.50
     max_inference_age_sec: float = 0.50
     max_path_age_sec: float = 0.45
-    max_lidar_age_sec: float = 0.35
-    min_clearance_m: float = 3.0
 
     def validate(self) -> None:
         positive = (
@@ -38,8 +36,6 @@ class DriveConfig:
             self.max_camera_age_sec,
             self.max_inference_age_sec,
             self.max_path_age_sec,
-            self.max_lidar_age_sec,
-            self.min_clearance_m,
         )
         if not all(math.isfinite(value) and value > 0.0 for value in positive):
             raise ValueError("drive limits must be finite and positive")
@@ -59,30 +55,22 @@ class DriveDecision:
         return cls(0.0, 0.0, 0.0, reason)
 
 
-def lidar_frame_matches_base(message_frame: str, path_frame: str) -> bool:
-    """No TF is applied here; only already-transformed base-frame scans are safe."""
-
-    return message_frame.strip().lstrip("/") == path_frame == "base_link"
-
-
 def decide_drive(
     path: SmoothedPath | None,
-    safety: LidarSafetyResult,
     *,
     camera_age_sec: float | None,
     inference_age_sec: float | None,
+    detections_ready: bool,
     other_control_publishers: bool,
-    enabled: bool,
-    calibrated: bool,
     config: DriveConfig,
 ) -> DriveDecision:
-    """Only permit low-speed motion with fresh, plausible, obstacle-free inputs."""
+    """Only permit low-speed motion with fresh detections and plausible inputs."""
 
     config.validate()
-    if not enabled or not calibrated:
-        return DriveDecision.stop("drive_not_armed")
     if other_control_publishers:
         return DriveDecision.stop("multiple_control_publishers")
+    if not detections_ready:
+        return DriveDecision.stop("apriltag_detections_stale")
     for name, age, maximum in (
         ("camera", camera_age_sec, config.max_camera_age_sec),
         ("inference", inference_age_sec, config.max_inference_age_sec),
@@ -99,23 +87,6 @@ def decide_drive(
         return DriveDecision.stop("path_stale")
     if not math.isfinite(path.confidence) or path.confidence < config.min_confidence:
         return DriveDecision.stop("path_low_confidence")
-    if not safety.lidar_available:
-        return DriveDecision.stop("lidar_unavailable")
-    if (
-        safety.age_sec is None
-        or not math.isfinite(safety.age_sec)
-        or safety.age_sec < 0.0
-        or safety.age_sec > config.max_lidar_age_sec
-    ):
-        return DriveDecision.stop("lidar_stale")
-    if safety.stop:
-        return DriveDecision.stop(f"lidar_{safety.reason}")
-    if safety.clearance_m is not None and (
-        not math.isfinite(safety.clearance_m)
-        or safety.clearance_m <= config.min_clearance_m
-    ):
-        return DriveDecision.stop("lidar_clearance_low")
-
     points = np.asarray(path.points_xy, dtype=np.float64)
     if (
         points.ndim != 2

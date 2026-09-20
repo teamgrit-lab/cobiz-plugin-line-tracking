@@ -8,12 +8,12 @@ import time
 from types import ModuleType, SimpleNamespace
 
 import pytest
+import numpy as np
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import swin_l_local_path_debug as debug  # noqa: E402
-from local_path import LidarSafetyResult  # noqa: E402
 from swin_l_drive_control import DriveDecision  # noqa: E402
 
 
@@ -71,7 +71,9 @@ def test_task_control_rejects_external_publisher_before_readiness(
 
         def get_clock(self):
             return SimpleNamespace(
-                now=lambda: SimpleNamespace(to_msg=lambda: SimpleNamespace())
+                now=lambda: SimpleNamespace(
+                    nanoseconds=100_000_000_000, to_msg=lambda: SimpleNamespace()
+                )
             )
 
         def destroy_publisher(self, _publisher):
@@ -86,7 +88,22 @@ def test_task_control_rejects_external_publisher_before_readiness(
     rclpy.shutdown = lambda: None
 
     def spin(node):
-        safety = LidarSafetyResult(False, True, False, 0, None, 0.0, "clear")
+        if not preexisting_control_publishers:
+            _, decision = node.drive_readiness(1, time.monotonic())
+            assert decision.reason == "apriltag_detections_stale"
+            assert (decision.vx, decision.vy, decision.yaw_rate) == (0.0, 0.0, 0.0)
+            camera = Message()
+            camera.header.stamp = SimpleNamespace(sec=100, nanosec=0)
+            node.on_image(camera)
+            deadline = time.monotonic() + 2.0
+            while not published["/line_tracking/swin_l/overlay"]:
+                node._publish_state()
+                assert time.monotonic() < deadline, (
+                    "inference did not publish an overlay"
+                )
+                time.sleep(0.001)
+            overlay = published["/line_tracking/swin_l/overlay"][-1]
+            assert overlay.frame.shape == (360, 640, 3)
         checked_classes = []
 
         def readiness(mask_class, _now):
@@ -96,7 +113,7 @@ def test_task_control_rejects_external_publisher_before_readiness(
                 if mask_class == 1
                 else DriveDecision.stop("path_unavailable")
             )
-            return None, safety, decision
+            return None, decision
 
         node.drive_readiness = readiness
         node.on_task_event(
@@ -159,9 +176,16 @@ def test_task_control_rejects_external_publisher_before_readiness(
             ReliabilityPolicy=SimpleNamespace(RELIABLE=reliable, BEST_EFFORT=object()),
             QoSProfile=FakeQoS,
         ),
-        "cv_bridge": SimpleNamespace(CvBridge=object),
-        "sensor_msgs.msg": SimpleNamespace(Image=Message, PointCloud2=Message),
-        "std_msgs.msg": SimpleNamespace(Bool=Message, Float32=Message, String=Message),
+        "cv_bridge": SimpleNamespace(
+            CvBridge=lambda: SimpleNamespace(
+                imgmsg_to_cv2=lambda *_args, **_kwargs: np.zeros(
+                    (360, 640, 3), np.uint8
+                ),
+                cv2_to_imgmsg=lambda frame, **_kwargs: SimpleNamespace(frame=frame),
+            )
+        ),
+        "sensor_msgs.msg": SimpleNamespace(Image=Message),
+        "std_msgs.msg": SimpleNamespace(String=Message),
         "nav_msgs.msg": SimpleNamespace(Path=Message),
         "unitree_api.msg": SimpleNamespace(Request=Request),
     }
@@ -170,8 +194,14 @@ def test_task_control_rejects_external_publisher_before_readiness(
     monkeypatch.setattr(
         debug,
         "BestSoFarSegmenter",
-        lambda _config: SimpleNamespace(device=SimpleNamespace(type="cuda")),
+        lambda _config: SimpleNamespace(
+            device=SimpleNamespace(type="cuda"),
+            segment=lambda _frame: SimpleNamespace(
+                selected_mask=np.zeros((360, 640), np.uint8)
+            ),
+        ),
     )
+    monkeypatch.setattr(debug, "_path_message", lambda *_args: Message())
     monkeypatch.setitem(debug.ENV, "SWIN_L_DRIVE_ENABLED", str(armed).lower())
     monkeypatch.setitem(debug.ENV, "SWIN_L_CALIBRATION_CONFIRMED", str(armed).lower())
     monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", "2")

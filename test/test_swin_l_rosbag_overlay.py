@@ -45,8 +45,6 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
     def events(path, topics, start_time_ns=0):
         assert path == source
         expected_topics = (cli.DEFAULT_IMAGE_TOPIC,)
-        if mode == "local-path":
-            expected_topics += (cli.DEFAULT_LIDAR_TOPIC,)
         assert topics == expected_topics
         camera = SimpleNamespace(
             encoding="rgb8",
@@ -71,10 +69,9 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
     if mode == "sidewalk":
 
         def no_path_config(_):
-            pytest.fail("segmentation-only mode must not initialize path or LiDAR")
+            pytest.fail("segmentation-only mode must not initialize path")
 
         monkeypatch.setattr(debug, "_local_path_config_from_args", no_path_config)
-        monkeypatch.setattr(debug, "_lidar_config_from_args", no_path_config)
 
     assert (
         cli.main(
@@ -100,6 +97,8 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
     assert (config.evaluation_height, config.evaluation_width) == (360, 640)
     assert len(calls) == updates
     report = json.loads((output / f"{mode}-report.json").read_text())
+    assert "lidar_topic" not in report
+    assert "lidar_safety" not in report
     assert report["frames_written"] == 12
     assert report["swin_l_updates"] == updates
     assert (report["local_path"] is not None) == (mode == "local-path")
@@ -136,3 +135,42 @@ def test_default_outputs_create_distinct_host_mounted_directories(
     assert first_video.parent.parent == tmp_path / "rosbag-results" / "swin-l-tests"
     assert first_video.parent.is_dir()
     assert second_video.parent.is_dir()
+
+
+def test_replay_arguments_are_camera_only(tmp_path):
+    source = tmp_path / "camera.mcap"
+    source.touch()
+    args = cli.parse_args(["local-path", "--input", str(source)])
+    forwarded = cli.build_debug_arguments(
+        args, tmp_path / "overlay.mp4", tmp_path / "report.json"
+    )
+    assert "--lidar-topic" not in forwarded
+    assert not hasattr(args, "lidar_topic")
+
+
+def test_active_parsers_expose_no_lidar_arguments():
+    for argv in (["ros2"], ["task-drive"]):
+        args = debug.parse_args(argv)
+        assert not any("lidar" in name.lower() for name in vars(args))
+        assert not hasattr(args, "safety_stop_topic")
+        assert not hasattr(args, "clearance_topic")
+
+
+def test_overlay_renders_optional_status_without_safety_object():
+    frame = np.zeros((360, 640, 3), np.uint8)
+    mask = np.zeros((360, 640), np.uint8)
+    kwargs = dict(frame_index=1, inference_count=0, inference_hz=0.0)
+    plain = debug.render_local_path_overlay(
+        frame, mask, None, None, debug.LocalPathConfig(), **kwargs
+    )
+    status = debug.render_local_path_overlay(
+        frame,
+        mask,
+        None,
+        None,
+        debug.LocalPathConfig(),
+        status_text="AprilTag detections stale",
+        **kwargs,
+    )
+    assert plain.shape == status.shape == frame.shape
+    assert np.any(plain != status)

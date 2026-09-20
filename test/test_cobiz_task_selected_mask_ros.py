@@ -7,6 +7,8 @@ import sys
 import time
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
@@ -15,7 +17,13 @@ from local_path import LidarSafetyResult  # noqa: E402
 from swin_l_drive_control import DriveDecision  # noqa: E402
 
 
-def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
+@pytest.mark.parametrize(
+    ("preexisting_control_publishers", "armed", "expected_state"),
+    [(0, True, "TASK_STARTED"), (1, False, "TASK_REJECTED")],
+)
+def test_task_control_rejects_external_publisher_before_readiness(
+    monkeypatch, preexisting_control_publishers, armed, expected_state
+):
     published: dict[str, list] = {}
     publisher_qos = {}
 
@@ -50,6 +58,10 @@ def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
             messages = published.setdefault(topic, [])
             publisher_qos[topic] = _qos
             return SimpleNamespace(publish=messages.append)
+
+        def count_publishers(self, topic):
+            assert topic == "/api/sport/request"
+            return preexisting_control_publishers
 
         def create_timer(self, *_args):
             return object()
@@ -99,7 +111,14 @@ def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
                 )
             )
         )
-        assert json.loads(published["/task_state"][-1].data)["type"] == "TASK_STARTED"
+        state = json.loads(published["/task_state"][-1].data)
+        assert state["type"] == expected_state
+        if preexisting_control_publishers:
+            assert state["reason"] == "multiple_control_publishers"
+            assert node.tasks.active is None
+            assert node.command_publisher is None
+            assert checked_classes == []
+            return
         assert node.tasks.active.selected_mask == 1
         node.tasks.active = replace(node.tasks.active, started_at=time.monotonic() - 3)
         node.publish_state()
@@ -129,7 +148,7 @@ def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
             "y": 0.0,
             "z": 0.0,
         }
-        assert checked_classes == [1, 1, 2]
+        assert checked_classes == [1, 2]
 
     rclpy.spin = spin
     modules = {
@@ -153,8 +172,8 @@ def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
         "BestSoFarSegmenter",
         lambda _config: SimpleNamespace(device=SimpleNamespace(type="cuda")),
     )
-    monkeypatch.setitem(debug.ENV, "SWIN_L_DRIVE_ENABLED", "true")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_CALIBRATION_CONFIRMED", "true")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_DRIVE_ENABLED", str(armed).lower())
+    monkeypatch.setitem(debug.ENV, "SWIN_L_CALIBRATION_CONFIRMED", str(armed).lower())
     monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", "2")
 
     assert debug.run_ros2(debug.parse_args(["task-drive"])) == 0

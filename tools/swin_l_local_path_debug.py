@@ -78,7 +78,6 @@ from cobiz_line_tracking_task import (
     ActiveTask,
     LineTrackingTasks,
     TaskPolicy,
-    requested_selected_mask,
 )
 
 
@@ -903,16 +902,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 and event.get("action_name") == "LINE_TRACKING"
                 and self.tasks.active is None
             ):
-                try:
-                    mask_class = requested_selected_mask(
-                        event, self.tasks.policy.default_selected_mask
-                    )
-                except ValueError:
-                    pass  # The task lifecycle reports the precise payload error.
-                else:
-                    drive_reason = self.drive_readiness(mask_class, now)[2].reason
-                    if drive_reason == "multiple_control_publishers":
-                        rejection_reason = drive_reason
+                if self.count_publishers(args.sport_request_topic) > 0:
+                    rejection_reason = "multiple_control_publishers"
             if self.command_publisher is not None and self.tasks.active is None:
                 rejection_reason = "control_release_pending"
             previous_task = self.tasks.active

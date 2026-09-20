@@ -68,7 +68,7 @@ from swin_l_drive_control import (
     DriveDecision,
     decide_drive,
 )
-from apriltag_stop import AprilTagPolicy, AprilTagStopMonitor
+from apriltag_stop import AprilTagDecision, AprilTagPolicy, AprilTagStopMonitor
 from unitree_sport_api import (
     drive_to_sport_move,
     populate_move_request,
@@ -699,6 +699,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.apriltag_callback_sequence = 0
             self.latest_apriltag_ids: tuple[int, ...] = ()
             self.latest_apriltag_frame_key = 0
+            self.terminal_apriltag_status: AprilTagDecision | None = None
             if self.drive_config is not None:
                 self.drive_config.validate()
             reliability = (
@@ -805,6 +806,9 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.publish_hard_stop(reason)
             body = self.tasks.finish("TASK_COMPLETED", reason)
             if body is not None:
+                self.terminal_apriltag_status = self.apriltags.snapshot(
+                    now=time.monotonic()
+                )
                 self.publish_task_state(body)
             self.stop_until = time.monotonic() + 1.0
 
@@ -897,6 +901,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if body is None:
                 return
             if body["type"] == "TASK_STARTED":
+                self.terminal_apriltag_status = None
                 try:
                     assert Request is not None
                     self.command_publisher = self.create_publisher(
@@ -1077,6 +1082,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                             self.destroy_publisher(self.command_publisher)
                             self.command_publisher = None
                             self.apriltags.reset_task()
+                            self.terminal_apriltag_status = None
+                            tag_status = self.apriltags.snapshot(now=now)
                     else:
                         drive_decision = DriveDecision.stop("task_idle")
                 else:
@@ -1085,6 +1092,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.publish_drive(drive_decision)
             else:
                 path = smoothers[mask_class].current(now)
+            # Real callbacks keep refreshing liveness after completion. Retain
+            # the terminal display independently until control is released.
+            if self.terminal_apriltag_status is not None:
+                tag_status = self.terminal_apriltag_status
             metrics = {
                 "profile": args.profile,
                 "camera_topic": args.image_topic,

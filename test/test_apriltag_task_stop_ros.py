@@ -532,6 +532,65 @@ def test_tag_metrics_and_overlay_report_verification_and_confirmation(ros, monke
     ros.run(scenario)
 
 
+def test_callback_confirmation_display_survives_detections_until_publisher_release(
+    ros, monkeypatch
+):
+    texts = []
+    put_text = debug.cv2.putText
+
+    def capture_text(frame, text, *args, **kwargs):
+        texts.append(text)
+        return put_text(frame, text, *args, **kwargs)
+
+    monkeypatch.setattr(debug.cv2, "putText", capture_text)
+
+    def scenario(node):
+        ros.start()
+        for frame, stamp in enumerate((0.0, 0.1, 0.2), start=1):
+            ros.now = stamp
+            ros.detect(tag_id=7, frame=frame)
+        ros.camera_ready()
+        ros.now = 1.0
+        ros.detect(frame=4)
+        assert ros.task_state()["type"] == "TASK_COMPLETED"
+        assert ros.task_state()["reason"] == "apriltag_confirmed:7"
+        assert node.tasks.active is None
+        completion_commands = len(ros.published[SPORT])
+        ros.now = 1.03
+        ros.detect(frame=5)
+        ros.now = 1.05
+        node.publish_state()
+        assert node.command_publisher is not None
+        assert ros.metrics()["apriltag"]["state"] == "confirmed"
+        assert ros.metrics()["apriltag"]["confirmed_id"] == 7
+        assert ros.metrics()["apriltag"]["message_age_sec"] == pytest.approx(0.02)
+        assert ros.metrics()["apriltag"]["stream_ready"] is True
+        assert "APRILTAG CONFIRMED ID 7" in texts
+        ros.now = 1.99
+        ros.detect(frame=6)
+        texts.clear()
+        node.publish_state()
+        assert node.command_publisher is not None
+        assert ros.metrics()["apriltag"]["state"] == "confirmed"
+        assert "APRILTAG CONFIRMED ID 7" in texts
+        ros.now = 2.0
+        texts.clear()
+        node.publish_state()
+        assert node.command_publisher is None
+        assert ros.metrics()["apriltag"]["state"] == "no_tag"
+        assert ros.metrics()["apriltag"]["confirmed_id"] is None
+        assert "APRILTAG CONFIRMED ID 7" not in texts
+        assert "task_idle" in texts
+        assert len(ros.published["/task_state"]) == 2
+        assert all(
+            message.header.identity.api_id == 1008
+            and json.loads(message.parameter) == ZERO
+            for message in ros.published[SPORT][completion_commands:]
+        )
+
+    ros.run(scenario)
+
+
 @pytest.mark.parametrize(
     ("frames", "expected_type"),
     [((9, 9, 9), "TASK_STARTED"), ((0, 0, 0), "TASK_COMPLETED")],

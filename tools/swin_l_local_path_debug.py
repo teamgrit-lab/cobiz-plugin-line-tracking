@@ -700,6 +700,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.latest_apriltag_ids: tuple[int, ...] = ()
             self.latest_apriltag_frame_key = 0
             self.terminal_apriltag_status: AprilTagDecision | None = None
+            self.apriltag_window_resolved = False
             if self.drive_config is not None:
                 self.drive_config.validate()
             reliability = (
@@ -794,16 +795,28 @@ def run_ros2(args: argparse.Namespace) -> int:
         def publish_zero_move(self, reason: str) -> None:
             self.publish_drive(DriveDecision.stop(reason))
 
-        def publish_hard_stop(self, reason: str) -> None:
+        def publish_hard_stop(self, reason: str) -> bool:
             if self.command_publisher is None:
-                return
+                return True
             assert Request is not None
-            self.command_publisher.publish(populate_stop_move_request(Request()))
-            self.publish_zero_move(reason)
+            succeeded = True
+            try:
+                self.command_publisher.publish(populate_stop_move_request(Request()))
+            except Exception as error:  # noqa: BLE001 - still attempt zero Move.
+                succeeded = False
+                self.get_logger().error(f"StopMove failed ({reason}): {error}")
+            try:
+                self.publish_zero_move(reason)
+            except Exception as error:  # noqa: BLE001 - task termination must proceed.
+                succeeded = False
+                self.get_logger().error(f"zero Move failed ({reason}): {error}")
+            return succeeded
 
         def complete_apriltag_task(self, tag_id: int) -> None:
             reason = f"apriltag_confirmed:{tag_id}"
-            self.publish_hard_stop(reason)
+            if not self.publish_hard_stop(reason):
+                self.abort_active_task("stop_publish_error")
+                return
             body = self.tasks.finish("TASK_COMPLETED", reason)
             if body is not None:
                 self.terminal_apriltag_status = self.apriltags.snapshot(
@@ -826,8 +839,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                 now=time.monotonic(),
                 task_active=self.tasks.active is not None,
             )
-            if decision.stop_now:
-                self.publish_hard_stop("apriltag_verifying")
+            # A new candidate can immediately follow a failed window. Remember
+            # that boundary so it cannot defer lifecycle deadlines indefinitely.
+            self.apriltag_window_resolved |= decision.false_positive
+            if decision.stop_now and not self.publish_hard_stop("apriltag_verifying"):
+                self.abort_active_task("stop_publish_error")
+                return
             if decision.just_confirmed:
                 self.complete_apriltag_task(decision.confirmed_id)
 
@@ -842,7 +859,13 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.release_task_control(reason)
             body = self.tasks.finish("TASK_ABORTED", reason)
             if body is not None:
-                self.publish_task_state(body)
+                self.apriltags.reset_task()
+                self.apriltag_window_resolved = False
+                self.terminal_apriltag_status = None
+                try:
+                    self.publish_task_state(body)
+                except Exception as error:  # noqa: BLE001 - already deactivated locally.
+                    self.get_logger().error(f"TASK_ABORTED report failed: {error}")
 
         def drive_readiness(
             self, mask_class: int, now: float
@@ -902,6 +925,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             if body["type"] == "TASK_STARTED":
                 self.terminal_apriltag_status = None
+                self.apriltag_window_resolved = False
                 try:
                     assert Request is not None
                     self.command_publisher = self.create_publisher(
@@ -913,7 +937,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                         now=now,
                     )
                     if tag_status.stop_now:
-                        self.publish_hard_stop("apriltag_verifying")
+                        if not self.publish_hard_stop("apriltag_verifying"):
+                            raise RuntimeError("initial hard stop publication failed")
                     else:
                         self.publish_zero_move("startup_hold")
                 except Exception as error:  # noqa: BLE001 - never report start without control.
@@ -930,6 +955,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                         self.publish_task_state(failed)
                     return
             elif previous_task is not None and self.tasks.active is None:
+                self.apriltags.reset_task()
+                self.apriltag_window_resolved = False
                 self.release_task_control("task_aborted_by_server")
             self.publish_task_state(body)
 
@@ -1021,6 +1048,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         # including during startup or tag verification. A stream
                         # never seen at all still gets the normal startup hold.
                         self.abort_active_task("apriltag_detections_stale")
+                tag_status = self.apriltags.snapshot(now=now)
             task_active = self.tasks.active if self.tasks is not None else None
             mask_class = active_path_mask_class(task_active, args.path_mask_class)
             with state_lock:
@@ -1064,11 +1092,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                         terminal = (
                             None
                             if tag_status.state == "verifying"
+                            and not self.apriltag_window_resolved
                             else self.tasks.tick(
                                 now=now, drive_reason=drive_decision.reason
                             )
                         )
+                        self.apriltag_window_resolved = False
                         if terminal is not None:
+                            self.apriltags.reset_task()
+                            tag_status = self.apriltags.snapshot(now=now)
                             self.release_task_control(
                                 terminal.get("reason", "task_complete")
                             )

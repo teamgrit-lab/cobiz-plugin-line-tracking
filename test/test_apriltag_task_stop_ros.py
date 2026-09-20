@@ -170,10 +170,11 @@ class RosHarness:
         seconds, nanoseconds = divmod(self.clock_ns(), 1_000_000_000)
         return SimpleNamespace(sec=seconds, nanosec=nanoseconds)
 
-    def run(self, scenario, *args):
+    def run(self, scenario, *args, allow_errors=False):
         def spin(node):
             scenario(node)
-            assert not self.errors
+            if not allow_errors:
+                assert not self.errors
 
         self.rclpy.spin = spin
         assert (
@@ -745,3 +746,140 @@ def test_task_duration_waits_for_verification_then_uses_the_correct_completion(
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
 
     ros.run(scenario)
+
+
+@pytest.mark.parametrize("phase", ["startup", "tracking"])
+def test_chained_failed_windows_cannot_postpone_lifecycle_deadlines(ros, phase):
+    def scenario(node):
+        if phase == "tracking":
+            ros.establish_tracking(duration=3)
+            first_candidate = 2.5
+            deadline = 3.5
+        else:
+            ros.start()
+            first_candidate = 0.0
+            deadline = 2.0
+        command_start = len(ros.published[SPORT])
+        for frame in range(1, 8):
+            ros.now = first_candidate + (frame - 1) * 0.5
+            ros.detect(tag_id=7, frame=frame)
+            node.publish_state()
+            if ros.now >= deadline:
+                break
+            assert node.tasks.active is not None
+        assert node.tasks.active is None
+        assert ros.task_state()["type"] == "TASK_ABORTED"
+        assert ros.task_state()["reason"] == (
+            "startup:apriltag_verifying"
+            if phase == "startup"
+            else "tracking_unavailable:apriltag_verifying"
+        )
+        assert all(
+            json.loads(message.parameter) == ZERO
+            for message in ros.published[SPORT][command_start:]
+            if message.header.identity.api_id == 1008
+        )
+        ros.now += 1.0
+        node.publish_state()
+        assert node.command_publisher is None
+
+    ros.run(scenario)
+
+
+@pytest.mark.parametrize("source", ["candidate", "confirmation", "abort", "shutdown"])
+@pytest.mark.parametrize("failed_ids", [{1003}, {1008}, {1003, 1008}])
+def test_stop_publication_failure_attempts_zero_and_deactivates_task(
+    ros, source, failed_ids
+):
+    attempts = []
+
+    def scenario(node):
+        ros.establish_tracking()
+        if source == "confirmation":
+            for frame, stamp in enumerate((2.5, 2.6, 2.7), start=1):
+                ros.now = stamp
+                ros.detect(tag_id=7, frame=frame)
+        original_publish = node.command_publisher.publish
+
+        def failing_publish(message):
+            api_id = message.header.identity.api_id
+            attempts.append(api_id)
+            if api_id in failed_ids:
+                raise RuntimeError(f"injected publication failure {api_id}")
+            original_publish(message)
+
+        node.command_publisher.publish = failing_publish
+        if source == "candidate":
+            ros.detect(tag_id=7)
+        elif source == "confirmation":
+            ros.now = 3.5
+            node.publish_state()
+        elif source == "abort":
+            node.abort_active_task("test_abort")
+        else:
+            return  # Exercise run_ros2's real finally/shutdown path.
+        assert node.tasks.active is None
+
+    ros.run(scenario, allow_errors=True)
+    assert attempts[:2] == [1003, 1008]
+    assert ros.node.tasks.active is None
+    assert ros.task_state()["type"] == "TASK_ABORTED"
+    assert ros.errors
+    if 1008 not in failed_ids:
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+
+def test_abort_report_failure_cannot_keep_a_task_active(ros):
+    def scenario(node):
+        ros.establish_tracking()
+
+        def fail_report(_message):
+            raise RuntimeError("task-state transport unavailable")
+
+        node.task_state_publisher.publish = fail_report
+        node.abort_active_task("test_abort")
+        assert node.tasks.active is None
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        assert any("TASK_ABORTED report failed" in error for error in ros.errors)
+
+    ros.run(scenario, allow_errors=True)
+
+
+@pytest.mark.parametrize("source", ["stale", "server"])
+def test_abort_clears_verification_display_without_refreshing_heartbeat(
+    ros, monkeypatch, source
+):
+    texts = []
+    original_put_text = debug.cv2.putText
+
+    def capture_text(frame, text, *args, **kwargs):
+        texts.append(text)
+        return original_put_text(frame, text, *args, **kwargs)
+
+    monkeypatch.setattr(debug.cv2, "putText", capture_text)
+
+    def scenario(node):
+        ros.establish_tracking()
+        ros.now = 2.2
+        ros.detect(tag_id=7)
+        node.publish_state()
+        assert any("APRILTAG VERIFY" in text for text in texts)
+        texts.clear()
+        ros.now = 3.21
+        if source == "server":
+            ros.subscriptions["/task_event"](
+                Message(json.dumps({"type": "TASK_ABORTED", "task_id": "tag-stop-1"}))
+            )
+        node.publish_state()
+        assert ros.task_state()["reason"] == (
+            "apriltag_detections_stale"
+            if source == "stale"
+            else "task_aborted_by_server"
+        )
+        assert ros.metrics()["task_active"] is False
+        assert ros.metrics()["apriltag"]["state"] == "no_tag"
+        assert ros.metrics()["apriltag"]["message_age_sec"] == pytest.approx(1.01)
+        assert ros.metrics()["apriltag"]["stream_ready"] is False
+        assert not any("APRILTAG VERIFY" in text for text in texts)
+
+    ros.run(scenario, "--apriltag-confirm-window-sec", "2.0")

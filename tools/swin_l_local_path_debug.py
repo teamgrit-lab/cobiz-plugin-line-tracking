@@ -28,28 +28,34 @@ Both live modes require a Jetson ROS/PyTorch environment.
 from __future__ import annotations
 
 import argparse
-from collections import deque
-from dataclasses import asdict, dataclass
 import json
 import math
 import os
-from pathlib import Path
 import signal
 import threading
 import time
+from collections import deque
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Sequence
 
 import cv2
 import numpy as np
-
+from apriltag_stop import AprilTagDecision, AprilTagPolicy, AprilTagStopMonitor
 from best_so_far_runtime import (
     DEFAULT_EVALUATION_SIZE,
+    INFERENCE_BACKENDS,
     PROFILE_NAMES,
     SWIN_L_ASPECT_FP16_PROFILE,
-    resolve_profile,
     BestSoFarConfig,
     BestSoFarResult,
     BestSoFarSegmenter,
+    resolve_profile,
+)
+from cobiz_line_tracking_task import (
+    ActiveTask,
+    LineTrackingTasks,
+    TaskPolicy,
 )
 from evaluate_mapillary_temporal import upscale_mask
 from local_path import (
@@ -68,18 +74,11 @@ from swin_l_drive_control import (
     DriveDecision,
     decide_drive,
 )
-from apriltag_stop import AprilTagDecision, AprilTagPolicy, AprilTagStopMonitor
 from unitree_sport_api import (
     drive_to_sport_move,
     populate_move_request,
     populate_stop_move_request,
 )
-from cobiz_line_tracking_task import (
-    ActiveTask,
-    LineTrackingTasks,
-    TaskPolicy,
-)
-
 
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
 DEFAULT_OVERLAY_TOPIC = "/line_tracking/swin_l/overlay"
@@ -123,6 +122,15 @@ def _env_float(name: str, default: float) -> float:
 
 def _env_int(name: str, default: int) -> int:
     return int(_env(name, str(default)))
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = _env(name, "true" if default else "false").lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
 
 
 def selected_path_region(selected_mask: np.ndarray, path_mask_class: int) -> np.ndarray:
@@ -210,6 +218,10 @@ def _runtime_config(args: argparse.Namespace) -> BestSoFarConfig:
         evaluation_height=args.evaluation_size[0],
         evaluation_width=args.evaluation_size[1],
         device=args.device,
+        backend=args.backend,
+        tensorrt_engine_path=args.tensorrt_engine,
+        tensorrt_manifest_path=args.tensorrt_manifest,
+        allow_backend_fallback=args.allow_backend_fallback,
     )
 
 
@@ -616,6 +628,10 @@ def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
         raise ValueError("task-drive mode requires a calibrated base_link path")
     if args.output_hz < 10.0:
         raise ValueError("task-drive mode requires at least 10 Hz zero-command updates")
+    if args.allow_backend_fallback:
+        raise ValueError(
+            "task-drive mode prohibits automatic inference-backend fallback"
+        )
     _drive_config_from_args(args)
 
 
@@ -1284,6 +1300,24 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--model-revision", default=_env("SWIN_L_MODEL_REVISION", "") or None
     )
     parser.add_argument("--device", default=_env("SWIN_L_DEVICE", "auto"))
+    parser.add_argument(
+        "--backend",
+        choices=INFERENCE_BACKENDS,
+        default=_env("SWIN_L_BACKEND", "pytorch"),
+    )
+    parser.add_argument(
+        "--tensorrt-engine",
+        default=_env("SWIN_L_TRT_ENGINE", "") or None,
+    )
+    parser.add_argument(
+        "--tensorrt-manifest",
+        default=_env("SWIN_L_TRT_MANIFEST", "") or None,
+    )
+    parser.add_argument(
+        "--allow-backend-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("SWIN_L_ALLOW_BACKEND_FALLBACK", False),
+    )
     parser.add_argument(
         "--evaluation-size",
         type=int,

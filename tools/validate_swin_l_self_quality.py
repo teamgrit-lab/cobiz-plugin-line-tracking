@@ -29,9 +29,9 @@ from typing import Any
 import cv2
 import numpy as np
 import torch
-
 from benchmark_best_so_far import DEFAULT_TOPIC, iter_mcap_packets
 from best_so_far_runtime import (
+    INFERENCE_BACKENDS,
     PROFILE_NAMES,
     SWIN_L_ASPECT_PROFILE,
     BestSoFarConfig,
@@ -138,6 +138,9 @@ def _capture(
     device: str,
     path_mask_class: int,
     seed: int,
+    backend: str = "pytorch",
+    tensorrt_engine: str | None = None,
+    tensorrt_manifest: str | None = None,
 ) -> tuple[dict[str, np.ndarray], list[np.ndarray], dict[str, Any]]:
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -149,28 +152,39 @@ def _capture(
         torch.cuda.empty_cache()
         cuda_baseline_allocated = int(torch.cuda.memory_allocated())
         cuda_baseline_reserved = int(torch.cuda.memory_reserved())
-    segmenter = BestSoFarSegmenter(BestSoFarConfig(profile=profile, device=device))
+    segmenter = BestSoFarSegmenter(
+        BestSoFarConfig(
+            profile=profile,
+            device=device,
+            backend=backend,
+            tensorrt_engine_path=tensorrt_engine,
+            tensorrt_manifest_path=tensorrt_manifest,
+        )
+    )
+    model_parameters = (
+        tuple(segmenter.model.parameters()) if segmenter.model is not None else ()
+    )
+    model_buffers = (
+        tuple(segmenter.model.buffers()) if segmenter.model is not None else ()
+    )
     parameter_bytes = int(
         sum(
             parameter.numel() * parameter.element_size()
-            for parameter in segmenter.model.parameters()
+            for parameter in model_parameters
         )
     )
     floating_parameter_bytes = int(
         sum(
             parameter.numel() * parameter.element_size()
-            for parameter in segmenter.model.parameters()
+            for parameter in model_parameters
             if parameter.is_floating_point()
         )
     )
     buffer_bytes = int(
-        sum(
-            buffer.numel() * buffer.element_size()
-            for buffer in segmenter.model.buffers()
-        )
+        sum(buffer.numel() * buffer.element_size() for buffer in model_buffers)
     )
     dtype_parameter_bytes: dict[str, int] = {}
-    for parameter in segmenter.model.parameters():
+    for parameter in model_parameters:
         name = str(parameter.dtype)
         dtype_parameter_bytes[name] = dtype_parameter_bytes.get(name, 0) + int(
             parameter.numel() * parameter.element_size()
@@ -357,6 +371,9 @@ def parse_args() -> argparse.Namespace:
         "--profile", choices=PROFILE_NAMES, default=SWIN_L_ASPECT_PROFILE
     )
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--backend", choices=INFERENCE_BACKENDS, default="pytorch")
+    parser.add_argument("--tensorrt-engine")
+    parser.add_argument("--tensorrt-manifest")
     parser.add_argument("--path-mask-class", type=int, choices=(1, 2), default=2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -392,6 +409,9 @@ def main() -> int:
             args.device,
             args.path_mask_class,
             args.seed,
+            args.backend,
+            args.tensorrt_engine,
+            args.tensorrt_manifest,
         )
         npz_path = output_dir / f"{args.label}-run{repeat_index}.npz"
         _atomic_npz(npz_path, **arrays)

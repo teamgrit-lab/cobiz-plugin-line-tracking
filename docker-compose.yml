@@ -21,12 +21,17 @@ services:
       - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
       - ./.env:/workspace/.env:ro
       - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
+      - ${SWIN_L_ENGINE_DIR:-./models}:/models:ro
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_PROFILE: swin-l-aspect-224x384-fp16
       SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
+      SWIN_L_BACKEND: ${SWIN_L_BACKEND:-tensorrt}
+      SWIN_L_TRT_ENGINE: ${SWIN_L_TRT_ENGINE:-/models/swin-l-224x384-fp16.plan}
+      SWIN_L_TRT_MANIFEST: ${SWIN_L_TRT_MANIFEST:-/models/swin-l-224x384-fp16.plan.json}
+      SWIN_L_ALLOW_BACKEND_FALLBACK: ${SWIN_L_ALLOW_BACKEND_FALLBACK:-false}
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
 
@@ -43,6 +48,7 @@ services:
     volumes:
       - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
       - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
+      - ${SWIN_L_ENGINE_DIR:-./models}:/models:ro
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
@@ -50,6 +56,10 @@ services:
       SWIN_L_PROFILE: swin-l-aspect-224x384-fp16
       SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
+      SWIN_L_BACKEND: ${SWIN_L_BACKEND:-tensorrt}
+      SWIN_L_TRT_ENGINE: ${SWIN_L_TRT_ENGINE:-/models/swin-l-224x384-fp16.plan}
+      SWIN_L_TRT_MANIFEST: ${SWIN_L_TRT_MANIFEST:-/models/swin-l-224x384-fp16.plan.json}
+      SWIN_L_ALLOW_BACKEND_FALLBACK: "false"
       SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/image_raw}
       SWIN_L_EVALUATION_HEIGHT: ${SWIN_L_EVALUATION_HEIGHT:-360}
       SWIN_L_EVALUATION_WIDTH: ${SWIN_L_EVALUATION_WIDTH:-640}
@@ -89,6 +99,43 @@ services:
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
 
+  # Freeze checkpoint-initialized values into a reproducible local safetensors
+  # artifact before compiling for the target Jetson.
+  prepare-swin-l-checkpoint:
+    profiles: [engine]
+    build: *swin-l-build
+    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+    runtime: nvidia
+    working_dir: /workspace
+    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/prepare_swin_l_checkpoint.py"]
+    command:
+      - --output-dir
+      - /models/checkpoint
+      - --allow-initialized-weights
+    volumes:
+      - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
+      - ${SWIN_L_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint
+    environment:
+      HF_HOME: /root/.cache/huggingface
+
+  # TensorRT plans are target-GPU/runtime-specific, so build this one-shot
+  # artifact on the same Jetson class used by actual-activate.
+  build-swin-l-engine:
+    profiles: [engine]
+    build: *swin-l-build
+    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+    runtime: nvidia
+    working_dir: /workspace
+    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/build_swin_l_tensorrt.py"]
+    command:
+      - --checkpoint
+      - /models/checkpoint
+      - --output
+      - /models/output/swin-l-224x384-fp16.plan
+    volumes:
+      - ${SWIN_L_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint:ro
+      - ${SWIN_L_ENGINE_DIR:-./models}:/models/output
+
   # One-shot offline MCAP tests using the same Jetson CUDA image as live debug.
   # Override its ROS/DDS entrypoint and keep files owned by the host user.
   test-swin-l:
@@ -106,6 +153,10 @@ services:
       - ${SWIN_L_ROSBAG_DIR:-./rosbags}:/bags:ro
       - ${SWIN_L_TEST_RESULTS_DIR:-./rosbag-results/swin-l-tests}:/workspace/rosbag-results/swin-l-tests
       - ${SWIN_L_TEST_CACHE_DIR:-./.cache/huggingface-tests}:/cache/huggingface
+      - ${SWIN_L_ENGINE_DIR:-./models}:/models:ro
     environment:
       HF_HOME: /cache/huggingface
       PYTHONDONTWRITEBYTECODE: "1"
+      SWIN_L_BACKEND: ${SWIN_L_BACKEND:-tensorrt}
+      SWIN_L_TRT_ENGINE: ${SWIN_L_TRT_ENGINE:-/models/swin-l-224x384-fp16.plan}
+      SWIN_L_TRT_MANIFEST: ${SWIN_L_TRT_MANIFEST:-/models/swin-l-224x384-fp16.plan.json}

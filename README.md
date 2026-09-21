@@ -2,7 +2,7 @@
 
 `actual-activate` is a Cobiz `LINE_TRACKING` task listener for the Unitree A2.
 For an accepted task it follows the selected Swin-L surface-center path with
-the pinned FP16 profile `swin-l-aspect-224x384-fp16`, and it uses AprilTag
+the pinned FP16 TensorRT profile `swin-l-aspect-224x384-fp16`, and it uses AprilTag
 detections to stop and complete that task. With no accepted task, it publishes
 no Sport Move request. The default path class is sidewalk
 (`SWIN_L_PATH_MASK_CLASS=2`); a task can request road (`1`) with
@@ -74,8 +74,12 @@ AprilTag-based completion is required.
 
 ```bash
 cp .env.example .env
+mkdir -p .cache/huggingface models/swin-l-checkpoint models
+docker compose --profile engine build
+docker compose run --rm prepare-swin-l-checkpoint
+docker compose run --rm build-swin-l-engine
 docker compose config --quiet
-docker compose up -d --build actual-activate
+docker compose up -d actual-activate
 docker compose logs -f actual-activate
 
 ros2 topic echo /detections
@@ -120,7 +124,7 @@ SWIN_L_EVALUATION_WIDTH=640
 SWIN_L_EVALUATION_HEIGHT=360
 ```
 
-## FP16 Swin-L and Jetson image
+## FP16 TensorRT Swin-L and Jetson image
 
 The live task profile is fixed to `swin-l-aspect-224x384-fp16`:
 
@@ -139,17 +143,31 @@ jetson-containers build \
   --base=cobiz:jetson \
   --name=cobiz:jetson-swin-l \
   --skip-packages=ffmpeg,opencv,ros \
-  pytorch:2.8
+  pytorch:2.8 tensorrt torch_tensorrt
 
 docker image inspect cobiz:jetson-swin-l-l4t-r36.5.0
 cd /path/to/cobiz-plugin-line-tracking
+mkdir -p .cache/huggingface models/swin-l-checkpoint models
+docker compose --profile engine build
+docker compose run --rm prepare-swin-l-checkpoint
+docker compose run --rm build-swin-l-engine
 docker compose --profile debug up -d --build debugging-swin-l
 docker compose logs -f debugging-swin-l
 ```
 
 The image build installs the vendored `unitree_api` and `apriltag_msgs`
-interfaces. The listener requires CUDA, the pinned Swin-L profile, and a
-360x640 score map; it fails preflight when those requirements are not met.
+interfaces. Checkpoint preparation explicitly loads the pinned Hub
+`model.safetensors`, records any checkpoint-initialized values, and saves one
+complete local safetensors file. The engine build then compiles a static
+`1x3x224x384` FP16 input into a `65x360x640` semantic-score output and writes a
+SHA-256-protected manifest next to the plan. TensorRT plans must be generated on
+the target Jetson class and rebuilt after a TensorRT/CUDA/GPU change.
+
+The listener validates the plan checksum, model revision, binding shapes,
+TensorRT version, and GPU compute capability before accepting inference. It
+never falls back automatically in `task-drive` mode. Set
+`SWIN_L_BACKEND=pytorch` explicitly to use the retained FP16 PyTorch rollback;
+`SWIN_L_ALLOW_BACKEND_FALLBACK=true` is allowed only for debug/offline use.
 
 ## Offline camera overlay
 

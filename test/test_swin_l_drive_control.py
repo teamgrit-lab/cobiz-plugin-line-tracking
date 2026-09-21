@@ -1,19 +1,18 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
+import swin_l_local_path_debug as debug  # noqa: E402
 from local_path import SmoothedPath  # noqa: E402
 from swin_l_drive_control import (  # noqa: E402
     DriveConfig,
     decide_drive,
 )
-import swin_l_local_path_debug as debug  # noqa: E402
 
 
 def _path(*, lateral: float = 0.2, confidence: float = 0.9, age: float = 0.1):
@@ -105,6 +104,7 @@ def test_missing_or_malformed_path_stops():
     )
     assert _decide(malformed).reason == "path_geometry_invalid"
 
+
 def test_task_drive_preflight_requires_pinned_model():
     args = debug.parse_args(["task-drive"])
     assert args.profile == "swin-l-aspect-224x384-fp16"
@@ -125,6 +125,12 @@ def test_cobiz_task_listener_pins_swin_profile():
     debug._validate_task_drive_preflight(args)
     args.profile = "swin-l-best-so-far"
     with pytest.raises(ValueError, match="pinned"):
+        debug._validate_task_drive_preflight(args)
+
+
+def test_task_drive_prohibits_automatic_backend_fallback():
+    args = debug.parse_args(["task-drive", "--allow-backend-fallback"])
+    with pytest.raises(ValueError, match="prohibits"):
         debug._validate_task_drive_preflight(args)
 
 

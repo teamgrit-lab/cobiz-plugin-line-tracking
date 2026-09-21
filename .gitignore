@@ -15,7 +15,10 @@ ros_ws/log/
 # Model weights are deployment artifacts and can be large.
 models/*.onnx
 models/*.engine
+models/*.plan
 models/*.pth
+models/*.plan.json
+models/swin-l-checkpoint/
 
 # Local rosbag conversion and inspection artifacts.
 /rosbags/

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -66,6 +65,11 @@ def test_default_compose_is_cobiz_task_listener():
     assert "profiles" not in listener
     assert listener["environment"]["SWIN_L_MODE"] == "task-drive"
     assert listener["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384-fp16"
+    assert listener["environment"]["SWIN_L_BACKEND"].endswith(":-tensorrt}")
+    assert listener["environment"]["SWIN_L_ALLOW_BACKEND_FALLBACK"] == "false"
+    assert listener["environment"]["SWIN_L_TRT_ENGINE"].endswith(
+        ":-/models/swin-l-224x384-fp16.plan}"
+    )
     assert listener["environment"]["SWIN_L_APRILTAG_DETECTIONS_TOPIC"].endswith(
         "/detections}"
     )
@@ -73,33 +77,23 @@ def test_default_compose_is_cobiz_task_listener():
     assert listener["environment"]["SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC"].endswith(
         ":-1.0}"
     )
-    assert listener["environment"]["SWIN_L_APRILTAG_CONFIRM_MIN_HITS"].endswith(
-        ":-3}"
-    )
+    assert listener["environment"]["SWIN_L_APRILTAG_CONFIRM_MIN_HITS"].endswith(":-3}")
     assert listener["environment"]["LINE_TRACKING_TASK_EVENT_TOPIC"].endswith(
         "/task_event}"
     )
     assert listener["environment"]["LINE_TRACKING_TASK_STATE_TOPIC"].endswith(
         "/task_state}"
     )
-    assert listener["environment"]["LINE_TRACKING_MAX_FORWARD_MPS"].endswith(
-        ":-0.50}"
-    )
+    assert listener["environment"]["LINE_TRACKING_MAX_FORWARD_MPS"].endswith(":-0.50}")
     assert listener["environment"]["LINE_TRACKING_DEFAULT_DURATION_SEC"].endswith(
         ":-500}"
     )
-    assert listener["environment"]["LINE_TRACKING_MAX_DURATION_SEC"].endswith(
-        ":-1000}"
+    assert listener["environment"]["LINE_TRACKING_MAX_DURATION_SEC"].endswith(":-1000}")
+    assert "LINE_TRACKING_MAX_FORWARD_MPS=0.50" in (ROOT / ".env.example").read_text()
+    assert (
+        "LINE_TRACKING_DEFAULT_DURATION_SEC=500" in (ROOT / ".env.example").read_text()
     )
-    assert "LINE_TRACKING_MAX_FORWARD_MPS=0.50" in (
-        ROOT / ".env.example"
-    ).read_text()
-    assert "LINE_TRACKING_DEFAULT_DURATION_SEC=500" in (
-        ROOT / ".env.example"
-    ).read_text()
-    assert "LINE_TRACKING_MAX_DURATION_SEC=1000" in (
-        ROOT / ".env.example"
-    ).read_text()
+    assert "LINE_TRACKING_MAX_DURATION_SEC=1000" in (ROOT / ".env.example").read_text()
 
 
 def test_active_deployment_has_no_manual_arm_or_lidar_contract():
@@ -147,6 +141,25 @@ def test_jetson_swin_l_base_build_contract():
     assert "ros-humble-cv-bridge" in debug_dockerfile
     assert "ros-humble-rmw-cyclonedds-cpp" in debug_dockerfile
     assert '"transformers==5.16.1"' in debug_dockerfile
+    assert "torch_tensorrt" in debug_dockerfile
+    assert "tensorrt" in debug_dockerfile
+
+
+def test_tensorrt_engine_build_services_use_target_gpu_and_artifact_mounts():
+    import yaml
+
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    prepare = services["prepare-swin-l-checkpoint"]
+    build = services["build-swin-l-engine"]
+
+    assert prepare["profiles"] == ["engine"]
+    assert build["profiles"] == ["engine"]
+    assert prepare["runtime"] == "nvidia"
+    assert build["runtime"] == "nvidia"
+    assert "prepare_swin_l_checkpoint.py" in prepare["entrypoint"][1]
+    assert "build_swin_l_tensorrt.py" in build["entrypoint"][1]
+    assert any(mount.endswith(":/models/checkpoint:ro") for mount in build["volumes"])
+    assert any(mount.endswith(":/models/output") for mount in build["volumes"])
 
 
 def test_jetson_image_builds_and_sources_unitree_request_interface():
@@ -177,9 +190,10 @@ def test_jetson_image_builds_and_sources_unitree_request_interface():
     assert "from unitree_api.msg import Request" in dockerfile
     assert 'source "/unitree_ws/install/setup.bash"' in entrypoint
     assert (apriltag_root / "LICENSE").is_file()
-    assert "d03bbf21724f35b4304c688793b05c28e98802a0" in (
-        ROOT / "third_party" / "apriltag_msgs" / "README.md"
-    ).read_text()
+    assert (
+        "d03bbf21724f35b4304c688793b05c28e98802a0"
+        in (ROOT / "third_party" / "apriltag_msgs" / "README.md").read_text()
+    )
     assert (apriltag_root / "msg" / "Point.msg").read_text().splitlines() == [
         "float64 x",
         "float64 y",
@@ -191,8 +205,7 @@ def test_jetson_image_builds_and_sources_unitree_request_interface():
         "AprilTagDetection[] detections",
     ]
     assert (
-        "COPY third_party/apriltag_msgs/apriltag_msgs "
-        "/unitree_ws/src/apriltag_msgs"
+        "COPY third_party/apriltag_msgs/apriltag_msgs /unitree_ws/src/apriltag_msgs"
     ) in dockerfile
     assert (
         "colcon build --merge-install --packages-select unitree_api apriltag_msgs"

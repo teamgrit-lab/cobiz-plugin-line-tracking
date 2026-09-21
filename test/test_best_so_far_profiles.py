@@ -119,6 +119,29 @@ def test_unknown_profile_is_rejected():
         BestSoFarConfig(profile="unknown").validate()
 
 
+def test_tensorrt_backend_requires_fixed_artifact_paths():
+    with pytest.raises(ValueError, match="engine and manifest"):
+        BestSoFarConfig(backend="tensorrt").validate()
+
+
+def test_tensorrt_backend_accepts_pinned_fp16_swin_profile():
+    BestSoFarConfig(
+        backend="tensorrt",
+        tensorrt_engine_path="model.plan",
+        tensorrt_manifest_path="model.plan.json",
+    ).validate()
+
+
+def test_tensorrt_backend_rejects_fp32_profile():
+    with pytest.raises(ValueError, match="FP16 Mask2Former"):
+        BestSoFarConfig(
+            profile=SWIN_L_ASPECT_PROFILE,
+            backend="tensorrt",
+            tensorrt_engine_path="model.plan",
+            tensorrt_manifest_path="model.plan.json",
+        ).validate()
+
+
 def test_unknown_road_island_action_is_rejected():
     assert ROAD_ISLAND_ACTIONS == ("drop", "reassign-sidewalk")
     with pytest.raises(ValueError, match="road_island_action"):

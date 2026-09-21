@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -39,6 +40,7 @@ from evaluate_mapillary_label_aggregation import (
 from evaluate_mapillary_temporal import aggregated_selected_mask, upscale_mask
 from evaluate_sidewalk_road_temporal import remove_small_components
 from segment_sidewalk_road import choose_device, render_overlay
+from tensorrt_backend import TensorRTSemanticBackend
 from transformers import (
     AutoImageProcessor,
     Mask2FormerForUniversalSegmentation,
@@ -61,6 +63,7 @@ R50_SIDEWALK_LABELS = SIDEWALK_LABELS + ("Bike Lane", "Manhole")
 R50_MAXIMUM_ROAD_ISLAND_AREA = 2560
 R50_MINIMUM_SIDEWALK_RING_RATIO = 0.10
 ROAD_ISLAND_ACTIONS = ("drop", "reassign-sidewalk")
+INFERENCE_BACKENDS = ("pytorch", "tensorrt")
 
 
 @dataclass(frozen=True)
@@ -174,6 +177,10 @@ class BestSoFarConfig:
     minimum_sidewalk_ring_ratio: float | None = None
     pedestrian_area_road_expansion: int = 0
     device: str = "auto"
+    backend: str = "pytorch"
+    tensorrt_engine_path: str | None = None
+    tensorrt_manifest_path: str | None = None
+    allow_backend_fallback: bool = False
 
     def validate(self) -> None:
         resolve_profile(
@@ -208,6 +215,20 @@ class BestSoFarConfig:
             raise ValueError("minimum_sidewalk_ring_ratio must be in [0, 1]")
         if self.pedestrian_area_road_expansion < 0:
             raise ValueError("pedestrian_area_road_expansion must be non-negative")
+        if self.backend not in INFERENCE_BACKENDS:
+            raise ValueError(f"backend must be one of {', '.join(INFERENCE_BACKENDS)}")
+        if self.backend == "tensorrt":
+            profile = resolve_profile(
+                self.profile,
+                model_id=self.model_id,
+                model_revision=self.model_revision,
+            )
+            if profile.model_family != "mask2former" or profile.precision != "fp16":
+                raise ValueError(
+                    "TensorRT backend requires an FP16 Mask2Former profile"
+                )
+            if not self.tensorrt_engine_path or not self.tensorrt_manifest_path:
+                raise ValueError("TensorRT backend requires engine and manifest paths")
 
 
 @dataclass(frozen=True)
@@ -280,22 +301,49 @@ class BestSoFarSegmenter:
             "height": self.profile.input_height,
             "width": self.profile.input_width,
         }
-        if self.profile.model_family == "mask2former":
-            self.model = Mask2FormerForUniversalSegmentation.from_pretrained(
-                self.profile.model_id,
-                revision=self.profile.model_revision,
-            )
-        elif self.profile.model_family == "maskformer":
-            self.model = MaskFormerForInstanceSegmentation.from_pretrained(
-                self.profile.model_id,
-                revision=self.profile.model_revision,
-            )
-        else:  # pragma: no cover - protected by the pinned profile table
-            raise ValueError(f"unsupported model family: {self.profile.model_family}")
-        self.model = self.model.to(self.device)
-        if self.use_fp16:
-            self.model = self.model.half()
-        self.model.eval()
+        self.backend = config.backend
+        self.backend_fallback_reason: str | None = None
+        self.tensorrt_backend: TensorRTSemanticBackend | None = None
+        self.model: Any | None = None
+        id2label: dict[int, str]
+        if self.backend == "tensorrt":
+            try:
+                self.tensorrt_backend = TensorRTSemanticBackend(
+                    Path(config.tensorrt_engine_path or ""),
+                    Path(config.tensorrt_manifest_path or ""),
+                    profile=self.profile.name,
+                    model_revision=self.profile.model_revision,
+                    input_shape=(
+                        1,
+                        3,
+                        self.profile.input_height,
+                        self.profile.input_width,
+                    ),
+                    output_shape=(
+                        65,
+                        config.evaluation_height,
+                        config.evaluation_width,
+                    ),
+                    device=self.device,
+                )
+                raw_id2label = self.tensorrt_backend.manifest["model"].get("id2label")
+                if not isinstance(raw_id2label, dict):
+                    raise RuntimeError("TensorRT manifest does not contain id2label")
+                id2label = {int(key): str(value) for key, value in raw_id2label.items()}
+            except Exception as error:
+                if not config.allow_backend_fallback:
+                    raise
+                self.backend = "pytorch"
+                self.backend_fallback_reason = str(error)
+                self.tensorrt_backend = None
+                self.model = self._load_pytorch_model()
+                id2label = self.model.config.id2label
+        else:
+            self.model = self._load_pytorch_model()
+            id2label = self.model.config.id2label
+        if self.backend == "tensorrt":
+            assert self.tensorrt_backend is not None
+            assert self.model is None
         if self.profile.name == R50_PROFILE:
             self.road_labels = R50_ROAD_LABELS
             self.sidewalk_labels = R50_SIDEWALK_LABELS
@@ -310,16 +358,31 @@ class BestSoFarSegmenter:
             self.sidewalk_labels = SIDEWALK_LABELS
             self.maximum_road_island_area = 0
             self.minimum_sidewalk_ring_ratio = 0.0
-        self.road_ids = resolve_ids(self.model.config.id2label, self.road_labels)
-        self.sidewalk_ids = resolve_ids(
-            self.model.config.id2label, self.sidewalk_labels
-        )
-        self.pedestrian_area_id = resolve_ids(
-            self.model.config.id2label, ("Pedestrian Area",)
-        )[0]
+        self.road_ids = resolve_ids(id2label, self.road_labels)
+        self.sidewalk_ids = resolve_ids(id2label, self.sidewalk_labels)
+        self.pedestrian_area_id = resolve_ids(id2label, ("Pedestrian Area",))[0]
         self.model_load_seconds = time.perf_counter() - load_started
         self._previous_scores: torch.Tensor | None = None
         self._previous_selected: np.ndarray | None = None
+
+    def _load_pytorch_model(self) -> Any:
+        if self.profile.model_family == "mask2former":
+            model = Mask2FormerForUniversalSegmentation.from_pretrained(
+                self.profile.model_id,
+                revision=self.profile.model_revision,
+                use_safetensors=True,
+            )
+        elif self.profile.model_family == "maskformer":
+            model = MaskFormerForInstanceSegmentation.from_pretrained(
+                self.profile.model_id,
+                revision=self.profile.model_revision,
+            )
+        else:  # pragma: no cover - protected by the pinned profile table
+            raise ValueError(f"unsupported model family: {self.profile.model_family}")
+        model = model.to(self.device)
+        if self.use_fp16:
+            model = model.half()
+        return model.eval()
 
     @property
     def evaluation_size(self) -> tuple[int, int]:
@@ -344,7 +407,11 @@ class BestSoFarSegmenter:
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         inputs = self.processor(images=frame_rgb, return_tensors="pt")
         inputs = self._move_inputs(inputs)
+        if getattr(self, "backend", "pytorch") == "tensorrt":
+            assert self.tensorrt_backend is not None
+            return self.tensorrt_backend.semantic_scores(inputs["pixel_values"])
         with torch.inference_mode():
+            assert self.model is not None
             outputs = self.model(**inputs)
             if self.profile.model_family == "mask2former":
                 processed = self.processor.post_process_semantic_segmentation(
@@ -449,7 +516,9 @@ class BestSoFarSegmenter:
         inference_finished = time.perf_counter()
 
         if self._previous_scores is None:
-            smooth_scores = scores
+            # TensorRT owns and reuses its output allocation. Keep temporal
+            # state in a separate buffer so the next enqueue cannot overwrite it.
+            smooth_scores = scores.clone() if self.backend == "tensorrt" else scores
         else:
             smooth_scores = (
                 self.temporal_alpha * scores
@@ -521,7 +590,7 @@ class BestSoFarSegmenter:
         )
 
     def metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "profile": self.profile.name,
             "model": {
                 "family": self.profile.model_family,
@@ -530,6 +599,8 @@ class BestSoFarSegmenter:
             },
             "device": str(self.device),
             "precision": "fp16" if self.use_fp16 else "fp32",
+            "backend": self.backend,
+            "backend_fallback_reason": self.backend_fallback_reason,
             "model_load_seconds": self.model_load_seconds,
             "settings": {
                 "surface_aggregate": True,
@@ -551,3 +622,6 @@ class BestSoFarSegmenter:
                 "pedestrian_area_road_expansion": (self.pedestrian_area_road_expansion),
             },
         }
+        if self.tensorrt_backend is not None:
+            metadata["tensorrt"] = self.tensorrt_backend.metadata()
+        return metadata

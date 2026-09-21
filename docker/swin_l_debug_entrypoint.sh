@@ -33,6 +33,16 @@ except ImportError as error:
     )
     raise SystemExit(1)
 
+if os.environ.get("SWIN_L_BACKEND", "pytorch").lower() == "tensorrt":
+    try:
+        import tensorrt
+    except ImportError as error:
+        print(
+            f"[swin-l-debug] TensorRT backend requested but unavailable: {error}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
 print(
     f"[swin-l-debug] torch={torch.__version__} "
     f"torchvision={torchvision.__version__} "

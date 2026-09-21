@@ -13,6 +13,8 @@ ARG SWIN_L_TORCHVISION_VERSION=0.23.0
 # Jetson-compatible PyTorch, CUDA, and ROS stack. torchvision and Transformers
 # is installed below from the Jetson aarch64 index because pytorch:2.8 does
 # not include it and the generic alias currently resolves to a newer release.
+# The base image also supplies TensorRT and Torch-TensorRT compiled for the
+# same JetPack/PyTorch ABI.
 # Do not install torch from PyPI here: pip can select a CPU wheel or a CUDA
 # build that is newer than the Jetson host driver.
 RUN apt-get update \
@@ -58,10 +60,10 @@ RUN /opt/venv/bin/python -m pip install --no-cache-dir \
 # expected CUDA-enabled model stack. GPU availability itself cannot be tested
 # in a Docker build because BuildKit is not given the Jetson GPU device.
 RUN /opt/venv/bin/python -c \
-    'import cv2, torch, torchvision, transformers; \
+    'import cv2, tensorrt, torch, torch_tensorrt, torchvision, transformers; \
      cuda = torch.version.cuda; \
      assert cuda and cuda.startswith("12.6"), f"expected CUDA 12.6 PyTorch, got {cuda!r}"; \
-     print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} transformers={transformers.__version__} opencv={cv2.__version__}")'
+     print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} tensorrt={tensorrt.__version__} torch_tensorrt={torch_tensorrt.__version__} transformers={transformers.__version__} opencv={cv2.__version__}")'
 
 WORKDIR /unitree_ws
 COPY third_party/unitree_msgs/unitree_api /unitree_ws/src/unitree_api

@@ -57,13 +57,15 @@ RUN /opt/venv/bin/python -m pip install --no-cache-dir \
         "mcap-ros2-support==0.5.7"
 
 # Fail during the image build if the base image did not actually provide the
-# expected CUDA-enabled model stack. GPU availability itself cannot be tested
-# in a Docker build because BuildKit is not given the Jetson GPU device.
+# expected CUDA-enabled model stack. Importing TensorRT is deliberately deferred
+# to container startup: on Jetson its Python extension links libnvos.so, which
+# the NVIDIA container runtime injects but plain BuildKit does not expose.
 RUN /opt/venv/bin/python -c \
-    'import cv2, tensorrt, torch, torchvision, transformers; \
+    'import cv2, importlib.util, torch, torchvision, transformers; \
      cuda = torch.version.cuda; \
      assert cuda and cuda.startswith("12.6"), f"expected CUDA 12.6 PyTorch, got {cuda!r}"; \
-     print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} tensorrt={tensorrt.__version__} transformers={transformers.__version__} opencv={cv2.__version__}")'
+     assert importlib.util.find_spec("tensorrt") is not None, "TensorRT Python bindings are missing"; \
+     print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} tensorrt=present transformers={transformers.__version__} opencv={cv2.__version__}")'
 
 WORKDIR /unitree_ws
 COPY third_party/unitree_msgs/unitree_api /unitree_ws/src/unitree_api

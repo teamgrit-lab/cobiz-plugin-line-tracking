@@ -144,6 +144,7 @@ def test_jetson_swin_l_base_build_contract():
     assert "ros-humble-cv-bridge" in debug_dockerfile
     assert "ros-humble-rmw-cyclonedds-cpp" in debug_dockerfile
     assert '"transformers==5.16.1"' in debug_dockerfile
+    assert "python3-libnvinfer" in debug_dockerfile
     assert "tensorrt" in debug_dockerfile
     assert "/usr/lib/python3.10/dist-packages" in debug_dockerfile
 

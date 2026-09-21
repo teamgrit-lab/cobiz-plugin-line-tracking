@@ -14,8 +14,9 @@ ARG SWIN_L_TORCH_TENSORRT_VERSION=2.8.0+cu126
 # Jetson-compatible PyTorch, CUDA, and ROS stack. torchvision and Transformers
 # is installed below from the Jetson aarch64 index because pytorch:2.8 does
 # not include it and the generic alias currently resolves to a newer release.
-# JetPack supplies TensorRT; the matching Torch-TensorRT wheel is installed
-# below from the same Jetson CUDA 12.6 index as torchvision.
+# TensorRT's Python binding is installed from the JetPack apt repository below.
+# The matching Torch-TensorRT wheel comes from the same Jetson CUDA 12.6 index
+# as torchvision.
 # Do not install torch from PyPI here: pip can select a CPU wheel or a CUDA
 # build that is newer than the Jetson host driver.
 RUN apt-get update \
@@ -24,6 +25,7 @@ RUN apt-get update \
         python3-colcon-common-extensions \
         python3-numpy \
         python3-opencv \
+        python3-libnvinfer \
         ros-humble-cv-bridge \
         ros-humble-geometry-msgs \
         ros-humble-nav-msgs \
@@ -62,10 +64,10 @@ RUN /opt/venv/bin/python -m pip install --no-cache-dir \
         "mcap==1.4.0" \
         "mcap-ros2-support==0.5.7"
 
-# Fail during the image build if the base image did not actually provide the
-# expected CUDA-enabled model stack. Importing TensorRT is deliberately deferred
-# to container startup: on Jetson its Python extension links libnvos.so, which
-# the NVIDIA container runtime injects but plain BuildKit does not expose.
+# Fail during the image build if the expected Python modules are absent.
+# Importing TensorRT is deliberately deferred to container startup: on Jetson
+# its extension links libnvos.so, which the NVIDIA runtime injects but plain
+# BuildKit does not expose.
 RUN /opt/venv/bin/python -c \
     'import cv2, importlib.util, torch, torchvision, transformers; \
      cuda = torch.version.cuda; \

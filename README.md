@@ -10,22 +10,22 @@ no Sport Move request. The default path class is sidewalk
 
 ## Runtime contract
 
-`teamgrit-slam` must be running with tag detection enabled before starting a
-task. It must publish `apriltag_msgs/msg/AprilTagDetectionArray` on
-`/detections`. Empty `detections` arrays are required detector heartbeats: they
-mean that the detector is alive but sees no tag.
+`teamgrit-slam` may publish `apriltag_msgs/msg/AprilTagDetectionArray` on
+`/detections` when AprilTag task completion is available. The task can start
+and track when that topic has zero publishers. In that mode it cannot complete
+from an AprilTag and instead ends through its duration or another lifecycle
+event. Empty `detections` arrays still expose detector liveness in metrics.
 
 - A valid Cobiz payload begins with a two-second zero-command startup hold.
-- Motion requires fresh camera, inference, local-path, and `/detections`
-  heartbeat data.
+- Motion requires fresh camera, inference, and local-path data.
 - The first AprilTag candidate immediately sends a hard zero-command stop.
 - The task completes only after three frames for the same tag ID arrive across
   a full one-second confirmation window. Completion sends the hard stop before
   `TASK_COMPLETED` is published.
 - A one- or two-hit false positive remains stopped, then can resume only after
   camera and path health recover.
-- If a previously received `/detections` stream becomes stale while tracking
-  or confirming, the service hard-stops and aborts the task immediately.
+- If `/detections` stops during confirmation, an unconfirmed candidate is
+  released as a false positive after the full confirmation window.
 - This service supplies no obstacle avoidance. Use independent, appropriate
   protection and a physical emergency stop for real-world operation.
 
@@ -44,7 +44,7 @@ limit.
 | Direction | Default | Type | Purpose |
 |---|---|---|---|
 | input | `/a2/front_camera/image_raw` | `sensor_msgs/Image` | A2 front camera |
-| input | `/detections` | `apriltag_msgs/msg/AprilTagDetectionArray` | tag detection and detector heartbeat |
+| input | `/detections` | `apriltag_msgs/msg/AprilTagDetectionArray` | optional tag detection and liveness metrics |
 | input | `/task_event` | `std_msgs/String` | Cobiz task lifecycle event |
 | output | `/api/sport/request` | `unitree_api/msg/Request` | accepted-task Move requests |
 | output | `/line_tracking/swin_l/local_path` | `nav_msgs/Path` | selected surface-center path in `base_link` |
@@ -69,8 +69,8 @@ task run.
 
 `cobiz-core` must register `LINE_TRACKING` in `actions.custom`, and its task
 lifecycle bridge must publish `/task_event`. On the Jetson, prepare the DDS
-directory, configure the camera and path geometry, and confirm that
-`teamgrit-slam` is publishing fresh `/detections` heartbeats.
+directory and configure the camera and path geometry. Start `teamgrit-slam` if
+AprilTag-based completion is required.
 
 ```bash
 cp .env.example .env
@@ -93,7 +93,8 @@ The default duration is 500 seconds. Requests above 1000 seconds are capped at
 1000 seconds. The listener
 reports task state on `/task_state`; core owns any corresponding HTTP report.
 It hard-stops on server cancellation, `SIGTERM`, publish errors, stale required
-inputs, confirmation, or detector-heartbeat loss after the stream has started.
+camera/path inputs, or tag confirmation. Detection-stream loss is reported in
+metrics but does not abort or block the task.
 No process can publish a final command after power loss or `SIGKILL`.
 
 ## Camera and path calibration

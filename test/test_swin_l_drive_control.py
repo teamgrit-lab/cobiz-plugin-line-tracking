@@ -31,7 +31,6 @@ def _decide(path=None, **overrides):
     arguments = dict(
         camera_age_sec=0.1,
         inference_age_sec=0.1,
-        detections_ready=True,
         config=DriveConfig(),
     )
     arguments.update(overrides)
@@ -74,7 +73,6 @@ def test_right_path_turns_right_without_lateral_velocity():
 @pytest.mark.parametrize(
     "override,reason",
     [
-        ({"detections_ready": False}, "apriltag_detections_stale"),
         ({"camera_age_sec": None}, "camera_stale"),
         ({"camera_age_sec": 0.6}, "camera_stale"),
         ({"inference_age_sec": 0.6}, "inference_stale"),
@@ -95,7 +93,6 @@ def test_missing_or_malformed_path_stops():
             None,
             camera_age_sec=0.1,
             inference_age_sec=0.1,
-            detections_ready=True,
             config=DriveConfig(),
         ).reason
         == "path_unavailable"

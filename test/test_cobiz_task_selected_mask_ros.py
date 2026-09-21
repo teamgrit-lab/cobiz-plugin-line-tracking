@@ -91,7 +91,7 @@ def test_task_control_ignores_external_publisher_count(
 
     def spin(node):
         _, decision = node.drive_readiness(1, time.monotonic())
-        assert decision.reason == "apriltag_detections_stale"
+        assert decision.reason == "camera_stale"
         assert (decision.vx, decision.vy, decision.yaw_rate) == (0.0, 0.0, 0.0)
         camera = Message()
         camera.header.stamp = SimpleNamespace(sec=100, nanosec=0)

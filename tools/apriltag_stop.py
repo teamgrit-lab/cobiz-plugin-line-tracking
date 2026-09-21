@@ -156,6 +156,8 @@ class AprilTagStopMonitor:
                 self._confirmed_id = winner
                 self._clear_window()
                 return self._decision(now, just_confirmed=True)
+            self._clear_window()
+            return self._decision(now, false_positive=True)
         return self.snapshot(now=now)
 
     def snapshot(self, *, now: float) -> AprilTagDecision:

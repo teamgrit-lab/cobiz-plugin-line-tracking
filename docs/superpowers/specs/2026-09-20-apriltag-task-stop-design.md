@@ -15,7 +15,7 @@ motion.
 
 ## System boundary
 
-teamgrit-slam owns image-based AprilTag detection and publishes
+teamgrit-slam owns image-based AprilTag detection and may publish
 `/detections`. Line-tracking owns:
 
 - the COBIZ task lifecycle;
@@ -41,8 +41,9 @@ cobiz-plugin-line-tracking
                                              -> TASK_COMPLETED
 ```
 
-This makes detection dependent on the teamgrit-slam process, but keeps the
-stop policy and robot control independent from the SLAM/localization logic.
+This makes AprilTag completion dependent on the teamgrit-slam process, while
+task startup, path tracking, stop policy, and robot control remain independent
+from the SLAM/localization process.
 
 ## ROS interface packaging
 
@@ -311,7 +312,7 @@ and speed clamping checks. Do not gate motion on other Sport publishers.
 ### `tools/swin_l_local_path_debug.py`
 
 Remove all LiDAR state and ROS surfaces. Add the typed `/detections`
-subscription, detection heartbeat state, tag confirmation integration, hard
+subscription, optional detection liveness state, tag confirmation integration, hard
 stop sequencing, and task-lifecycle transitions.
 
 ### `tools/cobiz_line_tracking_task.py`
@@ -324,7 +325,7 @@ duration validation, unsafe timeout, and server cancellation behavior.
 
 Build and source `apriltag_msgs`, expose only the four AprilTag settings in
 this design, delete LiDAR settings, delete manual arm flags, and document the
-teamgrit-slam runtime prerequisite.
+optional teamgrit-slam integration.
 
 ## Observability
 
@@ -366,7 +367,9 @@ Implementation follows test-driven development.
 - A valid COBIZ task starts in zero hold without manual arm flags.
 - A false positive permits resume only with healthy inputs.
 - Confirmation produces `TASK_COMPLETED` and cannot resume.
-- Detection staleness during a task produces hard stop plus `TASK_ABORTED`.
+- Missing or stale detections do not block task startup or path tracking.
+- An unconfirmed candidate is released after its full window even if no later
+  detection message arrives.
 
 ### Deployment-contract tests
 
@@ -389,10 +392,10 @@ Implementation follows test-driven development.
 
 On the robot, before a moving test:
 
-1. verify `/detections` has type
+1. when AprilTag completion is enabled, verify `/detections` has type
    `apriltag_msgs/msg/AprilTagDetectionArray`;
 2. verify publisher and subscriber QoS with `ros2 topic info -v`;
-3. verify empty arrays arrive continuously with no visible tag;
+3. verify empty arrays update liveness metrics with no visible tag;
 4. verify both containers use the intended `ROS_DOMAIN_ID` and DDS network;
 5. record and review any concurrent `/api/sport/request` publishers; and
 6. perform all initial command checks with the robot lifted or otherwise made
@@ -407,8 +410,8 @@ Behavioral acceptance cases:
 3. Three frames of the same ID cause immediate stop followed by
    `TASK_COMPLETED` after the full window.
 4. Removing the confirmed tag never restarts the completed task.
-5. Stopping teamgrit-slam or `/detections` causes a hard stop and
-   `TASK_ABORTED` within the 1.0 second freshness bound.
+5. Stopping teamgrit-slam or `/detections` does not block or abort tracking;
+   AprilTag-based completion remains unavailable until messages return.
 6. A competing Sport publisher does not prevent or abort this task's motion.
 7. No LiDAR topic is required for startup or motion.
 

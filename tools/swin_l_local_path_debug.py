@@ -907,7 +907,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path,
                 camera_age_sec=camera_age_sec,
                 inference_age_sec=inference_age_sec,
-                detections_ready=self.apriltags.stream_ready(now),
                 config=self.drive_config,
             )
             return path, decision
@@ -1042,14 +1041,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 )
                 if tag_status.just_confirmed:
                     self.complete_apriltag_task(tag_status.confirmed_id)
-                if self.tasks.active is not None:
-                    if self.apriltags.message_age_sec(
-                        now
-                    ) is not None and not self.apriltags.stream_ready(now):
-                        # A received heartbeat becoming stale is detector loss,
-                        # including during startup or tag verification. A stream
-                        # never seen at all still gets the normal startup hold.
-                        self.abort_active_task("apriltag_detections_stale")
                 tag_status = self.apriltags.snapshot(now=now)
             task_active = self.tasks.active if self.tasks is not None else None
             mask_class = active_path_mask_class(task_active, args.path_mask_class)

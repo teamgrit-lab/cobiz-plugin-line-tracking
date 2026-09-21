@@ -81,6 +81,15 @@ def test_same_id_three_frames_confirms_only_after_full_window():
     )
 
 
+def test_timer_releases_unconfirmed_candidate_without_another_detection_message():
+    tags = monitor()
+    tags.observe(ids=[7], frame_key=1, now=0.0, task_active=True)
+    result = tags.tick(now=1.0, task_active=True)
+    assert result.state == "no_tag"
+    assert result.false_positive
+    assert not result.stop_now
+
+
 def test_reset_task_clears_latch_but_preserves_fresh_heartbeat():
     tags = monitor()
     for frame, now in ((1, 0.0), (2, 0.1), (3, 0.2)):

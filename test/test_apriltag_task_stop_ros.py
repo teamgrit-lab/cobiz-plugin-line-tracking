@@ -240,10 +240,11 @@ class RosHarness:
             assert time.perf_counter() < deadline, decision.reason
             time.sleep(0.001)
 
-    def establish_tracking(self, duration=30):
+    def establish_tracking(self, duration=30, *, detection_heartbeat=True):
         self.start(duration=duration)
         self.now = 2.1
-        self.detect()
+        if detection_heartbeat:
+            self.detect()
         self.camera_ready()
         self.node.publish_state()
         assert self.metrics()["drive_reason"] == "tracking"
@@ -335,6 +336,15 @@ def test_empty_heartbeat_permits_real_path_tracking(ros):
     ros.run(lambda _node: ros.establish_tracking())
 
 
+def test_absent_detection_publisher_permits_real_path_tracking(ros):
+    def scenario(_node):
+        ros.establish_tracking(detection_heartbeat=False)
+        assert ros.metrics()["apriltag"]["stream_ready"] is False
+        assert ros.metrics()["apriltag"]["message_age_sec"] is None
+
+    ros.run(scenario)
+
+
 def test_false_positive_resumes_only_after_camera_and_path_recover(ros):
     def scenario(node):
         ros.establish_tracking()
@@ -364,25 +374,27 @@ def test_false_positive_resumes_only_after_camera_and_path_recover(ros):
 
 
 @pytest.mark.parametrize("verifying", [False, True])
-def test_stale_stream_hard_stops_and_aborts_without_unsafe_timeout(ros, verifying):
+def test_stale_stream_does_not_abort_or_block_tracking(ros, verifying):
     def scenario(node):
         ros.establish_tracking()
         if verifying:
             ros.now = 2.2
             ros.detect(tag_id=7)
         ros.now = 3.21
-        stop_start = len(ros.events)
-        node.publish_state()
-        ros.hard_stop_before_task_state(
-            stop_start, "TASK_ABORTED", "apriltag_detections_stale"
-        )
-        assert node.tasks.active is None
-        ros.now = 3.3
-        ros.detect()
         ros.camera_ready()
         node.publish_state()
-        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
-        assert ros.task_state()["type"] == "TASK_ABORTED"
+        assert node.tasks.active is not None
+        assert ros.task_state()["type"] == "TASK_STARTED"
+        assert ros.metrics()["apriltag"]["stream_ready"] is False
+        assert ros.metrics()["drive_reason"] == (
+            "apriltag_verifying" if verifying else "tracking"
+        )
+        if verifying:
+            ros.now = 4.2
+            ros.camera_ready()
+            node.publish_state()
+            assert ros.metrics()["drive_reason"] == "tracking"
+        assert json.loads(ros.published[SPORT][-1].parameter)["x"] == 0.5
 
     ros.run(scenario, "--apriltag-confirm-window-sec", "2.0")
 
@@ -431,35 +443,35 @@ def test_completion_precedes_new_competing_publisher_at_window_deadline(ros):
 
 
 @pytest.mark.parametrize("candidate", [False, True])
-def test_received_then_lost_stream_aborts_even_before_tracking(ros, candidate):
+def test_received_then_lost_stream_does_not_block_startup(ros, candidate):
     def scenario(node):
         ros.start()
         ros.detect(tag_id=7 if candidate else None)
         ros.now = 1.01
-        stop_start = len(ros.events)
         node.publish_state()
-        ros.hard_stop_before_task_state(
-            stop_start, "TASK_ABORTED", "apriltag_detections_stale"
-        )
+        assert node.tasks.active is not None
+        assert ros.metrics()["apriltag"]["stream_ready"] is False
+        ros.now = 2.1 if not candidate else 2.01
+        ros.camera_ready()
+        node.publish_state()
+        assert node.tasks.active is not None
+        assert ros.metrics()["drive_reason"] == "tracking"
 
     ros.run(scenario, "--apriltag-confirm-window-sec", "2.0")
 
 
-def test_never_received_stream_gets_the_full_startup_hold(ros):
+def test_never_received_stream_tracks_after_the_startup_hold(ros):
     def scenario(node):
         ros.start()
         ros.now = 1.99
         node.publish_state()
         assert ros.task_state()["type"] == "TASK_STARTED"
+        ros.camera_ready()
         ros.now = 2.0
         node.publish_state()
-        assert ros.task_state()["type"] == "TASK_ABORTED"
-        assert ros.task_state()["reason"] == "startup:apriltag_detections_stale"
-        assert all(
-            json.loads(message.parameter) == ZERO
-            for message in ros.published[SPORT]
-            if message.header.identity.api_id == 1008
-        )
+        assert ros.task_state()["type"] == "TASK_STARTED"
+        assert ros.metrics()["drive_reason"] == "tracking"
+        assert json.loads(ros.published[SPORT][-1].parameter)["x"] == 0.5
 
     ros.run(scenario)
 
@@ -705,17 +717,25 @@ def test_cached_candidate_stops_on_start_and_observes_a_new_full_window(ros):
     ros.run(scenario)
 
 
-def test_cached_candidate_does_not_refresh_detector_heartbeat(ros):
+def test_cached_candidate_stale_heartbeat_does_not_abort_task(ros):
     def scenario(node):
         ros.detect(tag_id=7)
         ros.now = 0.8
         ros.start()
         ros.now = 1.01
-        stop_start = len(ros.events)
         node.publish_state()
-        ros.hard_stop_before_task_state(
-            stop_start, "TASK_ABORTED", "apriltag_detections_stale"
-        )
+        assert node.tasks.active is not None
+        assert ros.metrics()["drive_reason"] == "apriltag_verifying"
+        assert ros.metrics()["apriltag"]["stream_ready"] is False
+        ros.now = 1.8
+        ros.camera_ready()
+        node.publish_state()
+        assert node.tasks.active is not None
+        assert ros.metrics()["drive_reason"] == "startup_hold"
+        ros.now = 2.81
+        ros.camera_ready()
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "tracking"
 
     ros.run(scenario)
 
@@ -899,8 +919,8 @@ def test_abort_report_failure_cannot_keep_a_task_active(ros):
     ros.run(scenario, allow_errors=True)
 
 
-@pytest.mark.parametrize("source", ["stale", "server"])
-def test_abort_clears_verification_display_without_refreshing_heartbeat(
+@pytest.mark.parametrize("source", ["expired", "server"])
+def test_verification_display_clears_without_refreshing_heartbeat(
     ros, monkeypatch, source
 ):
     texts = []
@@ -919,20 +939,24 @@ def test_abort_clears_verification_display_without_refreshing_heartbeat(
         node.publish_state()
         assert any("APRILTAG VERIFY" in text for text in texts)
         texts.clear()
-        ros.now = 3.21
+        ros.now = 3.21 if source == "server" else 4.2
         if source == "server":
             ros.subscriptions["/task_event"](
                 Message(json.dumps({"type": "TASK_ABORTED", "task_id": "tag-stop-1"}))
             )
+        else:
+            ros.camera_ready()
         node.publish_state()
-        assert ros.task_state()["reason"] == (
-            "apriltag_detections_stale"
-            if source == "stale"
-            else "task_aborted_by_server"
+        assert ros.task_state()["type"] == (
+            "TASK_STARTED" if source == "expired" else "TASK_ABORTED"
         )
-        assert ros.metrics()["task_active"] is False
+        if source == "server":
+            assert ros.task_state()["reason"] == "task_aborted_by_server"
+        assert ros.metrics()["task_active"] is (source == "expired")
         assert ros.metrics()["apriltag"]["state"] == "no_tag"
-        assert ros.metrics()["apriltag"]["message_age_sec"] == pytest.approx(1.01)
+        assert ros.metrics()["apriltag"]["message_age_sec"] == pytest.approx(
+            2.0 if source == "expired" else 1.01
+        )
         assert ros.metrics()["apriltag"]["stream_ready"] is False
         assert not any("APRILTAG VERIFY" in text for text in texts)
 

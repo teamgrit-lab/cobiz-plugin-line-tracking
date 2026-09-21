@@ -388,7 +388,7 @@ def test_stale_stream_hard_stops_and_aborts_without_unsafe_timeout(ros, verifyin
 
 
 @pytest.mark.parametrize("phase", ["startup", "verifying", "tracking"])
-def test_competing_publisher_hard_stops_immediately_in_every_active_phase(ros, phase):
+def test_competing_publisher_does_not_abort_an_active_task(ros, phase):
     def scenario(node):
         if phase == "tracking":
             ros.establish_tracking()
@@ -397,13 +397,18 @@ def test_competing_publisher_hard_stops_immediately_in_every_active_phase(ros, p
             if phase == "verifying":
                 ros.detect(tag_id=7)
         ros.now += 0.1
-        ros.external_publishers = 1
-        stop_start = len(ros.events)
+        ros.external_publishers = 5
         node.publish_state()
-        ros.hard_stop_before_task_state(
-            stop_start, "TASK_ABORTED", "multiple_control_publishers"
-        )
-        assert node.tasks.active is None
+        assert node.tasks.active is not None
+        assert ros.task_state()["type"] == "TASK_STARTED"
+        expected_reason = {
+            "startup": "startup_hold",
+            "verifying": "apriltag_verifying",
+            "tracking": "tracking",
+        }[phase]
+        assert ros.metrics()["drive_reason"] == expected_reason
+        if phase == "tracking":
+            assert json.loads(ros.published[SPORT][-1].parameter)["x"] == 0.5
 
     ros.run(scenario)
 

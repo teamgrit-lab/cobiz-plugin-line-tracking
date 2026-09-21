@@ -66,14 +66,11 @@ def decide_drive(
     camera_age_sec: float | None,
     inference_age_sec: float | None,
     detections_ready: bool,
-    other_control_publishers: bool,
     config: DriveConfig,
 ) -> DriveDecision:
     """Only permit low-speed motion with fresh detections and plausible inputs."""
 
     config.validate()
-    if other_control_publishers:
-        return DriveDecision.stop("multiple_control_publishers")
     if not detections_ready:
         return DriveDecision.stop("apriltag_detections_stale")
     for name, age, maximum in (

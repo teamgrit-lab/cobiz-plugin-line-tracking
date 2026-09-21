@@ -46,8 +46,9 @@ def test_no_surface_or_far_off_center_surface_stops_preview():
 def test_video_roi_below_horizon_recovers_visible_road():
     mask = np.zeros((360, 640), np.uint8)
     cv2.rectangle(mask, (0, 169), (639, 359), 1, thickness=-1)
-    assert choose_surface(mask, LocalPathConfig(), DriveConfig()) is None
-    selected = choose_surface(mask, video_path_config(0.55), DriveConfig())
+    drive = DriveConfig(min_confidence=0.70)
+    assert choose_surface(mask, LocalPathConfig(), drive) is None
+    selected = choose_surface(mask, video_path_config(0.55), drive)
     assert selected is not None
     assert selected[0] == "ROAD"
 

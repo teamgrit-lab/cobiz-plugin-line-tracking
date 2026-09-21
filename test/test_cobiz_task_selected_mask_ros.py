@@ -18,14 +18,15 @@ from swin_l_drive_control import DriveDecision  # noqa: E402
 
 
 @pytest.mark.parametrize(
-    ("preexisting_control_publishers", "expected_state"),
-    [(0, "TASK_STARTED"), (1, "TASK_REJECTED")],
+    "preexisting_control_publishers",
+    [0, 1, 5],
 )
-def test_task_control_rejects_external_publisher_before_readiness(
-    monkeypatch, preexisting_control_publishers, expected_state
+def test_task_control_ignores_external_publisher_count(
+    monkeypatch, preexisting_control_publishers
 ):
     published: dict[str, list] = {}
     publisher_qos = {}
+    publisher_count_queries = []
 
     reliable = object()
 
@@ -61,6 +62,7 @@ def test_task_control_rejects_external_publisher_before_readiness(
 
         def count_publishers(self, topic):
             assert topic == "/api/sport/request"
+            publisher_count_queries.append(topic)
             return preexisting_control_publishers
 
         def create_timer(self, *_args):
@@ -88,22 +90,19 @@ def test_task_control_rejects_external_publisher_before_readiness(
     rclpy.shutdown = lambda: None
 
     def spin(node):
-        if not preexisting_control_publishers:
-            _, decision = node.drive_readiness(1, time.monotonic())
-            assert decision.reason == "apriltag_detections_stale"
-            assert (decision.vx, decision.vy, decision.yaw_rate) == (0.0, 0.0, 0.0)
-            camera = Message()
-            camera.header.stamp = SimpleNamespace(sec=100, nanosec=0)
-            node.on_image(camera)
-            deadline = time.monotonic() + 2.0
-            while not published["/line_tracking/swin_l/overlay"]:
-                node._publish_state()
-                assert time.monotonic() < deadline, (
-                    "inference did not publish an overlay"
-                )
-                time.sleep(0.001)
-            overlay = published["/line_tracking/swin_l/overlay"][-1]
-            assert overlay.frame.shape == (360, 640, 3)
+        _, decision = node.drive_readiness(1, time.monotonic())
+        assert decision.reason == "apriltag_detections_stale"
+        assert (decision.vx, decision.vy, decision.yaw_rate) == (0.0, 0.0, 0.0)
+        camera = Message()
+        camera.header.stamp = SimpleNamespace(sec=100, nanosec=0)
+        node.on_image(camera)
+        deadline = time.monotonic() + 2.0
+        while not published["/line_tracking/swin_l/overlay"]:
+            node._publish_state()
+            assert time.monotonic() < deadline, "inference did not publish an overlay"
+            time.sleep(0.001)
+        overlay = published["/line_tracking/swin_l/overlay"][-1]
+        assert overlay.frame.shape == (360, 640, 3)
         checked_classes = []
 
         def readiness(mask_class, _now):
@@ -129,13 +128,7 @@ def test_task_control_rejects_external_publisher_before_readiness(
             )
         )
         state = json.loads(published["/task_state"][-1].data)
-        assert state["type"] == expected_state
-        if preexisting_control_publishers:
-            assert state["reason"] == "multiple_control_publishers"
-            assert node.tasks.active is None
-            assert node.command_publisher is None
-            assert checked_classes == []
-            return
+        assert state["type"] == "TASK_STARTED"
         assert node.tasks.active.selected_mask == 1
         node.tasks.active = replace(node.tasks.active, started_at=time.monotonic() - 3)
         node.publish_state()
@@ -166,6 +159,7 @@ def test_task_control_rejects_external_publisher_before_readiness(
             "z": 0.0,
         }
         assert checked_classes == [1, 2]
+        assert publisher_count_queries == []
 
     rclpy.spin = spin
     modules = {

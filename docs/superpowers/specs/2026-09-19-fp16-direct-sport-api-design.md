@@ -38,10 +38,9 @@ remains unchanged. The publisher uses reliable QoS depth 10 and exists only
 while a task owns control.
 
 This is the user-selected direct-control option. It bypasses the
-`teamgrit-navigation` emergency-stop forwarding node. Deployment therefore
-requires every other `/api/sport/request` publisher, including navigation and
-emergency-stop output, to be stopped. The existing publisher-count ownership
-check rejects task acquisition when another final-command publisher exists.
+`teamgrit-navigation` emergency-stop forwarding node. The task listener does
+not reject or abort when another `/api/sport/request` publisher exists, so
+concurrent publishers may issue conflicting commands to the Unitree interface.
 
 ## ROS message packaging
 

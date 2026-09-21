@@ -306,7 +306,7 @@ clamped `Move` encoder.
 ### `tools/swin_l_drive_control.py`
 
 Remove LiDAR input from `decide_drive`. Keep camera, inference, path geometry,
-speed clamping, and exclusive-publisher checks.
+and speed clamping checks. Do not gate motion on other Sport publishers.
 
 ### `tools/swin_l_local_path_debug.py`
 
@@ -394,7 +394,7 @@ On the robot, before a moving test:
 2. verify publisher and subscriber QoS with `ros2 topic info -v`;
 3. verify empty arrays arrive continuously with no visible tag;
 4. verify both containers use the intended `ROS_DOMAIN_ID` and DDS network;
-5. verify no competing `/api/sport/request` publisher exists; and
+5. record and review any concurrent `/api/sport/request` publishers; and
 6. perform all initial command checks with the robot lifted or otherwise made
    physically safe.
 
@@ -409,7 +409,7 @@ Behavioral acceptance cases:
 4. Removing the confirmed tag never restarts the completed task.
 5. Stopping teamgrit-slam or `/detections` causes a hard stop and
    `TASK_ABORTED` within the 1.0 second freshness bound.
-6. A competing Sport publisher prevents or aborts motion.
+6. A competing Sport publisher does not prevent or abort this task's motion.
 7. No LiDAR topic is required for startup or motion.
 
 ## Success criteria

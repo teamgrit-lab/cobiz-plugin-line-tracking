@@ -31,7 +31,6 @@ def _decide(path=None, **overrides):
     arguments = dict(
         camera_age_sec=0.1,
         inference_age_sec=0.1,
-        other_control_publishers=False,
         detections_ready=True,
         config=DriveConfig(),
     )
@@ -76,12 +75,11 @@ def test_right_path_turns_right_without_lateral_velocity():
     "override,reason",
     [
         ({"detections_ready": False}, "apriltag_detections_stale"),
-        ({"other_control_publishers": True}, "multiple_control_publishers"),
         ({"camera_age_sec": None}, "camera_stale"),
         ({"camera_age_sec": 0.6}, "camera_stale"),
         ({"inference_age_sec": 0.6}, "inference_stale"),
         ({"path": _path(age=0.6)}, "path_stale"),
-        ({"path": _path(confidence=0.5)}, "path_low_confidence"),
+        ({"path": _path(confidence=0.49)}, "path_low_confidence"),
         ({"path": _path(lateral=1.0)}, "path_lateral_target_large"),
     ],
 )
@@ -97,7 +95,6 @@ def test_missing_or_malformed_path_stops():
             None,
             camera_age_sec=0.1,
             inference_age_sec=0.1,
-            other_control_publishers=False,
             detections_ready=True,
             config=DriveConfig(),
         ).reason
@@ -110,13 +107,6 @@ def test_missing_or_malformed_path_stops():
         source="test",
     )
     assert _decide(malformed).reason == "path_geometry_invalid"
-
-
-def test_competing_publishers_take_precedence_over_detection_readiness():
-    command = _decide(other_control_publishers=True, detections_ready=False)
-    assert command.reason == "multiple_control_publishers"
-    assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
-
 
 def test_task_drive_preflight_requires_pinned_model():
     args = debug.parse_args(["task-drive"])

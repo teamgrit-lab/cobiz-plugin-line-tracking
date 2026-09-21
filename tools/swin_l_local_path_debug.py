@@ -903,15 +903,10 @@ def run_ros2(args: argparse.Namespace) -> int:
             inference_age_sec = _effective_source_age_sec(
                 last_inference_at, last_inference_stamp_ns, now, clock_now_ns
             )
-            publisher_count = self.count_publishers(args.sport_request_topic)
-            other_publishers = publisher_count > (
-                1 if self.command_publisher is not None else 0
-            )
             decision = decide_drive(
                 path,
                 camera_age_sec=camera_age_sec,
                 inference_age_sec=inference_age_sec,
-                other_control_publishers=other_publishers,
                 detections_ready=self.apriltags.stream_ready(now),
                 config=self.drive_config,
             )
@@ -927,14 +922,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             now = time.monotonic()
             rejection_reason = None
-            if (
-                isinstance(event, dict)
-                and event.get("type") == "TASK_REGISTERED"
-                and event.get("action_name") == "LINE_TRACKING"
-                and self.tasks.active is None
-                and self.count_publishers(args.sport_request_topic) > 0
-            ):
-                rejection_reason = "multiple_control_publishers"
             if self.command_publisher is not None and self.tasks.active is None:
                 rejection_reason = "control_release_pending"
             previous_task = self.tasks.active
@@ -1056,11 +1043,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 if tag_status.just_confirmed:
                     self.complete_apriltag_task(tag_status.confirmed_id)
                 if self.tasks.active is not None:
-                    if self.count_publishers(args.sport_request_topic) > (
-                        1 if self.command_publisher is not None else 0
-                    ):
-                        self.abort_active_task("multiple_control_publishers")
-                    elif self.apriltags.message_age_sec(
+                    if self.apriltags.message_age_sec(
                         now
                     ) is not None and not self.apriltags.stream_ready(now):
                         # A received heartbeat becoming stale is detector loss,

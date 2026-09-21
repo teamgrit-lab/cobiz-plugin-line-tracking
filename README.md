@@ -17,7 +17,7 @@ mean that the detector is alive but sees no tag.
 
 - A valid Cobiz payload begins with a two-second zero-command startup hold.
 - Motion requires fresh camera, inference, local-path, and `/detections`
-  heartbeat data, as well as exclusive ownership of `/api/sport/request`.
+  heartbeat data.
 - The first AprilTag candidate immediately sends a hard zero-command stop.
 - The task completes only after three frames for the same tag ID arrive across
   a full one-second confirmation window. Completion sends the hard stop before
@@ -30,10 +30,12 @@ mean that the detector is alive but sees no tag.
   protection and a physical emergency stop for real-world operation.
 
 The direct Sport interface is `/api/sport/request` (`unitree_api/msg/Request`,
-Move API ID `1008`). It bypasses navigation-level command arbitration, so stop
-all other publishers before an operational run. Move serialization preserves
-the existing calibrated axes: `x=vx`, `y=-vy`, and `z=-yaw_rate`. Forward speed
-defaults to `0.50 m/s`, can be adjusted through
+Move API ID `1008`). It bypasses navigation-level command arbitration and does
+not reject or abort a task when other publishers exist. Concurrent publishers
+can therefore issue conflicting commands, and the downstream Unitree interface
+determines which command takes effect. Move serialization preserves the existing
+calibrated axes: `x=vx`, `y=-vy`, and `z=-yaw_rate`. Forward speed defaults to
+`0.50 m/s`, can be adjusted through
 `LINE_TRACKING_MAX_FORWARD_MPS`, and is rejected above the hard `1.00 m/s`
 limit.
 
@@ -106,7 +108,7 @@ the camera-to-`base_link` geometry and Swin-L path against the installed A2.
    `SWIN_L_FAR_DISTANCE_M`, and `SWIN_L_GROUND_HALF_WIDTH_M`.
 3. Select `SWIN_L_PATH_MASK_CLASS=1` for road or `2` for sidewalk.
 4. Verify the camera timestamp, path freshness, coordinate axes, speed limits,
-   and the exclusive Sport publisher before a live task.
+   and behavior with any concurrently active Sport publishers before a live task.
 
 For a 1280x720 Jetson camera, retain the 640x360 evaluation size and set only
 the actual image topic as needed:

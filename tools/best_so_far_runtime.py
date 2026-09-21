@@ -352,8 +352,14 @@ class BestSoFarSegmenter:
                     target_sizes=[self.evaluation_size],
                     return_segmentation_scores=True,
                 )[0]
-                # Preserve the exact retained Swin-L CPU smoothing path.
-                return processed["segmentation_scores"].detach().float().cpu()
+                scores = processed["segmentation_scores"].detach()
+                if self.use_fp16:
+                    # Keep deployment scores on the accelerator in their native
+                    # FP16 dtype. Temporal smoothing and argmax then run without
+                    # copying the full class-score tensor to CPU every frame.
+                    return scores.to(device=self.device, dtype=torch.float16)
+                # Preserve the exact retained FP32 rollback behavior.
+                return scores.float().cpu()
 
             class_probabilities = outputs.class_queries_logits.softmax(dim=-1)[..., :-1]
             mask_probabilities = outputs.masks_queries_logits.sigmoid()

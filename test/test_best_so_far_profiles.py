@@ -1,10 +1,10 @@
-from pathlib import Path
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
-
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
@@ -191,3 +191,60 @@ def test_changed_pixel_hysteresis_matches_full_frame_topk():
     actual = _changed_pixel_hysteresis_hold_mask(scores, selected, previous, margin)
 
     assert np.array_equal(actual, expected)
+
+
+class _FakeMask2FormerProcessor:
+    def __init__(self, scores):
+        self.scores = scores
+
+    def __call__(self, *, images, return_tensors):
+        assert images.shape == (4, 6, 3)
+        assert return_tensors == "pt"
+        return {"pixel_values": torch.ones((1, 3, 4, 6), dtype=torch.float32)}
+
+    def post_process_semantic_segmentation(
+        self, outputs, *, target_sizes, return_segmentation_scores
+    ):
+        assert outputs == "model-output"
+        assert target_sizes == [(4, 6)]
+        assert return_segmentation_scores is True
+        return [{"segmentation_scores": self.scores}]
+
+
+class _FakeMask2FormerModel:
+    def __call__(self, **inputs):
+        assert inputs["pixel_values"].dtype == torch.float16
+        return "model-output"
+
+
+def test_swin_l_fp16_scores_remain_on_accelerator_in_native_dtype():
+    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter.profile = SimpleNamespace(model_family="mask2former")
+    segmenter.config = SimpleNamespace(evaluation_height=4, evaluation_width=6)
+    segmenter.device = torch.device("cpu")
+    segmenter.use_fp16 = True
+    expected = torch.ones((3, 4, 6), dtype=torch.float16)
+    segmenter.processor = _FakeMask2FormerProcessor(expected)
+    segmenter.model = _FakeMask2FormerModel()
+
+    actual = segmenter._semantic_scores(np.zeros((4, 6, 3), dtype=np.uint8))
+
+    assert actual.data_ptr() == expected.data_ptr()
+    assert actual.dtype == torch.float16
+    assert actual.device == expected.device
+
+
+def test_swin_l_fp32_rollback_scores_stay_float32_on_cpu():
+    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter.profile = SimpleNamespace(model_family="mask2former")
+    segmenter.config = SimpleNamespace(evaluation_height=4, evaluation_width=6)
+    segmenter.device = torch.device("cpu")
+    segmenter.use_fp16 = False
+    source = torch.ones((3, 4, 6), dtype=torch.float16)
+    segmenter.processor = _FakeMask2FormerProcessor(source)
+    segmenter.model = lambda **_inputs: "model-output"
+
+    actual = segmenter._semantic_scores(np.zeros((4, 6, 3), dtype=np.uint8))
+
+    assert actual.dtype == torch.float32
+    assert actual.device.type == "cpu"

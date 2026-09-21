@@ -143,7 +143,7 @@ jetson-containers build \
   --base=cobiz:jetson \
   --name=cobiz:jetson-swin-l \
   --skip-packages=ffmpeg,opencv,ros \
-  pytorch:2.8 tensorrt torch_tensorrt
+  pytorch:2.8
 
 docker image inspect cobiz:jetson-swin-l-l4t-r36.5.0
 cd /path/to/cobiz-plugin-line-tracking

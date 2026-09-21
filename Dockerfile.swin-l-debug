@@ -8,13 +8,14 @@ SHELL ["/bin/bash", "-c"]
 
 ARG SWIN_L_TORCHVISION_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126
 ARG SWIN_L_TORCHVISION_VERSION=0.23.0
+ARG SWIN_L_TORCH_TENSORRT_VERSION=2.8.0+cu126
 
 # The base image is built once with jetson-containers and provides the
 # Jetson-compatible PyTorch, CUDA, and ROS stack. torchvision and Transformers
 # is installed below from the Jetson aarch64 index because pytorch:2.8 does
 # not include it and the generic alias currently resolves to a newer release.
-# The base image also supplies TensorRT and Torch-TensorRT compiled for the
-# same JetPack/PyTorch ABI.
+# JetPack supplies TensorRT; the matching Torch-TensorRT wheel is installed
+# below from the same Jetson CUDA 12.6 index as torchvision.
 # Do not install torch from PyPI here: pip can select a CPU wheel or a CUDA
 # build that is newer than the Jetson host driver.
 RUN apt-get update \
@@ -49,6 +50,11 @@ RUN /opt/venv/bin/python -m pip install --no-cache-dir \
         --only-binary=torchvision \
         "torchvision==${SWIN_L_TORCHVISION_VERSION}" \
     && /opt/venv/bin/python -m pip install --no-cache-dir \
+        --index-url "${SWIN_L_TORCHVISION_INDEX_URL}" \
+        --no-deps \
+        --only-binary=:all: \
+        "torch-tensorrt==${SWIN_L_TORCH_TENSORRT_VERSION}" \
+    && /opt/venv/bin/python -m pip install --no-cache-dir \
         "numpy>=1.26,<2" \
         "pillow>=10,<14" \
         "scipy>=1.10,<2" \
@@ -65,7 +71,8 @@ RUN /opt/venv/bin/python -c \
      cuda = torch.version.cuda; \
      assert cuda and cuda.startswith("12.6"), f"expected CUDA 12.6 PyTorch, got {cuda!r}"; \
      assert importlib.util.find_spec("tensorrt") is not None, "TensorRT Python bindings are missing"; \
-     print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} tensorrt=present transformers={transformers.__version__} opencv={cv2.__version__}")'
+     assert importlib.util.find_spec("torch_tensorrt") is not None, "Torch-TensorRT is missing"; \
+     print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} tensorrt=present torch_tensorrt=present transformers={transformers.__version__} opencv={cv2.__version__}")'
 
 WORKDIR /unitree_ws
 COPY third_party/unitree_msgs/unitree_api /unitree_ws/src/unitree_api

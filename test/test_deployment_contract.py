@@ -123,6 +123,7 @@ def test_jetson_swin_l_base_build_contract():
     assert "SWIN_L_TORCH_VERSION" not in compose
     assert "SWIN_L_TORCHVISION_INDEX_URL" in compose
     assert "SWIN_L_TORCHVISION_VERSION" in compose
+    assert "SWIN_L_TORCH_TENSORRT_VERSION" in compose
     assert "SWIN_L_BASE_IMAGE=cobiz:jetson-swin-l-l4t-r36.5.0" in env_example
     assert "SWIN_L_TORCH_INDEX_URL" not in env_example
     assert "SWIN_L_TORCH_VERSION" not in env_example
@@ -131,10 +132,12 @@ def test_jetson_swin_l_base_build_contract():
         in env_example
     )
     assert "SWIN_L_TORCHVISION_VERSION=0.23.0" in env_example
+    assert "SWIN_L_TORCH_TENSORRT_VERSION=2.8.0+cu126" in env_example
     assert "ARG SWIN_L_BASE_IMAGE=cobiz:jetson-swin-l-l4t-r36.5.0" in debug_dockerfile
     assert "pip install" in debug_dockerfile
     assert "torchvision" in debug_dockerfile
     assert '"torchvision==${SWIN_L_TORCHVISION_VERSION}"' in debug_dockerfile
+    assert '"torch-tensorrt==${SWIN_L_TORCH_TENSORRT_VERSION}"' in debug_dockerfile
     assert "--no-deps" in debug_dockerfile
     assert "torch.version.cuda" in debug_dockerfile
     assert "12.6" in debug_dockerfile

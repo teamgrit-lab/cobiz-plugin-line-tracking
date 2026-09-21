@@ -23,10 +23,10 @@ class DriveConfig:
     max_yaw_rps: float = 0.18
     heading_gain: float = 1.0
     lookahead_m: float = 4.0
-    min_confidence: float = 0.50
+    min_confidence: float = 0.49
     max_lateral_target_m: float = 0.75
-    max_camera_age_sec: float = 0.50
-    max_inference_age_sec: float = 0.50
+    max_camera_age_sec: float = 5.00
+    max_inference_age_sec: float = 5.00
     max_path_age_sec: float = 0.45
 
     def validate(self) -> None:

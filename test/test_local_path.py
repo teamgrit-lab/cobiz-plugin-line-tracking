@@ -73,3 +73,27 @@ def test_smoother_limits_update_and_holds_last_path():
     assert float(np.max(updated.points_xy[:, 1])) < 0.2
     assert held is not None
     assert expired is None
+
+
+def test_new_result_lifetime_starts_when_result_becomes_available():
+    config = LocalPathConfig(path_hold_sec=0.5)
+    smoother = LocalPathSmoother(config)
+    estimate = LocalPathEstimate(
+        points_xy=np.column_stack((np.linspace(3.0, 8.0, 4), np.zeros(4))).astype(
+            np.float32
+        ),
+        confidence=0.8,
+        valid_ratio=1.0,
+        mean_sidewalk_width_m=1.0,
+        raw_points_xy=np.zeros((4, 2), dtype=np.float32),
+    )
+
+    # A frame may have waited and spent longer than path_hold_sec in inference.
+    # The newly available result must still begin with age zero.
+    result_available_at = 10.0
+    created = smoother.update(estimate, result_available_at)
+
+    assert created is not None
+    assert created.age_sec == 0.0
+    assert smoother.current(10.49) is not None
+    assert smoother.current(10.51) is None

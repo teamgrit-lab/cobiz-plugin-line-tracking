@@ -250,7 +250,6 @@ def decode_ros_image(decoded: Any) -> np.ndarray:
 @dataclass(frozen=True)
 class FramePacket:
     frame_bgr: np.ndarray
-    timestamp_sec: float
     sequence: int
     source_header: Any = None
 
@@ -274,15 +273,27 @@ class LatestFrameQueue:
             self._condition.notify()
             return True
 
-    def get(self) -> FramePacket | None:
+    def get_latest_at(self, ready_at_sec: float) -> FramePacket | None:
+        """Return the freshest frame once the rate-limit deadline is reached.
+
+        Waiting happens while the frame remains in the depth-one queue, so a
+        newer camera callback can replace it. Closing the queue interrupts the
+        wait immediately.
+        """
+
         with self._condition:
-            while self._item is None and not self._closed:
-                self._condition.wait()
-            if self._item is None:
-                return None
-            item = self._item
-            self._item = None
-            return item
+            while not self._closed:
+                if self._item is None:
+                    self._condition.wait()
+                    continue
+                remaining = ready_at_sec - time.monotonic()
+                if remaining > 0.0:
+                    self._condition.wait(timeout=remaining)
+                    continue
+                item = self._item
+                self._item = None
+                return item
+            return None
 
     def close(self) -> None:
         with self._condition:
@@ -1005,7 +1016,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 accepted = latest.put(
                     FramePacket(
                         frame_bgr=np.ascontiguousarray(frame),
-                        timestamp_sec=time.monotonic(),
                         sequence=int(state["sequence"]),
                         source_header=message.header,
                     )
@@ -1218,24 +1228,28 @@ def run_ros2(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, stop_on_sigterm)
 
     def worker() -> None:
+        inference_period = 1.0 / args.inference_hz
         next_allowed = time.monotonic()
         try:
             while rclpy.ok():
-                packet = latest.get()
+                packet = latest.get_latest_at(next_allowed)
                 if packet is None:
                     break
-                delay = next_allowed - time.monotonic()
-                if delay > 0.0:
-                    time.sleep(delay)
+                inference_started_at = time.monotonic()
                 started = time.perf_counter() if extended_diagnostics else 0.0
                 result: BestSoFarResult = segmenter.segment(packet.frame_bgr)
+                # The path becomes usable when this result is available. Using
+                # the camera-arrival timestamp here can expire a path before it
+                # is ever published when inference or rate limiting is slow.
+                path_updated_at = time.monotonic()
+                estimates = update_path_smoothers(
+                    result.selected_mask,
+                    smoothers,
+                    local_config,
+                    path_updated_at,
+                )
+                inference_finished_at = time.monotonic()
                 with state_lock:
-                    estimates = update_path_smoothers(
-                        result.selected_mask,
-                        smoothers,
-                        local_config,
-                        packet.timestamp_sec,
-                    )
                     if extended_diagnostics:
                         state["frame"] = packet.frame_bgr
                         state["selected_mask"] = result.selected_mask
@@ -1243,12 +1257,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                         state["inference_times"].append(time.perf_counter() - started)
                     state["header"] = packet.source_header
                     state["inference_count"] += 1
-                    state["last_inference_at"] = time.monotonic()
+                    state["last_inference_at"] = inference_finished_at
                     if task_mode:
                         state["last_inference_stamp_ns"] = _stamp_ns(
                             packet.source_header
                         )
-                next_allowed = time.monotonic() + 1.0 / args.inference_hz
+                # Limit start-to-start frequency. If inference itself consumed
+                # the period, process the next fresh frame immediately instead
+                # of adding another fixed 1 / inference_hz delay.
+                next_allowed = inference_started_at + inference_period
         except BaseException as error:  # noqa: BLE001 - forward to main thread.
             worker_error.append(error)
             if task_mode:

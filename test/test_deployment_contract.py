@@ -141,8 +141,8 @@ def test_jetson_swin_l_base_build_contract():
     assert "ros-humble-cv-bridge" in debug_dockerfile
     assert "ros-humble-rmw-cyclonedds-cpp" in debug_dockerfile
     assert '"transformers==5.16.1"' in debug_dockerfile
-    assert "torch_tensorrt" in debug_dockerfile
     assert "tensorrt" in debug_dockerfile
+    assert "/usr/lib/python3.10/dist-packages" in debug_dockerfile
 
 
 def test_tensorrt_engine_build_services_use_target_gpu_and_artifact_mounts():
@@ -158,6 +158,9 @@ def test_tensorrt_engine_build_services_use_target_gpu_and_artifact_mounts():
     assert build["runtime"] == "nvidia"
     assert "prepare_swin_l_checkpoint.py" in prepare["entrypoint"][1]
     assert "build_swin_l_tensorrt.py" in build["entrypoint"][1]
+    assert "torch_tensorrt" in (
+        ROOT / "tools" / "build_swin_l_tensorrt.py"
+    ).read_text()
     assert any(mount.endswith(":/models/checkpoint:ro") for mount in build["volumes"])
     assert any(mount.endswith(":/models/output") for mount in build["volumes"])
 

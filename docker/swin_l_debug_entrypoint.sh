@@ -67,4 +67,36 @@ case "${mode}" in
     exit 1
     ;;
 esac
+
+if [[ "${SWIN_L_BACKEND:-pytorch}" == "tensorrt" \
+  && "${SWIN_L_TRT_AUTO_BUILD:-false}" == "true" ]]; then
+  engine_path="${SWIN_L_TRT_ENGINE:?SWIN_L_TRT_ENGINE must be set}"
+  manifest_path="${SWIN_L_TRT_MANIFEST:-${engine_path}.json}"
+  checkpoint_path="${SWIN_L_TRT_CHECKPOINT:-/models/checkpoint}"
+
+  if [[ ! -s "${engine_path}" || ! -s "${manifest_path}" ]]; then
+    echo "[swin-l-debug] TensorRT artifact is missing; preparing it before startup"
+    mkdir -p \
+      "$(dirname "${engine_path}")" \
+      "$(dirname "${manifest_path}")" \
+      "${checkpoint_path}"
+
+    if [[ ! -s "${checkpoint_path}/model.safetensors" \
+      || ! -s "${checkpoint_path}/checkpoint-manifest.json" ]]; then
+      echo "[swin-l-debug] preparing Swin-L safetensors checkpoint at ${checkpoint_path}"
+      python3 /workspace/tools/prepare_swin_l_checkpoint.py \
+        --output-dir "${checkpoint_path}" \
+        --allow-initialized-weights
+    fi
+
+    echo "[swin-l-debug] building TensorRT engine at ${engine_path}"
+    python3 /workspace/tools/build_swin_l_tensorrt.py \
+      --checkpoint "${checkpoint_path}" \
+      --output "${engine_path}" \
+      --manifest-output "${manifest_path}"
+  else
+    echo "[swin-l-debug] using existing TensorRT engine: ${engine_path}"
+  fi
+fi
+
 exec python3 /workspace/tools/swin_l_local_path_debug.py "${mode}"

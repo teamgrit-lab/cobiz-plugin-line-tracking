@@ -37,6 +37,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--manifest-output",
+        type=Path,
+        help="manifest destination (defaults to <output>.json)",
+    )
     parser.add_argument("--optimization-level", type=int, choices=range(6), default=3)
     parser.add_argument("--workspace-mib", type=int, default=1024)
     return parser.parse_args(argv)
@@ -165,7 +170,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "engine_sha256": sha256_file(output),
     }
-    manifest_path = output.with_suffix(output.suffix + ".json")
+    manifest_path = (
+        args.manifest_output.expanduser().resolve()
+        if args.manifest_output is not None
+        else output.with_suffix(output.suffix + ".json")
+    )
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"SWIN_L_TENSORRT_READY engine={output} manifest={manifest_path}")
     return 0

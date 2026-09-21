@@ -169,6 +169,25 @@ def test_tensorrt_engine_build_services_use_target_gpu_and_artifact_mounts():
     assert any(mount.endswith(":/models/output") for mount in build["volumes"])
 
 
+def test_actual_activate_builds_missing_tensorrt_artifacts_on_startup():
+    import yaml
+
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    listener = services["actual-activate"]
+    entrypoint = (ROOT / "docker" / "swin_l_debug_entrypoint.sh").read_text()
+
+    assert listener["environment"]["SWIN_L_TRT_AUTO_BUILD"].endswith(":-true}")
+    assert listener["environment"]["SWIN_L_TRT_CHECKPOINT"].endswith(
+        ":-/models/checkpoint}"
+    )
+    assert any(mount.endswith(":/models") for mount in listener["volumes"])
+    assert not any(mount.endswith(":/models:ro") for mount in listener["volumes"])
+    assert any(mount.endswith(":/models/checkpoint") for mount in listener["volumes"])
+    assert "prepare_swin_l_checkpoint.py" in entrypoint
+    assert "build_swin_l_tensorrt.py" in entrypoint
+    assert '--manifest-output "${manifest_path}"' in entrypoint
+
+
 def test_jetson_image_builds_and_sources_unitree_request_interface():
     dockerfile = (ROOT / "Dockerfile.swin-l-debug").read_text()
     entrypoint = (ROOT / "docker" / "swin_l_debug_entrypoint.sh").read_text()

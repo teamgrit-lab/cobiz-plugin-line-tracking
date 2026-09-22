@@ -39,6 +39,7 @@ def test_jetson_builder_defaults_to_least_aggressive_optimization():
     args = parse_args(["--checkpoint", "/checkpoint", "--output", "/model.plan"])
 
     assert args.optimization_level == 0
+    assert args.workspace_mib == 2048
 
 
 def test_tensorrt_graph_rewrite_preserves_mask_and_attention_results():

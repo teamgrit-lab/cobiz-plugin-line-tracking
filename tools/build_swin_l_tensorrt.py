@@ -50,7 +50,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     # Mask2Former graph is aggressively fused. Prefer the least aggressive
     # builder level; callers can still opt into a higher level explicitly.
     parser.add_argument("--optimization-level", type=int, choices=range(6), default=0)
-    parser.add_argument("--workspace-mib", type=int, default=1024)
+    parser.add_argument("--workspace-mib", type=int, default=2048)
     return parser.parse_args(argv)
 
 

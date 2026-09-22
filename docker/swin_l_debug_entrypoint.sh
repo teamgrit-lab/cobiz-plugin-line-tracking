@@ -36,9 +36,11 @@ except ImportError as error:
 if os.environ.get("SWIN_L_BACKEND", "pytorch").lower() == "tensorrt":
     try:
         import tensorrt
+        import torch_tensorrt
     except ImportError as error:
         print(
-            f"[swin-l-debug] TensorRT backend requested but unavailable: {error}",
+            "[swin-l-debug] TensorRT hybrid backend requested but unavailable: "
+            f"{error}",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -76,7 +78,7 @@ if [[ "${SWIN_L_BACKEND:-pytorch}" == "tensorrt" \
   engine_ready=false
 
   if [[ -s "${engine_path}" && -s "${manifest_path}" ]]; then
-    echo "[swin-l-debug] validating existing TensorRT engine: ${engine_path}"
+    echo "[swin-l-debug] validating existing TensorRT hybrid artifact: ${engine_path}"
     if python3 /workspace/tools/validate_swin_l_tensorrt.py \
       --engine "${engine_path}" \
       --manifest "${manifest_path}"; then
@@ -101,7 +103,7 @@ if [[ "${SWIN_L_BACKEND:-pytorch}" == "tensorrt" \
         --allow-initialized-weights
     fi
 
-    echo "[swin-l-debug] building TensorRT engine at ${engine_path}"
+    echo "[swin-l-debug] building PyTorch/TensorRT hybrid artifact at ${engine_path}"
     python3 /workspace/tools/build_swin_l_tensorrt.py \
       --checkpoint "${checkpoint_path}" \
       --output "${engine_path}" \

@@ -1,4 +1,4 @@
-"""Validate and warm up the pinned Swin-L TensorRT deployment artifact."""
+"""Validate and warm up the pinned Swin-L hybrid deployment artifact."""
 
 from __future__ import annotations
 
@@ -37,7 +37,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     metadata = backend.metadata()
     print(
         "SWIN_L_TENSORRT_VALID "
-        f"engine={metadata['engine']} sha256={metadata['engine_sha256']}"
+        f"artifact={metadata['engine']} sha256={metadata['engine_sha256']} "
+        f"backend={metadata['backend']}"
     )
     return 0
 

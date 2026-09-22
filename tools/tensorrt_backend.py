@@ -1,4 +1,4 @@
-"""Trusted, fixed-shape TensorRT runtime for Swin-L semantic scores."""
+"""Trusted fixed-shape Torch-TensorRT hybrid runtime for Swin-L scores."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from typing import Any
 
 import torch
 
-ENGINE_MANIFEST_SCHEMA_VERSION = 1
+ENGINE_MANIFEST_SCHEMA_VERSION = 2
+HYBRID_ARTIFACT_FORMAT = "torch_exported_program_hybrid"
 
 
 def normalize_cuda_device(device: torch.device) -> torch.device:
@@ -48,6 +49,8 @@ def validate_engine_manifest(
 ) -> None:
     if manifest.get("schema_version") != ENGINE_MANIFEST_SCHEMA_VERSION:
         raise RuntimeError("unsupported TensorRT manifest schema")
+    if manifest.get("artifact_format") != HYBRID_ARTIFACT_FORMAT:
+        raise RuntimeError("TensorRT artifact is not the required hybrid program")
     if manifest.get("profile") != profile:
         raise RuntimeError("TensorRT profile does not match the selected profile")
     model = manifest.get("model")
@@ -68,11 +71,30 @@ def validate_engine_manifest(
             raise RuntimeError(f"TensorRT {key} must use float16")
     digest = manifest.get("engine_sha256")
     if not isinstance(digest, str) or len(digest) != 64:
-        raise RuntimeError("TensorRT engine SHA-256 is missing or invalid")
+        raise RuntimeError("TensorRT artifact SHA-256 is missing or invalid")
+    partitioning = manifest.get("partitioning")
+    if not isinstance(partitioning, dict):
+        raise RuntimeError("TensorRT hybrid partition metadata is missing")
+    if partitioning.get("pytorch_patch_embedding") is not True:
+        raise RuntimeError("Swin patch embedding must remain in PyTorch")
+    if partitioning.get("pytorch_mask2former_decoders") is not True:
+        raise RuntimeError("Mask2Former decoders must remain in PyTorch")
+    if int(partitioning.get("tensorrt_partition_count", 0)) < 1:
+        raise RuntimeError("TensorRT hybrid artifact has no TensorRT partitions")
+
+
+def _single_tensor_output(output: Any) -> torch.Tensor:
+    if isinstance(output, torch.Tensor):
+        return output
+    if isinstance(output, (tuple, list)) and len(output) == 1:
+        value = output[0]
+        if isinstance(value, torch.Tensor):
+            return value
+    raise RuntimeError("hybrid TensorRT program did not return one tensor")
 
 
 class TensorRTSemanticBackend:
-    """Execute one static TensorRT engine using PyTorch-owned CUDA buffers."""
+    """Execute a serialized PyTorch-CUDA/TensorRT hybrid ExportedProgram."""
 
     def __init__(
         self,
@@ -89,7 +111,7 @@ class TensorRTSemanticBackend:
             raise RuntimeError("TensorRT backend requires an available CUDA device")
         device = normalize_cuda_device(device)
         if not engine_path.is_file():
-            raise RuntimeError(f"TensorRT engine does not exist: {engine_path}")
+            raise RuntimeError(f"TensorRT artifact does not exist: {engine_path}")
         manifest = load_engine_manifest(manifest_path)
         validate_engine_manifest(
             manifest,
@@ -99,56 +121,60 @@ class TensorRTSemanticBackend:
             output_shape=output_shape,
         )
         if sha256_file(engine_path) != manifest["engine_sha256"]:
-            raise RuntimeError("TensorRT engine SHA-256 does not match its manifest")
+            raise RuntimeError("TensorRT artifact SHA-256 does not match its manifest")
 
         try:
             import tensorrt as trt
+            import torch_tensorrt
         except ImportError as error:
             raise RuntimeError(
-                "TensorRT backend requires JetPack-compatible tensorrt bindings"
+                "hybrid backend requires JetPack-compatible TensorRT and Torch-TensorRT"
             ) from error
 
         runtime_metadata = manifest.get("runtime", {})
         expected_trt = runtime_metadata.get("tensorrt_version")
         if expected_trt and expected_trt != trt.__version__:
             raise RuntimeError(
-                f"TensorRT version mismatch: engine={expected_trt} runtime={trt.__version__}"
+                f"TensorRT version mismatch: artifact={expected_trt} "
+                f"runtime={trt.__version__}"
+            )
+        expected_torch_trt = runtime_metadata.get("torch_tensorrt_version")
+        actual_torch_trt = getattr(torch_tensorrt, "__version__", None)
+        if expected_torch_trt and expected_torch_trt != actual_torch_trt:
+            raise RuntimeError(
+                "Torch-TensorRT version mismatch: "
+                f"artifact={expected_torch_trt} runtime={actual_torch_trt}"
             )
         expected_cuda = runtime_metadata.get("cuda_version")
         if expected_cuda and expected_cuda != torch.version.cuda:
             raise RuntimeError(
-                f"CUDA version mismatch: engine={expected_cuda} runtime={torch.version.cuda}"
+                f"CUDA version mismatch: artifact={expected_cuda} "
+                f"runtime={torch.version.cuda}"
             )
         expected_capability = runtime_metadata.get("compute_capability")
         actual_capability = list(torch.cuda.get_device_capability(device))
         if expected_capability and expected_capability != actual_capability:
             raise RuntimeError(
-                "TensorRT engine compute capability does not match this CUDA device"
+                "TensorRT artifact compute capability does not match this CUDA device"
             )
+
+        try:
+            loaded = torch_tensorrt.load(str(engine_path))
+        except Exception as error:
+            raise RuntimeError("hybrid TensorRT artifact load failed") from error
+        if isinstance(loaded, torch.export.ExportedProgram):
+            loaded = loaded.module()
+        if not isinstance(loaded, torch.nn.Module):
+            raise TypeError("hybrid TensorRT artifact did not contain a module")
 
         self.device = device
         self.manifest = manifest
         self.engine_path = engine_path
         self._trt = trt
-        self._logger = trt.Logger(trt.Logger.WARNING)
-        self._runtime = trt.Runtime(self._logger)
-        self._engine = self._runtime.deserialize_cuda_engine(engine_path.read_bytes())
-        if self._engine is None:
-            raise RuntimeError("TensorRT engine deserialization failed")
-        self._context = self._engine.create_execution_context()
-        if self._context is None:
-            raise RuntimeError("TensorRT execution-context creation failed")
-
-        self.input_name = manifest["input"]["name"]
-        self.output_name = manifest["output"]["name"]
+        self._torch_tensorrt = torch_tensorrt
+        self._module = loaded.to(device)
         self.input_shape = input_shape
         self.output_shape = output_shape
-        self._validate_engine_bindings()
-        self._output = torch.empty(
-            output_shape,
-            dtype=torch.float16,
-            device=device,
-        )
         with torch.inference_mode():
             warmup_input = torch.zeros(
                 input_shape,
@@ -158,32 +184,7 @@ class TensorRTSemanticBackend:
             warmup_output = self.semantic_scores(warmup_input)
             torch.cuda.synchronize(device)
             if not bool(torch.isfinite(warmup_output).all().item()):
-                raise RuntimeError("TensorRT warm-up produced NaN or Inf")
-
-    def _validate_engine_bindings(self) -> None:
-        trt = self._trt
-        names = {
-            self._engine.get_tensor_name(index)
-            for index in range(self._engine.num_io_tensors)
-        }
-        if {self.input_name, self.output_name} != names:
-            raise RuntimeError("TensorRT engine bindings do not match its manifest")
-        if self._engine.get_tensor_mode(self.input_name) != trt.TensorIOMode.INPUT:
-            raise RuntimeError("TensorRT input binding has the wrong mode")
-        if self._engine.get_tensor_mode(self.output_name) != trt.TensorIOMode.OUTPUT:
-            raise RuntimeError("TensorRT output binding has the wrong mode")
-        if tuple(self._engine.get_tensor_shape(self.input_name)) != self.input_shape:
-            raise RuntimeError(
-                "TensorRT engine input shape is not static or mismatched"
-            )
-        if tuple(self._engine.get_tensor_shape(self.output_name)) != self.output_shape:
-            raise RuntimeError(
-                "TensorRT engine output shape is not static or mismatched"
-            )
-        if self._engine.get_tensor_dtype(self.input_name) != trt.float16:
-            raise RuntimeError("TensorRT engine input dtype is not float16")
-        if self._engine.get_tensor_dtype(self.output_name) != trt.float16:
-            raise RuntimeError("TensorRT engine output dtype is not float16")
+                raise RuntimeError("hybrid TensorRT warm-up produced NaN or Inf")
 
     def semantic_scores(self, pixel_values: torch.Tensor) -> torch.Tensor:
         if pixel_values.device != self.device:
@@ -191,26 +192,26 @@ class TensorRTSemanticBackend:
         if pixel_values.dtype != torch.float16:
             raise ValueError("TensorRT input must be float16")
         if tuple(pixel_values.shape) != self.input_shape:
-            raise ValueError("TensorRT input shape does not match the engine")
+            raise ValueError("TensorRT input shape does not match the artifact")
         if not pixel_values.is_contiguous():
             pixel_values = pixel_values.contiguous()
-        stream = torch.cuda.current_stream(self.device)
-        if not self._context.set_tensor_address(
-            self.input_name, pixel_values.data_ptr()
-        ):
-            raise RuntimeError("TensorRT rejected the input buffer address")
-        if not self._context.set_tensor_address(
-            self.output_name, self._output.data_ptr()
-        ):
-            raise RuntimeError("TensorRT rejected the output buffer address")
-        if not self._context.execute_async_v3(stream.cuda_stream):
-            raise RuntimeError("TensorRT inference enqueue failed")
-        return self._output
+        output = _single_tensor_output(self._module(pixel_values))
+        if output.device != self.device:
+            raise RuntimeError("hybrid TensorRT output is on the wrong device")
+        if output.dtype != torch.float16:
+            raise RuntimeError("hybrid TensorRT output is not float16")
+        if tuple(output.shape) != self.output_shape:
+            raise RuntimeError("hybrid TensorRT output shape is invalid")
+        return output
 
     def metadata(self) -> dict[str, Any]:
         return {
-            "backend": "tensorrt",
+            "backend": "torch-tensorrt-hybrid",
             "engine": str(self.engine_path),
             "engine_sha256": self.manifest["engine_sha256"],
             "tensorrt_version": self._trt.__version__,
+            "torch_tensorrt_version": getattr(
+                self._torch_tensorrt, "__version__", None
+            ),
+            "partitioning": self.manifest["partitioning"],
         }

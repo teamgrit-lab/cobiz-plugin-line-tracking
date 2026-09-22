@@ -9,6 +9,9 @@ TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
 
 from build_swin_l_tensorrt import (  # noqa: E402
+    PYTORCH_SHAPE_OPS,
+    _CompiledStageProxy,
+    _FixedStageCall,
     _rewrite_tensorrt_incompatible_ops,
     _write_artifacts_atomically,
     parse_args,
@@ -40,6 +43,37 @@ def test_jetson_builder_defaults_to_least_aggressive_optimization():
 
     assert args.optimization_level == 0
     assert args.workspace_mib == 2048
+    assert args.min_block_size == 3
+
+
+def test_hybrid_stage_adapter_keeps_non_tensor_shape_arguments_in_pytorch():
+    class Stage(torch.nn.Module):
+        def forward(self, hidden, dimensions, head_mask=None, output_attentions=False):
+            assert head_mask is None
+            assert output_attentions is False
+            return hidden + dimensions[0]
+
+    hidden = torch.ones(1, 2)
+    captured_args = (hidden, (7, 11), None, False)
+    fixed = _FixedStageCall(Stage(), captured_args, {})
+    proxy = _CompiledStageProxy(
+        fixed,
+        tensor_input_count=1,
+        has_downsample=True,
+    )
+
+    assert torch.equal(fixed(hidden), torch.full((1, 2), 8.0))
+    assert torch.equal(proxy(*captured_args), torch.full((1, 2), 8.0))
+    assert proxy.downsample is not None
+
+
+def test_rank_changing_shape_ops_are_forced_to_pytorch():
+    forced = {str(op) for op in PYTORCH_SHAPE_OPS}
+
+    assert "aten._reshape_copy.default" in forced
+    assert "aten.expand.default" in forced
+    assert "aten.repeat.default" in forced
+    assert "aten.unsqueeze.default" in forced
 
 
 def test_tensorrt_graph_rewrite_preserves_mask_and_attention_results():

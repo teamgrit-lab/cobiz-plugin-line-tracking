@@ -1,10 +1,10 @@
-"""Build the fixed-shape FP16 Swin-L TensorRT plan on its target Jetson."""
+"""Build the fixed-shape Swin-L PyTorch/TensorRT hybrid on its target Jetson."""
 
 from __future__ import annotations
 
 import argparse
 import fcntl
-import hashlib
+import gc
 import json
 import os
 from collections.abc import Sequence
@@ -19,8 +19,23 @@ from best_so_far_runtime import (
     resolve_profile,
 )
 from swin_l_tensorrt_model import SwinLSemanticScores
-from tensorrt_backend import ENGINE_MANIFEST_SCHEMA_VERSION, sha256_file
+from tensorrt_backend import (
+    ENGINE_MANIFEST_SCHEMA_VERSION,
+    HYBRID_ARTIFACT_FORMAT,
+    sha256_file,
+)
 from transformers import Mask2FormerForUniversalSegmentation
+
+
+# These rank-changing operators caused the TensorRT Myelin/rank failure in the
+# monolithic Mask2Former engine. Keeping them in CUDA PyTorch creates explicit
+# boundaries around large Swin attention/MLP TensorRT partitions.
+PYTORCH_SHAPE_OPS = (
+    torch.ops.aten._reshape_copy.default,
+    torch.ops.aten.expand.default,
+    torch.ops.aten.repeat.default,
+    torch.ops.aten.unsqueeze.default,
+)
 
 
 def _read_checkpoint_manifest(checkpoint: Path) -> dict[str, Any]:
@@ -46,12 +61,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="manifest destination (defaults to <output>.json)",
     )
-    # TensorRT 10.3 on Jetson can fail Myelin tactic selection when the
-    # Mask2Former graph is aggressively fused. Prefer the least aggressive
-    # builder level; callers can still opt into a higher level explicitly.
+    # TensorRT 10.3 on Jetson can fail Myelin tactic selection when graphs are
+    # aggressively fused. Keep the least aggressive builder level by default.
     parser.add_argument("--optimization-level", type=int, choices=range(6), default=0)
     parser.add_argument("--workspace-mib", type=int, default=2048)
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--min-block-size",
+        type=int,
+        default=3,
+        help="minimum supported ops in a TensorRT partition",
+    )
+    args = parser.parse_args(argv)
+    if args.min_block_size < 2:
+        parser.error("--min-block-size must be at least 2")
+    return args
 
 
 def _write_artifacts_atomically(
@@ -60,11 +83,11 @@ def _write_artifacts_atomically(
     output: Path,
     manifest_path: Path,
 ) -> None:
-    """Replace a validated engine and its manifest without exposing partial files."""
+    """Replace an artifact and manifest without exposing partially written files."""
 
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    engine_temporary: Path | None = None
+    artifact_temporary: Path | None = None
     manifest_temporary: Path | None = None
     try:
         with NamedTemporaryFile(
@@ -74,38 +97,61 @@ def _write_artifacts_atomically(
             dir=output.parent,
             delete=False,
         ) as stream:
-            engine_temporary = Path(stream.name)
+            artifact_temporary = Path(stream.name)
             stream.write(engine_bytes)
             stream.flush()
             os.fsync(stream.fileno())
-        with NamedTemporaryFile(
-            mode="w",
-            prefix=f".{manifest_path.name}.",
-            suffix=".tmp",
-            dir=manifest_path.parent,
-            encoding="utf-8",
-            delete=False,
-        ) as stream:
-            manifest_temporary = Path(stream.name)
-            json.dump(manifest, stream, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-
-        engine_temporary.replace(output)
-        engine_temporary = None
+        manifest_temporary = _write_manifest_temporary(manifest, manifest_path)
+        artifact_temporary.replace(output)
+        artifact_temporary = None
         manifest_temporary.replace(manifest_path)
         manifest_temporary = None
     finally:
-        if engine_temporary is not None:
-            engine_temporary.unlink(missing_ok=True)
+        if artifact_temporary is not None:
+            artifact_temporary.unlink(missing_ok=True)
         if manifest_temporary is not None:
             manifest_temporary.unlink(missing_ok=True)
 
 
-def _node_tensor_dtype(node: torch.fx.Node) -> torch.dtype | None:
-    """Return the tensor dtype recorded by torch.export for an FX node."""
+def _write_manifest_temporary(
+    manifest: dict[str, Any], manifest_path: Path
+) -> Path:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile(
+        mode="w",
+        prefix=f".{manifest_path.name}.",
+        suffix=".tmp",
+        dir=manifest_path.parent,
+        encoding="utf-8",
+        delete=False,
+    ) as stream:
+        json.dump(manifest, stream, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+        return Path(stream.name)
 
+
+def _publish_saved_artifact(
+    artifact_temporary: Path,
+    manifest: dict[str, Any],
+    output: Path,
+    manifest_path: Path,
+) -> None:
+    """Atomically publish a large artifact already serialized on disk."""
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with artifact_temporary.open("rb") as stream:
+        os.fsync(stream.fileno())
+    manifest_temporary = _write_manifest_temporary(manifest, manifest_path)
+    try:
+        artifact_temporary.replace(output)
+        manifest_temporary.replace(manifest_path)
+    finally:
+        manifest_temporary.unlink(missing_ok=True)
+
+
+def _node_tensor_dtype(node: torch.fx.Node) -> torch.dtype | None:
     value = node.meta.get("val")
     return getattr(value, "dtype", None)
 
@@ -113,14 +159,7 @@ def _node_tensor_dtype(node: torch.fx.Node) -> torch.dtype | None:
 def _rewrite_tensorrt_incompatible_ops(
     exported: torch.export.ExportedProgram,
 ) -> dict[str, int]:
-    """Rewrite Mask2Former ops that cannot be lowered to a native TRT plan.
-
-    Transformers expresses a boolean attention-mask intersection as a multiply,
-    but TensorRT's ElementWise PROD rejects boolean tensors. PyTorch's
-    MultiheadAttention also exports baddbmm, for which Torch-TensorRT 2.8 has no
-    converter. The replacements below are equivalent for the fixed inference
-    graph and use operators supported by the Dynamo TensorRT frontend.
-    """
+    """Rewrite inference-equivalent ops unsupported by Torch-TensorRT 2.8."""
 
     graph_module = exported.graph_module
     graph = graph_module.graph
@@ -146,7 +185,6 @@ def _rewrite_tensorrt_incompatible_ops(
 
         if node.op != "call_function" or node.target != torch.ops.aten.baddbmm.default:
             continue
-
         beta = node.kwargs.get("beta", node.args[3] if len(node.args) > 3 else 1)
         alpha = node.kwargs.get("alpha", node.args[4] if len(node.args) > 4 else 1)
         if beta != 1 or alpha != 1:
@@ -155,7 +193,6 @@ def _rewrite_tensorrt_incompatible_ops(
             )
         if len(node.args) < 3:
             raise RuntimeError("invalid aten.baddbmm node in exported graph")
-
         bias, batch1, batch2 = node.args[:3]
         with graph.inserting_before(node):
             product = graph.call_function(
@@ -166,9 +203,6 @@ def _rewrite_tensorrt_incompatible_ops(
                 torch.ops.aten.add.Tensor,
                 args=(bias, product),
             )
-        # The bmm and final add have the same fixed shape/dtype as baddbmm in
-        # this attention graph. Preserve export metadata required by the TRT
-        # interpreter for both newly inserted nodes.
         product.meta = dict(node.meta)
         replacement.meta = dict(node.meta)
         node.replace_all_uses_with(replacement)
@@ -180,16 +214,212 @@ def _rewrite_tensorrt_incompatible_ops(
     return rewritten
 
 
+class _FixedStageCall(torch.nn.Module):
+    """Expose only tensor leaves while retaining a captured Swin stage call."""
+
+    def __init__(
+        self,
+        stage: torch.nn.Module,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
+        super().__init__()
+        from torch.utils._pytree import tree_flatten
+
+        self.stage = stage
+        flat, self._spec = tree_flatten((args, kwargs))
+        self._tensor_positions = tuple(
+            index for index, value in enumerate(flat) if isinstance(value, torch.Tensor)
+        )
+        self._template = tuple(
+            None if index in self._tensor_positions else value
+            for index, value in enumerate(flat)
+        )
+
+    def forward(self, *tensor_inputs: torch.Tensor) -> Any:
+        from torch.utils._pytree import tree_unflatten
+
+        if len(tensor_inputs) != len(self._tensor_positions):
+            raise ValueError("captured Swin stage tensor input count changed")
+        flat = list(self._template)
+        for position, tensor in zip(self._tensor_positions, tensor_inputs):
+            flat[position] = tensor
+        args, kwargs = tree_unflatten(flat, self._spec)
+        return self.stage(*args, **kwargs)
+
+
+class _CompiledStageProxy(torch.nn.Module):
+    """Preserve the Transformers stage call while dispatching to compiled TRT."""
+
+    def __init__(
+        self,
+        compiled: torch.nn.Module,
+        tensor_input_count: int,
+        *,
+        has_downsample: bool,
+    ) -> None:
+        super().__init__()
+        self.compiled = compiled
+        self.tensor_input_count = tensor_input_count
+        # SwinEncoder uses this attribute after each stage to update the next
+        # stage's static spatial dimensions. It only checks for None and does
+        # not call the object, so retaining the original module would waste
+        # memory and duplicate its parameters in the final artifact.
+        self.downsample = True if has_downsample else None
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        from torch.utils._pytree import tree_flatten
+
+        flat, _ = tree_flatten((args, kwargs))
+        tensor_inputs = tuple(value for value in flat if isinstance(value, torch.Tensor))
+        if len(tensor_inputs) != self.tensor_input_count:
+            raise ValueError("Swin stage call no longer matches its compiled profile")
+        return self.compiled(*tensor_inputs)
+
+
+def _swin_stages(model: torch.nn.Module) -> torch.nn.ModuleList:
+    try:
+        stages = model.model.pixel_level_module.encoder.swin.encoder.layers
+    except AttributeError as error:
+        raise RuntimeError(
+            "unsupported Mask2Former layout: Swin encoder stages were not found"
+        ) from error
+    if not isinstance(stages, torch.nn.ModuleList) or not stages:
+        raise RuntimeError("Swin encoder stages must be a non-empty ModuleList")
+    return stages
+
+
+def _capture_stage_calls(
+    stages: torch.nn.ModuleList,
+    wrapper: torch.nn.Module,
+    sample: torch.Tensor,
+) -> tuple[list[tuple[tuple[Any, ...], dict[str, Any]]], torch.Tensor]:
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]] | None] = [None] * len(stages)
+    handles = []
+
+    def capture(
+        index: int,
+        _module: torch.nn.Module,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
+        if calls[index] is not None:
+            raise RuntimeError(f"Swin stage {index} executed more than once")
+        calls[index] = (args, dict(kwargs))
+
+    for index, stage in enumerate(stages):
+        handles.append(
+            stage.register_forward_pre_hook(
+                lambda module, args, kwargs, index=index: capture(
+                    index, module, args, kwargs
+                ),
+                with_kwargs=True,
+            )
+        )
+    try:
+        with torch.inference_mode():
+            reference = wrapper(sample)
+    finally:
+        for handle in handles:
+            handle.remove()
+    if any(call is None for call in calls):
+        raise RuntimeError("not every Swin stage executed during profile capture")
+    return [call for call in calls if call is not None], reference
+
+
+def _count_tensorrt_partitions(module: torch.nn.Module) -> int:
+    count = 0
+    for child in module.modules():
+        if not isinstance(child, torch.fx.GraphModule):
+            continue
+        count += sum(
+            node.op == "call_function" and "tensorrt.execute_engine" in str(node.target)
+            for node in child.graph.nodes
+        )
+    return count
+
+
+def _compile_swin_stages(
+    stages: torch.nn.ModuleList,
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]],
+    *,
+    torch_tensorrt: Any,
+    optimization_level: int,
+    workspace_size: int,
+    min_block_size: int,
+) -> tuple[int, dict[str, int]]:
+    partition_count = 0
+    rewrite_totals = {"boolean_mul": 0, "baddbmm": 0}
+    for index, (stage, (args, kwargs)) in enumerate(zip(list(stages), calls)):
+        fixed_call = _FixedStageCall(stage, args, kwargs).eval()
+        tensor_inputs = tuple(
+            value
+            for value in torch.utils._pytree.tree_leaves((args, kwargs))
+            if isinstance(value, torch.Tensor)
+        )
+        if not tensor_inputs:
+            raise RuntimeError(f"Swin stage {index} has no tensor inputs")
+        exported = torch.export.export(fixed_call, tensor_inputs, strict=False)
+        rewrites = _rewrite_tensorrt_incompatible_ops(exported)
+        for name, value in rewrites.items():
+            rewrite_totals[name] += value
+        compiled = torch_tensorrt.dynamo.compile(
+            exported,
+            arg_inputs=list(tensor_inputs),
+            enabled_precisions={torch.float16},
+            workspace_size=workspace_size,
+            optimization_level=optimization_level,
+            immutable_weights=True,
+            require_full_compilation=False,
+            min_block_size=min_block_size,
+            torch_executed_ops=set(PYTORCH_SHAPE_OPS),
+            use_fast_partitioner=False,
+            use_python_runtime=False,
+        )
+        stage_partitions = _count_tensorrt_partitions(compiled)
+        if stage_partitions < 1:
+            raise RuntimeError(
+                f"Swin stage {index} produced no sufficiently large TensorRT partition"
+            )
+        stages[index] = _CompiledStageProxy(
+            compiled,
+            len(tensor_inputs),
+            has_downsample=stage.downsample is not None,
+        )
+        partition_count += stage_partitions
+        del exported, fixed_call, stage
+        gc.collect()
+        torch.cuda.empty_cache()
+        print(
+            f"[swin-l-debug] compiled Swin stage {index}: "
+            f"TensorRT partitions={stage_partitions}",
+            flush=True,
+        )
+    return partition_count, rewrite_totals
+
+
+def _make_artifact_temporary(output: Path) -> Path:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile(
+        mode="wb",
+        prefix=f".{output.name}.",
+        suffix=".tmp",
+        dir=output.parent,
+        delete=False,
+    ) as stream:
+        return Path(stream.name)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if not torch.cuda.is_available():
-        raise RuntimeError("TensorRT engine build requires the target CUDA device")
+        raise RuntimeError("TensorRT artifact build requires the target CUDA device")
     try:
         import tensorrt as trt
         import torch_tensorrt
     except ImportError as error:
         raise RuntimeError(
-            "engine build requires JetPack-compatible tensorrt and torch_tensorrt"
+            "artifact build requires JetPack-compatible TensorRT and Torch-TensorRT"
         ) from error
 
     output = args.output.expanduser().resolve()
@@ -200,142 +430,163 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     lock_path = output.with_suffix(output.suffix + ".lock")
-    lock_stream = lock_path.open("w", encoding="utf-8")
-    fcntl.flock(lock_stream, fcntl.LOCK_EX)
+    artifact_temporary: Path | None = None
+    with lock_path.open("w", encoding="utf-8") as lock_stream:
+        fcntl.flock(lock_stream, fcntl.LOCK_EX)
 
-    profile = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
-    checkpoint = args.checkpoint.expanduser().resolve()
-    checkpoint_manifest = _read_checkpoint_manifest(checkpoint)
-    if checkpoint_manifest.get("source_revision") != profile.model_revision:
-        raise RuntimeError(
-            "prepared checkpoint revision does not match the pinned profile"
+        profile = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
+        checkpoint = args.checkpoint.expanduser().resolve()
+        checkpoint_manifest = _read_checkpoint_manifest(checkpoint)
+        if checkpoint_manifest.get("source_revision") != profile.model_revision:
+            raise RuntimeError(
+                "prepared checkpoint revision does not match the pinned profile"
+            )
+
+        model = (
+            Mask2FormerForUniversalSegmentation.from_pretrained(
+                checkpoint,
+                use_safetensors=True,
+                local_files_only=True,
+                dtype=torch.float16,
+            )
+            .eval()
+            .cuda()
         )
-
-    model = (
-        Mask2FormerForUniversalSegmentation.from_pretrained(
-            checkpoint,
-            use_safetensors=True,
-            local_files_only=True,
+        wrapper = SwinLSemanticScores(
+            model,
+            evaluation_height=DEFAULT_EVALUATION_SIZE[0],
+            evaluation_width=DEFAULT_EVALUATION_SIZE[1],
+        ).eval()
+        sample = torch.zeros(
+            (1, 3, profile.input_height, profile.input_width),
             dtype=torch.float16,
+            device="cuda",
         )
-        .eval()
-        .cuda()
-    )
-    wrapper = SwinLSemanticScores(
-        model,
-        evaluation_height=DEFAULT_EVALUATION_SIZE[0],
-        evaluation_width=DEFAULT_EVALUATION_SIZE[1],
-    ).eval()
-    sample = torch.zeros(
-        (1, 3, profile.input_height, profile.input_width),
-        dtype=torch.float16,
-        device="cuda",
-    )
-    with torch.inference_mode():
-        reference = wrapper(sample)
-    expected_output_shape = (
-        int(model.config.num_labels),
-        DEFAULT_EVALUATION_SIZE[0],
-        DEFAULT_EVALUATION_SIZE[1],
-    )
-    if tuple(reference.shape) != expected_output_shape:
-        raise RuntimeError(
-            f"unexpected semantic output shape: {tuple(reference.shape)}"
+        expected_output_shape = (
+            int(model.config.num_labels),
+            DEFAULT_EVALUATION_SIZE[0],
+            DEFAULT_EVALUATION_SIZE[1],
         )
+        stages = _swin_stages(model)
+        calls, reference = _capture_stage_calls(stages, wrapper, sample)
+        if tuple(reference.shape) != expected_output_shape:
+            raise RuntimeError(
+                f"unexpected semantic output shape: {tuple(reference.shape)}"
+            )
+        del reference
+        torch.cuda.empty_cache()
 
-    exported = torch.export.export(wrapper, (sample,))
-    rewrites = _rewrite_tensorrt_incompatible_ops(exported)
-    print(
-        "[swin-l-debug] TensorRT graph compatibility rewrites: "
-        f"boolean_mul={rewrites['boolean_mul']} "
-        f"baddbmm={rewrites['baddbmm']}"
-    )
-    engine_bytes = (
-        torch_tensorrt.dynamo.convert_exported_program_to_serialized_trt_engine(
-            exported,
-            arg_inputs=[sample],
-            enabled_precisions={torch.float16},
-            workspace_size=args.workspace_mib * 1024 * 1024,
+        partition_count, rewrites = _compile_swin_stages(
+            stages,
+            calls,
+            torch_tensorrt=torch_tensorrt,
             optimization_level=args.optimization_level,
-            immutable_weights=True,
+            workspace_size=args.workspace_mib * 1024 * 1024,
+            min_block_size=args.min_block_size,
         )
-    )
-    runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
-    engine = runtime.deserialize_cuda_engine(engine_bytes)
-    if engine is None or engine.num_io_tensors != 2:
-        raise RuntimeError("built engine must expose exactly one input and one output")
-    input_names: list[str] = []
-    output_names: list[str] = []
-    for index in range(engine.num_io_tensors):
-        name = engine.get_tensor_name(index)
-        if engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
-            input_names.append(name)
-        else:
-            output_names.append(name)
-    if len(input_names) != 1 or len(output_names) != 1:
-        raise RuntimeError("built engine has an unsupported binding layout")
-    input_name, output_name = input_names[0], output_names[0]
-    input_shape = tuple(engine.get_tensor_shape(input_name))
-    output_shape = tuple(engine.get_tensor_shape(output_name))
-    if input_shape != tuple(sample.shape) or output_shape != expected_output_shape:
-        raise RuntimeError(
-            "built engine bindings do not match the fixed runtime contract"
-        )
-    if engine.get_tensor_dtype(input_name) != trt.float16:
-        raise RuntimeError("built engine input is not FP16")
-    if engine.get_tensor_dtype(output_name) != trt.float16:
-        raise RuntimeError("built engine output is not FP16")
-    context = engine.create_execution_context()
-    if context is None:
-        raise RuntimeError("built engine execution-context creation failed")
-    engine_output = torch.empty(
-        expected_output_shape,
-        dtype=torch.float16,
-        device=sample.device,
-    )
-    if not context.set_tensor_address(input_name, sample.data_ptr()):
-        raise RuntimeError("built engine rejected its validation input buffer")
-    if not context.set_tensor_address(output_name, engine_output.data_ptr()):
-        raise RuntimeError("built engine rejected its validation output buffer")
-    stream = torch.cuda.current_stream(sample.device)
-    if not context.execute_async_v3(stream.cuda_stream):
-        raise RuntimeError("built engine validation enqueue failed")
-    torch.cuda.synchronize(sample.device)
-    if not bool(torch.isfinite(engine_output).all().item()):
-        raise RuntimeError("built engine validation produced NaN or Inf")
+        del calls
+        with torch.inference_mode():
+            hybrid_output = wrapper(sample)
+            torch.cuda.synchronize(sample.device)
+        if tuple(hybrid_output.shape) != expected_output_shape:
+            raise RuntimeError("hybrid graph output shape is invalid")
+        if hybrid_output.dtype != torch.float16:
+            raise RuntimeError("hybrid graph output must remain FP16")
+        if not bool(torch.isfinite(hybrid_output).all().item()):
+            raise RuntimeError("hybrid graph validation produced NaN or Inf")
+        del hybrid_output
 
-    manifest = {
-        "schema_version": ENGINE_MANIFEST_SCHEMA_VERSION,
-        "profile": profile.name,
-        "model": {
-            "id": profile.model_id,
-            "revision": profile.model_revision,
-            "safetensors_sha256": checkpoint_manifest["safetensors_sha256"],
-            "id2label": {
-                str(key): value for key, value in model.config.id2label.items()
-            },
-        },
-        "input": {"name": input_name, "shape": list(input_shape), "dtype": "float16"},
-        "output": {
-            "name": output_name,
-            "shape": list(output_shape),
-            "dtype": "float16",
-        },
-        "runtime": {
-            "tensorrt_version": trt.__version__,
-            "torch_version": torch.__version__,
-            "torch_tensorrt_version": getattr(torch_tensorrt, "__version__", None),
-            "cuda_version": torch.version.cuda,
-            "compute_capability": list(torch.cuda.get_device_capability()),
-        },
-        "build": {
-            "optimization_level": args.optimization_level,
-            "workspace_mib": args.workspace_mib,
-        },
-        "engine_sha256": hashlib.sha256(engine_bytes).hexdigest(),
-    }
-    _write_artifacts_atomically(engine_bytes, manifest, output, manifest_path)
-    print(f"SWIN_L_TENSORRT_READY engine={output} manifest={manifest_path}")
+        # Exporting only after stage replacement serializes the TRT stage calls
+        # together with the untouched CUDA PyTorch patch embedding and decoders.
+        hybrid_exported = torch.export.export(wrapper, (sample,), strict=False)
+        artifact_temporary = _make_artifact_temporary(output)
+        try:
+            torch_tensorrt.save(
+                hybrid_exported,
+                str(artifact_temporary),
+                output_format="exported_program",
+                pickle_protocol=4,
+            )
+            loaded = torch_tensorrt.load(str(artifact_temporary))
+            loaded_module = loaded.module() if isinstance(
+                loaded, torch.export.ExportedProgram
+            ) else loaded
+            if not isinstance(loaded_module, torch.nn.Module):
+                raise TypeError("saved hybrid artifact did not reload as a module")
+            with torch.inference_mode():
+                reloaded_output = loaded_module(sample)
+                torch.cuda.synchronize(sample.device)
+            if not isinstance(reloaded_output, torch.Tensor):
+                raise RuntimeError("saved hybrid artifact returned an invalid output")
+            if tuple(reloaded_output.shape) != expected_output_shape:
+                raise RuntimeError("saved hybrid artifact output shape is invalid")
+            if not bool(torch.isfinite(reloaded_output).all().item()):
+                raise RuntimeError("saved hybrid artifact produced NaN or Inf")
+
+            manifest = {
+                "schema_version": ENGINE_MANIFEST_SCHEMA_VERSION,
+                "artifact_format": HYBRID_ARTIFACT_FORMAT,
+                "profile": profile.name,
+                "model": {
+                    "id": profile.model_id,
+                    "revision": profile.model_revision,
+                    "safetensors_sha256": checkpoint_manifest[
+                        "safetensors_sha256"
+                    ],
+                    "id2label": {
+                        str(key): value for key, value in model.config.id2label.items()
+                    },
+                },
+                "input": {
+                    "name": "pixel_values",
+                    "shape": list(sample.shape),
+                    "dtype": "float16",
+                },
+                "output": {
+                    "name": "semantic_scores",
+                    "shape": list(expected_output_shape),
+                    "dtype": "float16",
+                },
+                "runtime": {
+                    "tensorrt_version": trt.__version__,
+                    "torch_version": torch.__version__,
+                    "torch_tensorrt_version": getattr(
+                        torch_tensorrt, "__version__", None
+                    ),
+                    "cuda_version": torch.version.cuda,
+                    "compute_capability": list(torch.cuda.get_device_capability()),
+                },
+                "build": {
+                    "optimization_level": args.optimization_level,
+                    "workspace_mib": args.workspace_mib,
+                    "min_block_size": args.min_block_size,
+                },
+                "partitioning": {
+                    "pytorch_patch_embedding": True,
+                    "pytorch_shape_ops": [str(op) for op in PYTORCH_SHAPE_OPS],
+                    "tensorrt_swin_stage_count": len(stages),
+                    "tensorrt_partition_count": partition_count,
+                    "pytorch_mask2former_decoders": True,
+                    "compatibility_rewrites": rewrites,
+                },
+                # Retain this key for existing monitoring/metadata consumers.
+                "engine_sha256": sha256_file(artifact_temporary),
+            }
+            _publish_saved_artifact(
+                artifact_temporary,
+                manifest,
+                output,
+                manifest_path,
+            )
+            artifact_temporary = None
+        finally:
+            if artifact_temporary is not None:
+                artifact_temporary.unlink(missing_ok=True)
+
+    print(
+        f"SWIN_L_TENSORRT_READY artifact={output} manifest={manifest_path} "
+        f"partitions={partition_count}"
+    )
     return 0
 
 

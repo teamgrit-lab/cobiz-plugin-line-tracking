@@ -9,6 +9,7 @@ sys.path.insert(0, str(TOOLS))
 
 from tensorrt_backend import (
     ENGINE_MANIFEST_SCHEMA_VERSION,
+    HYBRID_ARTIFACT_FORMAT,
     load_engine_manifest,
     normalize_cuda_device,
     sha256_file,
@@ -19,6 +20,7 @@ from tensorrt_backend import (
 def _manifest():
     return {
         "schema_version": ENGINE_MANIFEST_SCHEMA_VERSION,
+        "artifact_format": HYBRID_ARTIFACT_FORMAT,
         "profile": "swin-l-aspect-224x384-fp16",
         "model": {
             "revision": "revision",
@@ -35,6 +37,11 @@ def _manifest():
             "dtype": "float16",
         },
         "engine_sha256": "a" * 64,
+        "partitioning": {
+            "pytorch_patch_embedding": True,
+            "pytorch_mask2former_decoders": True,
+            "tensorrt_partition_count": 4,
+        },
     }
 
 
@@ -48,7 +55,7 @@ def _validate(manifest):
     )
 
 
-def test_fixed_fp16_engine_manifest_is_accepted():
+def test_fixed_fp16_hybrid_manifest_is_accepted():
     _validate(_manifest())
 
 
@@ -59,6 +66,12 @@ def test_fixed_fp16_engine_manifest_is_accepted():
         (("model", "revision"), "other", "revision"),
         (("input", "shape"), [1, 3, 384, 384], "input shape"),
         (("output", "dtype"), "float32", "output must use float16"),
+        (("artifact_format",), "raw_plan", "hybrid program"),
+        (
+            ("partitioning", "pytorch_mask2former_decoders"),
+            False,
+            "decoders must remain in PyTorch",
+        ),
     ],
 )
 def test_manifest_contract_mismatch_is_rejected(path, value, message):

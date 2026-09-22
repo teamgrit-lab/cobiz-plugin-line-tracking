@@ -12,6 +12,7 @@ from build_swin_l_tensorrt import (  # noqa: E402
     PYTORCH_SHAPE_OPS,
     _CompiledStageProxy,
     _FixedStageCall,
+    _is_tensorrt_partition_node,
     _rewrite_tensorrt_incompatible_ops,
     _write_artifacts_atomically,
     parse_args,
@@ -74,6 +75,19 @@ def test_rank_changing_shape_ops_are_forced_to_pytorch():
     assert "aten.expand.default" in forced
     assert "aten.repeat.default" in forced
     assert "aten.unsqueeze.default" in forced
+
+
+def test_tensorrt_partition_detection_supports_compiled_and_exported_graphs():
+    compiled = SimpleNamespace(op="call_module", target="_run_on_acc_0")
+    exported = SimpleNamespace(
+        op="call_function",
+        target="tensorrt.execute_engine.default",
+    )
+    pytorch = SimpleNamespace(op="call_module", target="_run_on_gpu_0")
+
+    assert _is_tensorrt_partition_node(compiled)
+    assert _is_tensorrt_partition_node(exported)
+    assert not _is_tensorrt_partition_node(pytorch)
 
 
 def test_tensorrt_graph_rewrite_preserves_mask_and_attention_results():

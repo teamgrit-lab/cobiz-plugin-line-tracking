@@ -327,15 +327,23 @@ def _capture_stage_calls(
     return [call for call in calls if call is not None], reference
 
 
+def _is_tensorrt_partition_node(node: torch.fx.Node) -> bool:
+    """Recognize TRT partitions both before and after export serialization."""
+
+    return (
+        node.op == "call_module" and "_run_on_acc" in str(node.target)
+    ) or (
+        node.op == "call_function"
+        and "tensorrt.execute_engine" in str(node.target)
+    )
+
+
 def _count_tensorrt_partitions(module: torch.nn.Module) -> int:
     count = 0
     for child in module.modules():
         if not isinstance(child, torch.fx.GraphModule):
             continue
-        count += sum(
-            node.op == "call_function" and "tensorrt.execute_engine" in str(node.target)
-            for node in child.graph.nodes
-        )
+        count += sum(_is_tensorrt_partition_node(node) for node in child.graph.nodes)
     return count
 
 

@@ -100,6 +100,83 @@ def _write_artifacts_atomically(
             manifest_temporary.unlink(missing_ok=True)
 
 
+def _node_tensor_dtype(node: torch.fx.Node) -> torch.dtype | None:
+    """Return the tensor dtype recorded by torch.export for an FX node."""
+
+    value = node.meta.get("val")
+    return getattr(value, "dtype", None)
+
+
+def _rewrite_tensorrt_incompatible_ops(
+    exported: torch.export.ExportedProgram,
+) -> dict[str, int]:
+    """Rewrite Mask2Former ops that cannot be lowered to a native TRT plan.
+
+    Transformers expresses a boolean attention-mask intersection as a multiply,
+    but TensorRT's ElementWise PROD rejects boolean tensors. PyTorch's
+    MultiheadAttention also exports baddbmm, for which Torch-TensorRT 2.8 has no
+    converter. The replacements below are equivalent for the fixed inference
+    graph and use operators supported by the Dynamo TensorRT frontend.
+    """
+
+    graph_module = exported.graph_module
+    graph = graph_module.graph
+    rewritten = {"boolean_mul": 0, "baddbmm": 0}
+
+    for node in list(graph.nodes):
+        if (
+            node.op == "call_function"
+            and node.target == torch.ops.aten.mul.Tensor
+            and _node_tensor_dtype(node) == torch.bool
+        ):
+            with graph.inserting_before(node):
+                replacement = graph.call_function(
+                    torch.ops.aten.bitwise_and.Tensor,
+                    args=node.args,
+                    kwargs=node.kwargs,
+                )
+            replacement.meta = dict(node.meta)
+            node.replace_all_uses_with(replacement)
+            graph.erase_node(node)
+            rewritten["boolean_mul"] += 1
+            continue
+
+        if node.op != "call_function" or node.target != torch.ops.aten.baddbmm.default:
+            continue
+
+        beta = node.kwargs.get("beta", node.args[3] if len(node.args) > 3 else 1)
+        alpha = node.kwargs.get("alpha", node.args[4] if len(node.args) > 4 else 1)
+        if beta != 1 or alpha != 1:
+            raise RuntimeError(
+                "cannot rewrite aten.baddbmm with non-default alpha or beta"
+            )
+        if len(node.args) < 3:
+            raise RuntimeError("invalid aten.baddbmm node in exported graph")
+
+        bias, batch1, batch2 = node.args[:3]
+        with graph.inserting_before(node):
+            product = graph.call_function(
+                torch.ops.aten.bmm.default,
+                args=(batch1, batch2),
+            )
+            replacement = graph.call_function(
+                torch.ops.aten.add.Tensor,
+                args=(bias, product),
+            )
+        # The bmm and final add have the same fixed shape/dtype as baddbmm in
+        # this attention graph. Preserve export metadata required by the TRT
+        # interpreter for both newly inserted nodes.
+        product.meta = dict(node.meta)
+        replacement.meta = dict(node.meta)
+        node.replace_all_uses_with(replacement)
+        graph.erase_node(node)
+        rewritten["baddbmm"] += 1
+
+    graph.lint()
+    graph_module.recompile()
+    return rewritten
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if not torch.cuda.is_available():
@@ -164,6 +241,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     exported = torch.export.export(wrapper, (sample,))
+    rewrites = _rewrite_tensorrt_incompatible_ops(exported)
+    print(
+        "[swin-l-debug] TensorRT graph compatibility rewrites: "
+        f"boolean_mul={rewrites['boolean_mul']} "
+        f"baddbmm={rewrites['baddbmm']}"
+    )
     engine_bytes = (
         torch_tensorrt.dynamo.convert_exported_program_to_serialized_trt_engine(
             exported,

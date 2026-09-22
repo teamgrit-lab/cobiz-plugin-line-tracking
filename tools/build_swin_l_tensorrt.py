@@ -46,7 +46,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="manifest destination (defaults to <output>.json)",
     )
-    parser.add_argument("--optimization-level", type=int, choices=range(6), default=3)
+    # TensorRT 10.3 on Jetson can fail Myelin tactic selection when the
+    # Mask2Former graph is aggressively fused. Prefer the least aggressive
+    # builder level; callers can still opt into a higher level explicitly.
+    parser.add_argument("--optimization-level", type=int, choices=range(6), default=0)
     parser.add_argument("--workspace-mib", type=int, default=1024)
     return parser.parse_args(argv)
 

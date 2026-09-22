@@ -11,6 +11,7 @@ sys.path.insert(0, str(TOOLS))
 from build_swin_l_tensorrt import (  # noqa: E402
     _rewrite_tensorrt_incompatible_ops,
     _write_artifacts_atomically,
+    parse_args,
 )
 
 
@@ -32,6 +33,12 @@ def test_validated_engine_and_manifest_replace_existing_artifacts(tmp_path):
         "engine_sha256": "digest"
     }
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_jetson_builder_defaults_to_least_aggressive_optimization():
+    args = parse_args(["--checkpoint", "/checkpoint", "--output", "/model.plan"])
+
+    assert args.optimization_level == 0
 
 
 def test_tensorrt_graph_rewrite_preserves_mask_and_attention_results():

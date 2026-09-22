@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
+import os
 from collections.abc import Sequence
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 import torch
@@ -47,6 +51,55 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _write_artifacts_atomically(
+    engine_bytes: bytes,
+    manifest: dict[str, Any],
+    output: Path,
+    manifest_path: Path,
+) -> None:
+    """Replace a validated engine and its manifest without exposing partial files."""
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    engine_temporary: Path | None = None
+    manifest_temporary: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="wb",
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            dir=output.parent,
+            delete=False,
+        ) as stream:
+            engine_temporary = Path(stream.name)
+            stream.write(engine_bytes)
+            stream.flush()
+            os.fsync(stream.fileno())
+        with NamedTemporaryFile(
+            mode="w",
+            prefix=f".{manifest_path.name}.",
+            suffix=".tmp",
+            dir=manifest_path.parent,
+            encoding="utf-8",
+            delete=False,
+        ) as stream:
+            manifest_temporary = Path(stream.name)
+            json.dump(manifest, stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        engine_temporary.replace(output)
+        engine_temporary = None
+        manifest_temporary.replace(manifest_path)
+        manifest_temporary = None
+    finally:
+        if engine_temporary is not None:
+            engine_temporary.unlink(missing_ok=True)
+        if manifest_temporary is not None:
+            manifest_temporary.unlink(missing_ok=True)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if not torch.cuda.is_available():
@@ -58,6 +111,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError(
             "engine build requires JetPack-compatible tensorrt and torch_tensorrt"
         ) from error
+
+    output = args.output.expanduser().resolve()
+    manifest_path = (
+        args.manifest_output.expanduser().resolve()
+        if args.manifest_output is not None
+        else output.with_suffix(output.suffix + ".json")
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = output.with_suffix(output.suffix + ".lock")
+    lock_stream = lock_path.open("w", encoding="utf-8")
+    fcntl.flock(lock_stream, fcntl.LOCK_EX)
 
     profile = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
     checkpoint = args.checkpoint.expanduser().resolve()
@@ -110,10 +174,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             immutable_weights=True,
         )
     )
-    output = args.output.expanduser().resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(engine_bytes)
-
     runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
     engine = runtime.deserialize_cuda_engine(engine_bytes)
     if engine is None or engine.num_io_tensors != 2:
@@ -139,6 +199,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("built engine input is not FP16")
     if engine.get_tensor_dtype(output_name) != trt.float16:
         raise RuntimeError("built engine output is not FP16")
+    context = engine.create_execution_context()
+    if context is None:
+        raise RuntimeError("built engine execution-context creation failed")
+    engine_output = torch.empty(
+        expected_output_shape,
+        dtype=torch.float16,
+        device=sample.device,
+    )
+    if not context.set_tensor_address(input_name, sample.data_ptr()):
+        raise RuntimeError("built engine rejected its validation input buffer")
+    if not context.set_tensor_address(output_name, engine_output.data_ptr()):
+        raise RuntimeError("built engine rejected its validation output buffer")
+    stream = torch.cuda.current_stream(sample.device)
+    if not context.execute_async_v3(stream.cuda_stream):
+        raise RuntimeError("built engine validation enqueue failed")
+    torch.cuda.synchronize(sample.device)
+    if not bool(torch.isfinite(engine_output).all().item()):
+        raise RuntimeError("built engine validation produced NaN or Inf")
 
     manifest = {
         "schema_version": ENGINE_MANIFEST_SCHEMA_VERSION,
@@ -168,15 +246,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "optimization_level": args.optimization_level,
             "workspace_mib": args.workspace_mib,
         },
-        "engine_sha256": sha256_file(output),
+        "engine_sha256": hashlib.sha256(engine_bytes).hexdigest(),
     }
-    manifest_path = (
-        args.manifest_output.expanduser().resolve()
-        if args.manifest_output is not None
-        else output.with_suffix(output.suffix + ".json")
-    )
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    _write_artifacts_atomically(engine_bytes, manifest, output, manifest_path)
     print(f"SWIN_L_TENSORRT_READY engine={output} manifest={manifest_path}")
     return 0
 

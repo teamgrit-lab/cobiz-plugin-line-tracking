@@ -10,6 +10,7 @@ sys.path.insert(0, str(TOOLS))
 from tensorrt_backend import (
     ENGINE_MANIFEST_SCHEMA_VERSION,
     load_engine_manifest,
+    normalize_cuda_device,
     sha256_file,
     validate_engine_manifest,
 )
@@ -80,3 +81,12 @@ def test_manifest_loader_and_engine_digest(tmp_path):
     assert sha256_file(engine) == (
         "c702bd7d2498cd2b803d474a452bfe509194a0b5ce8a0b929b45572fb1043403"
     )
+
+
+def test_indexless_cuda_device_is_normalized(monkeypatch):
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 2)
+
+    assert normalize_cuda_device(torch.device("cuda")) == torch.device("cuda:2")
+    assert normalize_cuda_device(torch.device("cuda:1")) == torch.device("cuda:1")

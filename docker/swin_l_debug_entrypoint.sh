@@ -73,9 +73,21 @@ if [[ "${SWIN_L_BACKEND:-pytorch}" == "tensorrt" \
   engine_path="${SWIN_L_TRT_ENGINE:?SWIN_L_TRT_ENGINE must be set}"
   manifest_path="${SWIN_L_TRT_MANIFEST:-${engine_path}.json}"
   checkpoint_path="${SWIN_L_TRT_CHECKPOINT:-/models/checkpoint}"
+  engine_ready=false
 
-  if [[ ! -s "${engine_path}" || ! -s "${manifest_path}" ]]; then
-    echo "[swin-l-debug] TensorRT artifact is missing; preparing it before startup"
+  if [[ -s "${engine_path}" && -s "${manifest_path}" ]]; then
+    echo "[swin-l-debug] validating existing TensorRT engine: ${engine_path}"
+    if python3 /workspace/tools/validate_swin_l_tensorrt.py \
+      --engine "${engine_path}" \
+      --manifest "${manifest_path}"; then
+      engine_ready=true
+    else
+      echo "[swin-l-debug] existing TensorRT artifact is invalid; rebuilding" >&2
+    fi
+  fi
+
+  if [[ "${engine_ready}" != "true" ]]; then
+    echo "[swin-l-debug] preparing TensorRT artifact before startup"
     mkdir -p \
       "$(dirname "${engine_path}")" \
       "$(dirname "${manifest_path}")" \
@@ -94,8 +106,9 @@ if [[ "${SWIN_L_BACKEND:-pytorch}" == "tensorrt" \
       --checkpoint "${checkpoint_path}" \
       --output "${engine_path}" \
       --manifest-output "${manifest_path}"
-  else
-    echo "[swin-l-debug] using existing TensorRT engine: ${engine_path}"
+    python3 /workspace/tools/validate_swin_l_tensorrt.py \
+      --engine "${engine_path}" \
+      --manifest "${manifest_path}"
   fi
 fi
 

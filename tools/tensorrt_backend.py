@@ -12,6 +12,14 @@ import torch
 ENGINE_MANIFEST_SCHEMA_VERSION = 1
 
 
+def normalize_cuda_device(device: torch.device) -> torch.device:
+    """Resolve an index-less CUDA device to the active concrete device."""
+
+    if device.type == "cuda" and device.index is None:
+        return torch.device("cuda", torch.cuda.current_device())
+    return device
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -79,6 +87,7 @@ class TensorRTSemanticBackend:
     ) -> None:
         if device.type != "cuda" or not torch.cuda.is_available():
             raise RuntimeError("TensorRT backend requires an available CUDA device")
+        device = normalize_cuda_device(device)
         if not engine_path.is_file():
             raise RuntimeError(f"TensorRT engine does not exist: {engine_path}")
         manifest = load_engine_manifest(manifest_path)

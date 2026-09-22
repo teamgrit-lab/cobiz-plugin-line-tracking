@@ -188,6 +188,17 @@ def test_actual_activate_builds_missing_tensorrt_artifacts_on_startup():
     assert '--manifest-output "${manifest_path}"' in entrypoint
 
 
+def test_live_services_forward_unrestricted_path_mode_switch():
+    import yaml
+
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    for name in ("debugging-swin-l", "actual-activate"):
+        assert services[name]["environment"]["SWIN_L_UNRESTRICTED_PATH_MODE"].endswith(
+            ":-false}"
+        )
+    assert "SWIN_L_UNRESTRICTED_PATH_MODE=false" in (ROOT / ".env.example").read_text()
+
+
 def test_jetson_image_builds_and_sources_unitree_request_interface():
     dockerfile = (ROOT / "Dockerfile.swin-l-debug").read_text()
     entrypoint = (ROOT / "docker" / "swin_l_debug_entrypoint.sh").read_text()

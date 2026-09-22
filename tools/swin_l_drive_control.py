@@ -44,8 +44,8 @@ class DriveConfig:
             raise ValueError("drive limits must be finite and positive")
         if self.max_forward_mps > MAX_FORWARD_MPS_HARD_LIMIT:
             raise ValueError("max_forward_mps must be at most 1.0 m/s")
-        if not 0.0 < self.min_confidence <= 1.0:
-            raise ValueError("min_confidence must be in (0, 1]")
+        if not 0.0 <= self.min_confidence <= 1.0:
+            raise ValueError("min_confidence must be in [0, 1]")
 
 
 @dataclass(frozen=True)

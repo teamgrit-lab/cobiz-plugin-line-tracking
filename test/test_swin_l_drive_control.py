@@ -69,6 +69,16 @@ def test_right_path_turns_right_without_lateral_velocity():
     assert -0.18 <= command.yaw_rate < 0.0
 
 
+def test_unrestricted_path_mode_disables_confidence_gate(monkeypatch):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_UNRESTRICTED_PATH_MODE", "true")
+    args = debug.parse_args(["task-drive"])
+    config = debug._drive_config_from_args(args)
+
+    assert args.unrestricted_path_mode is True
+    assert config.min_confidence == 0.0
+    assert _decide(_path(confidence=0.01), config=config).reason == "tracking"
+
+
 @pytest.mark.parametrize(
     "override,reason",
     [

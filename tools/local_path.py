@@ -57,6 +57,7 @@ class LocalPathConfig:
     max_lateral_update_m: float = 0.35
     path_hold_sec: float = 0.90
     path_duration_sec: float = 1.50
+    unrestricted_path_mode: bool = False
 
     def validate(self) -> None:
         if self.near_distance_m <= 0.0:
@@ -267,7 +268,12 @@ def extract_sidewalk_centerline(
         raw.append((float(forward_x), center_y, width_m))
 
     valid_ratio = len(raw) / max(len(x_values), 1)
-    if len(raw) < max(3, int(math.ceil(config.min_valid_ratio * len(x_values)))):
+    minimum_points = (
+        2
+        if config.unrestricted_path_mode
+        else max(3, int(math.ceil(config.min_valid_ratio * len(x_values))))
+    )
+    if len(raw) < minimum_points:
         return None
 
     raw_points = np.asarray([(x, y) for x, y, _ in raw], dtype=np.float32)
@@ -332,6 +338,16 @@ class LocalPathSmoother:
         self, estimate: LocalPathEstimate | None, timestamp_sec: float
     ) -> SmoothedPath | None:
         with self._lock:
+            if self.config.unrestricted_path_mode:
+                if estimate is None or not estimate.is_valid:
+                    self._points = None
+                    self._confidence = 0.0
+                    self._last_update = None
+                    return None
+                self._points = np.asarray(estimate.points_xy, dtype=np.float32).copy()
+                self._confidence = estimate.confidence
+                self._last_update = timestamp_sec
+                return self._current_unlocked(timestamp_sec)
             if estimate is not None and estimate.is_valid:
                 target = np.asarray(estimate.points_xy, dtype=np.float32)
                 if self._points is None:
@@ -366,11 +382,17 @@ class LocalPathSmoother:
         if self._points is None or self._last_update is None:
             return None
         age = max(timestamp_sec - self._last_update, 0.0)
-        if age > self.config.path_hold_sec:
+        if not self.config.unrestricted_path_mode and age > self.config.path_hold_sec:
             return None
         return SmoothedPath(
             points_xy=self._points.copy(),
             confidence=float(self._confidence),
             age_sec=float(age),
-            source="smoothed_hold" if age > 0.02 else "smoothed_update",
+            source=(
+                "raw_latest"
+                if self.config.unrestricted_path_mode
+                else "smoothed_hold"
+                if age > 0.02
+                else "smoothed_update"
+            ),
         )

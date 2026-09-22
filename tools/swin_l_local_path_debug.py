@@ -201,11 +201,17 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         max_lateral_update_m=args.max_lateral_update_m,
         path_hold_sec=args.path_hold_sec,
         path_duration_sec=args.path_duration_sec,
+        unrestricted_path_mode=args.unrestricted_path_mode,
     )
 
 
 def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
-    config = DriveConfig(max_forward_mps=args.max_forward_mps)
+    config = DriveConfig(
+        max_forward_mps=args.max_forward_mps,
+        min_confidence=(
+            0.0 if args.unrestricted_path_mode else DriveConfig.min_confidence
+        ),
+    )
     config.validate()
     return config
 
@@ -478,7 +484,7 @@ def run_mcap(args: argparse.Namespace) -> int:
             else:
                 assert local_config is not None and smoother is not None
                 estimate = previous_estimate
-                if timestamp_sec >= next_inference:
+                if args.unrestricted_path_mode or timestamp_sec >= next_inference:
                     result = segmenter.segment(frame)
                     previous_mask = result.selected_mask
                     estimate = extract_sidewalk_centerline(
@@ -491,7 +497,11 @@ def run_mcap(args: argparse.Namespace) -> int:
                     smoother.update(estimate, timestamp_sec)
                     inference_count += 1
                     inference_times.append(result.total_seconds)
-                    next_inference = timestamp_sec + inference_period
+                    next_inference = (
+                        -math.inf
+                        if args.unrestricted_path_mode
+                        else timestamp_sec + inference_period
+                    )
                 path_now = smoother.current(timestamp_sec)
                 overlay = render_local_path_overlay(
                     frame,
@@ -529,8 +539,16 @@ def run_mcap(args: argparse.Namespace) -> int:
             "overlay_mode": args.overlay_mode,
             "start_offset_sec": args.start_offset,
             "output_fps": args.output_fps,
-            "inference_policy": "bag_time_rate" if with_local_path else "every_frame",
-            "requested_inference_hz": args.inference_hz if with_local_path else None,
+            "inference_policy": (
+                "every_frame"
+                if args.unrestricted_path_mode or not with_local_path
+                else "bag_time_rate"
+            ),
+            "requested_inference_hz": (
+                args.inference_hz
+                if with_local_path and not args.unrestricted_path_mode
+                else None
+            ),
             "image_topic": args.image_topic,
             "frames_written": frame_count,
             "swin_l_updates": inference_count,
@@ -814,6 +832,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                     local_config.far_distance_m,
                 )
             )
+            if args.unrestricted_path_mode:
+                self.get_logger().warning(
+                    "SWIN_L_UNRESTRICTED_PATH_MODE is enabled: inference rate limiting, "
+                    "path valid-ratio/confidence gates, and temporal smoothing are bypassed"
+                )
             if task_mode:
                 self.get_logger().info(
                     "Cobiz LINE_TRACKING task listener ready; direct Sport request "
@@ -1150,6 +1173,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_confidence": float(path.confidence) if path else 0.0,
                 "path_age_sec": float(path.age_sec) if path else None,
                 "path_duration_sec": local_config.path_duration_sec,
+                "unrestricted_path_mode": args.unrestricted_path_mode,
                 "near_distance_m": local_config.near_distance_m,
                 "far_distance_m": local_config.far_distance_m,
                 "queue_overwritten": latest.overwritten,
@@ -1218,7 +1242,9 @@ def run_ros2(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, stop_on_sigterm)
 
     def worker() -> None:
-        inference_period = 1.0 / args.inference_hz
+        inference_period = (
+            0.0 if args.unrestricted_path_mode else 1.0 / args.inference_hz
+        )
         next_allowed = time.monotonic()
         try:
             while rclpy.ok():
@@ -1398,6 +1424,15 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--inference-hz", type=float, default=_env_float("SWIN_L_INFERENCE_HZ", 4.0)
+    )
+    parser.add_argument(
+        "--unrestricted-path-mode",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("SWIN_L_UNRESTRICTED_PATH_MODE", False),
+        help=(
+            "process the freshest frame without rate limiting and bypass path "
+            "valid-ratio, confidence, and temporal smoothing restrictions"
+        ),
     )
     parser.add_argument(
         "--output-fps", type=float, default=_env_float("SWIN_L_OUTPUT_FPS", 20.0)

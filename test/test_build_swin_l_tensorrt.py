@@ -2,18 +2,20 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from zipfile import ZipFile
 
 import torch
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
 
-from build_swin_l_tensorrt import (  # noqa: E402
+from build_swin_l_tensorrt import (
     PYTORCH_SHAPE_OPS,
     _CompiledStageProxy,
     _FixedStageCall,
     _is_tensorrt_partition_node,
     _rewrite_tensorrt_incompatible_ops,
+    _save_stage_bundle,
     _write_artifacts_atomically,
     parse_args,
 )
@@ -61,11 +63,47 @@ def test_hybrid_stage_adapter_keeps_non_tensor_shape_arguments_in_pytorch():
         fixed,
         tensor_input_count=1,
         has_downsample=True,
+        partition_count=2,
     )
 
     assert torch.equal(fixed(hidden), torch.full((1, 2), 8.0))
     assert torch.equal(proxy(*captured_args), torch.full((1, 2), 8.0))
     assert proxy.downsample is not None
+
+
+def test_compiled_stages_are_saved_as_independent_bundle_entries(tmp_path):
+    calls = []
+
+    class FakeTorchTensorRT:
+        @staticmethod
+        def save(module, path, **kwargs):
+            calls.append((module, kwargs))
+            Path(path).write_bytes(b"serialized-stage")
+
+    stages = torch.nn.ModuleList(
+        [
+            _CompiledStageProxy(
+                torch.nn.Identity(),
+                tensor_input_count=1,
+                has_downsample=False,
+                partition_count=2,
+            )
+        ]
+    )
+    artifact = tmp_path / "model.plan"
+
+    metadata = _save_stage_bundle(
+        stages,
+        artifact,
+        torch_tensorrt=FakeTorchTensorRT,
+    )
+
+    assert metadata[0]["file"] == "stage_0.ep"
+    assert metadata[0]["partition_count"] == 2
+    assert calls[0][1]["retrace"] is False
+    with ZipFile(artifact) as archive:
+        assert archive.namelist() == ["stage_0.ep"]
+        assert archive.read("stage_0.ep") == b"serialized-stage"
 
 
 def test_rank_changing_shape_ops_are_forced_to_pytorch():

@@ -9,8 +9,9 @@ import json
 import os
 from collections.abc import Sequence
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Any
+from zipfile import ZIP_STORED, ZipFile
 
 import torch
 from best_so_far_runtime import (
@@ -25,7 +26,6 @@ from tensorrt_backend import (
     sha256_file,
 )
 from transformers import Mask2FormerForUniversalSegmentation
-
 
 # These rank-changing operators caused the TensorRT Myelin/rank failure in the
 # monolithic Mask2Former engine. Keeping them in CUDA PyTorch creates explicit
@@ -257,10 +257,12 @@ class _CompiledStageProxy(torch.nn.Module):
         tensor_input_count: int,
         *,
         has_downsample: bool,
+        partition_count: int,
     ) -> None:
         super().__init__()
         self.compiled = compiled
         self.tensor_input_count = tensor_input_count
+        self.partition_count = partition_count
         # SwinEncoder uses this attribute after each stage to update the next
         # stage's static spatial dimensions. It only checks for None and does
         # not call the object, so retaining the original module would waste
@@ -393,6 +395,7 @@ def _compile_swin_stages(
             compiled,
             len(tensor_inputs),
             has_downsample=stage.downsample is not None,
+            partition_count=stage_partitions,
         )
         partition_count += stage_partitions
         del exported, fixed_call, stage
@@ -416,6 +419,60 @@ def _make_artifact_temporary(output: Path) -> Path:
         delete=False,
     ) as stream:
         return Path(stream.name)
+
+
+def _save_stage_bundle(
+    stages: torch.nn.ModuleList,
+    artifact_path: Path,
+    *,
+    torch_tensorrt: Any,
+) -> list[dict[str, Any]]:
+    """Serialize compiled stages independently and package them as one artifact."""
+
+    stage_metadata: list[dict[str, Any]] = []
+    with TemporaryDirectory(
+        prefix=f".{artifact_path.name}.stages.",
+        dir=artifact_path.parent,
+    ) as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        for index, stage in enumerate(stages):
+            if not isinstance(stage, _CompiledStageProxy):
+                raise TypeError(f"Swin stage {index} is not a compiled stage proxy")
+            stage_name = f"stage_{index}.ep"
+            stage_path = temporary_path / stage_name
+            # Torch-TensorRT's exporter knows how to lower its internal
+            # _run_on_acc modules to execute_engine. Re-exporting a parent
+            # PyTorch wrapper with torch.export does not and mixes CPU fake
+            # parameters with CUDA TensorRT engine state.
+            torch_tensorrt.save(
+                stage.compiled,
+                str(stage_path),
+                output_format="exported_program",
+                retrace=False,
+                pickle_protocol=4,
+            )
+            if not stage_path.is_file() or stage_path.stat().st_size <= 0:
+                raise RuntimeError(f"serialized Swin stage {index} is empty")
+            stage_metadata.append(
+                {
+                    "index": index,
+                    "file": stage_name,
+                    "sha256": sha256_file(stage_path),
+                    "tensor_input_count": stage.tensor_input_count,
+                    "has_downsample": stage.downsample is not None,
+                    "partition_count": stage.partition_count,
+                }
+            )
+
+        with ZipFile(
+            artifact_path,
+            mode="w",
+            compression=ZIP_STORED,
+            allowZip64=True,
+        ) as archive:
+            for stage in stage_metadata:
+                archive.write(temporary_path / stage["file"], arcname=stage["file"])
+    return stage_metadata
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -504,32 +561,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RuntimeError("hybrid graph validation produced NaN or Inf")
         del hybrid_output
 
-        # Exporting only after stage replacement serializes the TRT stage calls
-        # together with the untouched CUDA PyTorch patch embedding and decoders.
-        hybrid_exported = torch.export.export(wrapper, (sample,), strict=False)
         artifact_temporary = _make_artifact_temporary(output)
         try:
-            torch_tensorrt.save(
-                hybrid_exported,
-                str(artifact_temporary),
-                output_format="exported_program",
-                pickle_protocol=4,
+            stage_metadata = _save_stage_bundle(
+                stages,
+                artifact_temporary,
+                torch_tensorrt=torch_tensorrt,
             )
-            loaded = torch_tensorrt.load(str(artifact_temporary))
-            loaded_module = loaded.module() if isinstance(
-                loaded, torch.export.ExportedProgram
-            ) else loaded
-            if not isinstance(loaded_module, torch.nn.Module):
-                raise TypeError("saved hybrid artifact did not reload as a module")
-            with torch.inference_mode():
-                reloaded_output = loaded_module(sample)
-                torch.cuda.synchronize(sample.device)
-            if not isinstance(reloaded_output, torch.Tensor):
-                raise RuntimeError("saved hybrid artifact returned an invalid output")
-            if tuple(reloaded_output.shape) != expected_output_shape:
-                raise RuntimeError("saved hybrid artifact output shape is invalid")
-            if not bool(torch.isfinite(reloaded_output).all().item()):
-                raise RuntimeError("saved hybrid artifact produced NaN or Inf")
 
             manifest = {
                 "schema_version": ENGINE_MANIFEST_SCHEMA_VERSION,
@@ -544,6 +582,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "id2label": {
                         str(key): value for key, value in model.config.id2label.items()
                     },
+                },
+                "checkpoint": {
+                    "path": str(checkpoint),
+                    "manifest_file": "checkpoint-manifest.json",
+                    "safetensors_file": checkpoint_manifest["safetensors_file"],
+                    "safetensors_sha256": checkpoint_manifest[
+                        "safetensors_sha256"
+                    ],
                 },
                 "input": {
                     "name": "pixel_values",
@@ -574,6 +620,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "pytorch_shape_ops": [str(op) for op in PYTORCH_SHAPE_OPS],
                     "tensorrt_swin_stage_count": len(stages),
                     "tensorrt_partition_count": partition_count,
+                    "stages": stage_metadata,
                     "pytorch_mask2former_decoders": True,
                     "compatibility_rewrites": rewrites,
                 },

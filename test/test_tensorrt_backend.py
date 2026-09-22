@@ -26,6 +26,12 @@ def _manifest():
             "revision": "revision",
             "id2label": {str(index): f"class-{index}" for index in range(65)},
         },
+        "checkpoint": {
+            "path": "/models/checkpoint",
+            "manifest_file": "checkpoint-manifest.json",
+            "safetensors_file": "model.safetensors",
+            "safetensors_sha256": "b" * 64,
+        },
         "input": {
             "name": "pixel_values",
             "shape": [1, 3, 224, 384],
@@ -41,6 +47,18 @@ def _manifest():
             "pytorch_patch_embedding": True,
             "pytorch_mask2former_decoders": True,
             "tensorrt_partition_count": 4,
+            "tensorrt_swin_stage_count": 4,
+            "stages": [
+                {
+                    "index": index,
+                    "file": f"stage_{index}.ep",
+                    "sha256": f"{index + 1:x}" * 64,
+                    "tensor_input_count": 1,
+                    "has_downsample": index < 3,
+                    "partition_count": 1,
+                }
+                for index in range(4)
+            ],
         },
     }
 
@@ -71,6 +89,16 @@ def test_fixed_fp16_hybrid_manifest_is_accepted():
             ("partitioning", "pytorch_mask2former_decoders"),
             False,
             "decoders must remain in PyTorch",
+        ),
+        (
+            ("partitioning", "tensorrt_swin_stage_count"),
+            3,
+            "stage metadata count",
+        ),
+        (
+            ("partitioning", "stages", 0, "file"),
+            "../stage_0.ep",
+            "stage file",
         ),
     ],
 )

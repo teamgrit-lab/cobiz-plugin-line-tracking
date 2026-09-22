@@ -5,6 +5,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
+import local_path  # noqa: E402
 from local_path import (  # noqa: E402
     LocalPathConfig,
     LocalPathEstimate,
@@ -97,3 +98,55 @@ def test_new_result_lifetime_starts_when_result_becomes_available():
     assert created.age_sec == 0.0
     assert smoother.current(10.49) is not None
     assert smoother.current(10.51) is None
+
+
+def test_disabled_path_safety_bypasses_valid_ratio_gate(monkeypatch):
+    birdseye = np.zeros((10, 20), dtype=np.uint8)
+    birdseye[:1, 6:14] = 255
+    x_values = np.linspace(3.0, 8.0, 10, dtype=np.float32)
+    y_values = np.linspace(1.0, -1.0, 20, dtype=np.float32)
+    monkeypatch.setattr(
+        local_path,
+        "_birdseye_sidewalk",
+        lambda _mask, _config: (birdseye, x_values, y_values),
+    )
+    mask = np.zeros((10, 20), dtype=np.uint8)
+
+    assert extract_sidewalk_centerline(
+        mask, LocalPathConfig(min_valid_ratio=0.90)
+    ) is None
+    estimate = extract_sidewalk_centerline(
+        mask,
+        LocalPathConfig(
+            min_valid_ratio=0.90,
+            path_safety_enabled=False,
+        ),
+    )
+
+    assert estimate is not None
+    assert estimate.valid_ratio == 0.1
+
+
+def test_disabled_path_safety_uses_each_raw_update_without_smoothing_or_hold():
+    config = LocalPathConfig(
+        smoothing_time_constant_sec=100.0,
+        max_lateral_update_m=0.01,
+        path_hold_sec=0.01,
+        path_safety_enabled=False,
+    )
+    smoother = LocalPathSmoother(config)
+
+    def estimate(lateral: float, confidence: float = 0.0) -> LocalPathEstimate:
+        points = np.column_stack(
+            (np.linspace(3.0, 8.0, 4), np.full(4, lateral))
+        ).astype(np.float32)
+        return LocalPathEstimate(points, confidence, 0.1, 0.1, points)
+
+    smoother.update(estimate(0.0), 0.0)
+    updated = smoother.update(estimate(2.0), 0.01)
+
+    assert updated is not None
+    assert np.all(updated.points_xy[:, 1] == 2.0)
+    assert updated.source == "raw_latest"
+    assert smoother.current(10.0) is not None
+    assert smoother.update(None, 10.1) is None

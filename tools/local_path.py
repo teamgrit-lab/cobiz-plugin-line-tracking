@@ -57,6 +57,7 @@ class LocalPathConfig:
     max_lateral_update_m: float = 0.35
     path_hold_sec: float = 0.90
     path_duration_sec: float = 1.50
+    path_safety_enabled: bool = True
 
     def validate(self) -> None:
         if self.near_distance_m <= 0.0:
@@ -238,8 +239,10 @@ def extract_sidewalk_centerline(
     meters_per_column = (
         2.0 * config.search_half_width_m / max(config.bev_width_px - 1, 1)
     )
-    min_width_px = max(
-        1, int(math.ceil(config.min_sidewalk_width_m / meters_per_column))
+    min_width_px = (
+        max(1, int(math.ceil(config.min_sidewalk_width_m / meters_per_column)))
+        if config.path_safety_enabled
+        else 1
     )
 
     raw: list[tuple[float, float, float]] = []
@@ -267,7 +270,12 @@ def extract_sidewalk_centerline(
         raw.append((float(forward_x), center_y, width_m))
 
     valid_ratio = len(raw) / max(len(x_values), 1)
-    if len(raw) < max(3, int(math.ceil(config.min_valid_ratio * len(x_values)))):
+    minimum_points = (
+        max(3, int(math.ceil(config.min_valid_ratio * len(x_values))))
+        if config.path_safety_enabled
+        else 1
+    )
+    if len(raw) < minimum_points:
         return None
 
     raw_points = np.asarray([(x, y) for x, y, _ in raw], dtype=np.float32)
@@ -332,6 +340,16 @@ class LocalPathSmoother:
         self, estimate: LocalPathEstimate | None, timestamp_sec: float
     ) -> SmoothedPath | None:
         with self._lock:
+            if not self.config.path_safety_enabled:
+                if estimate is None:
+                    self._points = None
+                    self._confidence = 0.0
+                    self._last_update = None
+                    return None
+                self._points = np.asarray(estimate.points_xy, dtype=np.float32).copy()
+                self._confidence = estimate.confidence
+                self._last_update = timestamp_sec
+                return self._current_unlocked(timestamp_sec)
             if estimate is not None and estimate.is_valid:
                 target = np.asarray(estimate.points_xy, dtype=np.float32)
                 if self._points is None:
@@ -366,11 +384,17 @@ class LocalPathSmoother:
         if self._points is None or self._last_update is None:
             return None
         age = max(timestamp_sec - self._last_update, 0.0)
-        if age > self.config.path_hold_sec:
+        if self.config.path_safety_enabled and age > self.config.path_hold_sec:
             return None
         return SmoothedPath(
             points_xy=self._points.copy(),
             confidence=float(self._confidence),
             age_sec=float(age),
-            source="smoothed_hold" if age > 0.02 else "smoothed_update",
+            source=(
+                "raw_latest"
+                if not self.config.path_safety_enabled
+                else "smoothed_hold"
+                if age > 0.02
+                else "smoothed_update"
+            ),
         )

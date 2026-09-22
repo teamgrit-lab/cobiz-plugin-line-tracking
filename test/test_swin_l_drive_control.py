@@ -70,6 +70,40 @@ def test_right_path_turns_right_without_lateral_velocity():
     assert -0.18 <= command.yaw_rate < 0.0
 
 
+def test_false_path_safety_moves_when_only_a_path_exists(monkeypatch):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_SAFETY_ENABLED", "false")
+    args = debug.parse_args(["task-drive"])
+    config = debug._drive_config_from_args(args)
+
+    command = _decide(
+        _path(lateral=1.0, confidence=0.0, age=100.0),
+        camera_age_sec=None,
+        inference_age_sec=None,
+        config=config,
+    )
+
+    assert args.path_safety_enabled is False
+    assert config.path_safety_enabled is False
+    assert command.reason == "tracking"
+    assert command.vx > 0.0
+
+    malformed = SmoothedPath(
+        points_xy=np.asarray([np.nan], dtype=np.float32),
+        confidence=float("nan"),
+        age_sec=float("nan"),
+        source="malformed",
+    )
+    malformed_command = _decide(
+        malformed,
+        camera_age_sec=None,
+        inference_age_sec=None,
+        config=config,
+    )
+    assert malformed_command.reason == "tracking"
+    assert malformed_command.vx > 0.0
+    assert malformed_command.yaw_rate == 0.0
+
+
 @pytest.mark.parametrize(
     "override,reason",
     [

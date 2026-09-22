@@ -125,6 +125,15 @@ def _env_int(name: str, default: int) -> int:
     return int(_env(name, str(default)))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = _env(name, str(default)).lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
 def selected_path_region(selected_mask: np.ndarray, path_mask_class: int) -> np.ndarray:
     """Select only the configured drivable class; background is never a path."""
 
@@ -193,11 +202,15 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         max_lateral_update_m=args.max_lateral_update_m,
         path_hold_sec=args.path_hold_sec,
         path_duration_sec=args.path_duration_sec,
+        path_safety_enabled=args.path_safety_enabled,
     )
 
 
 def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
-    config = DriveConfig(max_forward_mps=args.max_forward_mps)
+    config = DriveConfig(
+        max_forward_mps=args.max_forward_mps,
+        path_safety_enabled=args.path_safety_enabled,
+    )
     config.validate()
     return config
 
@@ -421,7 +434,7 @@ def run_mcap(args: argparse.Namespace) -> int:
     segmenter = BestSoFarSegmenter(_runtime_config(args))
     smoother = LocalPathSmoother(local_config) if local_config else None
     writer: cv2.VideoWriter | None = None
-    inference_period = 1.0 / args.inference_hz
+    inference_period = 1.0 / args.inference_hz if args.path_safety_enabled else 0.0
     next_inference = -math.inf
     frame_count = 0
     inference_count = 0
@@ -466,7 +479,7 @@ def run_mcap(args: argparse.Namespace) -> int:
             else:
                 assert local_config is not None and smoother is not None
                 estimate = previous_estimate
-                if timestamp_sec >= next_inference:
+                if not args.path_safety_enabled or timestamp_sec >= next_inference:
                     result = segmenter.segment(frame)
                     previous_mask = result.selected_mask
                     estimate = extract_sidewalk_centerline(
@@ -479,7 +492,11 @@ def run_mcap(args: argparse.Namespace) -> int:
                     smoother.update(estimate, timestamp_sec)
                     inference_count += 1
                     inference_times.append(result.total_seconds)
-                    next_inference = timestamp_sec + inference_period
+                    next_inference = (
+                        timestamp_sec + inference_period
+                        if args.path_safety_enabled
+                        else -math.inf
+                    )
                 path_now = smoother.current(timestamp_sec)
                 overlay = render_local_path_overlay(
                     frame,
@@ -517,8 +534,16 @@ def run_mcap(args: argparse.Namespace) -> int:
             "overlay_mode": args.overlay_mode,
             "start_offset_sec": args.start_offset,
             "output_fps": args.output_fps,
-            "inference_policy": "bag_time_rate" if with_local_path else "every_frame",
-            "requested_inference_hz": args.inference_hz if with_local_path else None,
+            "inference_policy": (
+                "bag_time_rate"
+                if with_local_path and args.path_safety_enabled
+                else "every_frame"
+            ),
+            "requested_inference_hz": (
+                args.inference_hz
+                if with_local_path and args.path_safety_enabled
+                else None
+            ),
             "image_topic": args.image_topic,
             "frames_written": frame_count,
             "swin_l_updates": inference_count,
@@ -798,6 +823,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                     local_config.far_distance_m,
                 )
             )
+            if not args.path_safety_enabled:
+                self.get_logger().warning(
+                    "SWIN_L_PATH_SAFETY_ENABLED=false: inference rate limiting, "
+                    "path valid-ratio/confidence/freshness/lateral/structure gates, "
+                    "startup hold, and temporal smoothing are bypassed"
+                )
             if task_mode:
                 self.get_logger().info(
                     "Cobiz LINE_TRACKING task listener ready; direct Sport request "
@@ -983,7 +1014,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         def on_image(self, message: Any) -> None:
             try:
                 source_stamp_ns = _stamp_ns(message.header) if task_mode else None
-                if task_mode and (
+                if task_mode and args.path_safety_enabled and (
                     not _live_source_stamp(
                         source_stamp_ns,
                         self.get_clock().now().nanoseconds,
@@ -1069,7 +1100,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path, ready_decision = self.drive_readiness(mask_class, now)
                 self.last_ready_reason = ready_decision.reason
                 startup_hold = (
-                    task_active is not None
+                    args.path_safety_enabled
+                    and task_active is not None
                     and now - task_active.started_at
                     < self.tasks.policy.startup_hold_sec
                 )
@@ -1116,7 +1148,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     else:
                         drive_decision = DriveDecision.stop("task_idle")
                 else:
-                    if now - self.started < 2.0:
+                    if args.path_safety_enabled and now - self.started < 2.0:
                         drive_decision = DriveDecision.stop("startup_hold")
                     self.publish_drive(drive_decision)
             else:
@@ -1134,6 +1166,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_confidence": float(path.confidence) if path else 0.0,
                 "path_age_sec": float(path.age_sec) if path else None,
                 "path_duration_sec": local_config.path_duration_sec,
+                "path_safety_enabled": args.path_safety_enabled,
                 "near_distance_m": local_config.near_distance_m,
                 "far_distance_m": local_config.far_distance_m,
                 "queue_overwritten": latest.overwritten,
@@ -1202,7 +1235,7 @@ def run_ros2(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, stop_on_sigterm)
 
     def worker() -> None:
-        inference_period = 1.0 / args.inference_hz
+        inference_period = 1.0 / args.inference_hz if args.path_safety_enabled else 0.0
         next_allowed = time.monotonic()
         try:
             while rclpy.ok():
@@ -1366,6 +1399,15 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--inference-hz", type=float, default=_env_float("SWIN_L_INFERENCE_HZ", 4.0)
     )
     parser.add_argument(
+        "--path-safety-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("SWIN_L_PATH_SAFETY_ENABLED", True),
+        help=(
+            "enable inference-rate, path quality/freshness/lateral/structure, "
+            "startup-hold, and temporal-smoothing guards"
+        ),
+    )
+    parser.add_argument(
         "--output-fps", type=float, default=_env_float("SWIN_L_OUTPUT_FPS", 20.0)
     )
     parser.add_argument(
@@ -1482,8 +1524,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.path_mask_class not in PATH_MASK_CLASSES:
         parser.error("SWIN_L_PATH_MASK_CLASS must be 1 (road) or 2 (sidewalk)")
-    if args.inference_hz <= 0.0 or args.output_fps <= 0.0:
-        parser.error("inference/output FPS must be positive")
+    if (args.path_safety_enabled and args.inference_hz <= 0.0) or args.output_fps <= 0.0:
+        parser.error("limited inference/output FPS must be positive")
     if args.mode in ("ros2", "task-drive") and args.output_hz <= 0.0:
         parser.error("output-hz must be positive")
     if args.mode == "mcap" and (args.start_offset < 0.0 or args.max_frames < 0):

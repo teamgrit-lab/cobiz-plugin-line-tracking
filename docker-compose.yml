@@ -27,6 +27,7 @@ services:
       SWIN_L_PROFILE: swin-l-aspect-224x384-fp16
       SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
+      SWIN_L_PATH_SAFETY_ENABLED: ${SWIN_L_PATH_SAFETY_ENABLED:-true}
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
 
@@ -50,6 +51,7 @@ services:
       SWIN_L_PROFILE: swin-l-aspect-224x384-fp16
       SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
+      SWIN_L_PATH_SAFETY_ENABLED: ${SWIN_L_PATH_SAFETY_ENABLED:-true}
       SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/image_raw}
       SWIN_L_EVALUATION_HEIGHT: ${SWIN_L_EVALUATION_HEIGHT:-360}
       SWIN_L_EVALUATION_WIDTH: ${SWIN_L_EVALUATION_WIDTH:-640}

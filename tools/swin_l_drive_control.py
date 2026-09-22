@@ -28,6 +28,7 @@ class DriveConfig:
     max_camera_age_sec: float = 5.00
     max_inference_age_sec: float = 5.00
     max_path_age_sec: float = 0.45
+    path_safety_enabled: bool = True
 
     def validate(self) -> None:
         positive = (
@@ -70,23 +71,50 @@ def decide_drive(
     """Only permit low-speed motion with fresh camera/path inputs."""
 
     config.validate()
-    for name, age, maximum in (
-        ("camera", camera_age_sec, config.max_camera_age_sec),
-        ("inference", inference_age_sec, config.max_inference_age_sec),
-    ):
-        if age is None or not math.isfinite(age) or age < 0.0 or age > maximum:
-            return DriveDecision.stop(f"{name}_stale")
     if path is None:
         return DriveDecision.stop("path_unavailable")
-    if (
-        not math.isfinite(path.age_sec)
-        or path.age_sec < 0.0
-        or path.age_sec > config.max_path_age_sec
-    ):
-        return DriveDecision.stop("path_stale")
-    if not math.isfinite(path.confidence) or path.confidence < config.min_confidence:
-        return DriveDecision.stop("path_low_confidence")
+    if config.path_safety_enabled:
+        for name, age, maximum in (
+            ("camera", camera_age_sec, config.max_camera_age_sec),
+            ("inference", inference_age_sec, config.max_inference_age_sec),
+        ):
+            if age is None or not math.isfinite(age) or age < 0.0 or age > maximum:
+                return DriveDecision.stop(f"{name}_stale")
+        if (
+            not math.isfinite(path.age_sec)
+            or path.age_sec < 0.0
+            or path.age_sec > config.max_path_age_sec
+        ):
+            return DriveDecision.stop("path_stale")
+        if not math.isfinite(path.confidence) or path.confidence < config.min_confidence:
+            return DriveDecision.stop("path_low_confidence")
     points = np.asarray(path.points_xy, dtype=np.float64)
+    if not config.path_safety_enabled:
+        lateral = 0.0
+        if points.ndim == 2 and points.shape[1] >= 2:
+            finite_points = points[np.all(np.isfinite(points[:, :2]), axis=1), :2]
+            if finite_points.shape[0] == 1:
+                lateral = float(finite_points[0, 1])
+            elif finite_points.shape[0] >= 2:
+                order = np.argsort(finite_points[:, 0], kind="stable")
+                ordered = finite_points[order]
+                unique_x, unique_indices = np.unique(
+                    ordered[:, 0], return_index=True
+                )
+                unique_y = ordered[unique_indices, 1]
+                if unique_x.size == 1:
+                    lateral = float(unique_y[0])
+                else:
+                    lateral = float(np.interp(config.lookahead_m, unique_x, unique_y))
+        heading = math.atan2(lateral, config.lookahead_m)
+        yaw_rate = float(
+            np.clip(
+                config.heading_gain * heading,
+                -config.max_yaw_rps,
+                config.max_yaw_rps,
+            )
+        )
+        return DriveDecision(config.max_forward_mps, 0.0, yaw_rate, "tracking")
     if (
         points.ndim != 2
         or points.shape[1] != 2
@@ -94,12 +122,14 @@ def decide_drive(
         or not np.all(np.isfinite(points))
         or not np.all(np.diff(points[:, 0]) > 0.0)
         or points[0, 0] <= 0.0
-        or points[0, 0] > config.lookahead_m
-        or points[-1, 0] < config.lookahead_m
+    ):
+        return DriveDecision.stop("path_geometry_invalid")
+    if config.path_safety_enabled and (
+        points[0, 0] > config.lookahead_m or points[-1, 0] < config.lookahead_m
     ):
         return DriveDecision.stop("path_geometry_invalid")
     lateral = float(np.interp(config.lookahead_m, points[:, 0], points[:, 1]))
-    if abs(lateral) > config.max_lateral_target_m:
+    if config.path_safety_enabled and abs(lateral) > config.max_lateral_target_m:
         return DriveDecision.stop("path_lateral_target_large")
     heading = math.atan2(lateral, config.lookahead_m)
     yaw_rate = float(

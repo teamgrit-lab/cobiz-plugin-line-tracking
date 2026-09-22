@@ -317,7 +317,7 @@ def _capture_stage_calls(
             )
         )
     try:
-        with torch.inference_mode():
+        with torch.no_grad():
             reference = wrapper(sample)
     finally:
         for handle in handles:

@@ -11,6 +11,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import swin_l_local_path_debug as debug  # noqa: E402
 
 
+def test_performance_summary_reports_latency_percentiles_and_completion_rate():
+    summary = debug.summarize_performance(
+        [0.10, 0.20, 0.30, 0.40],
+        [0.20, 0.25, 0.30, 0.35],
+        [1.0, 1.25, 1.50, 1.75],
+    )
+
+    assert summary["sample_count"] == 4
+    assert summary["inference_mean_ms"] == 250.0
+    assert summary["inference_p95_ms"] == 385.0
+    assert summary["inference_p99_ms"] == 397.0
+    assert summary["processing_mean_ms"] == 275.0
+    assert summary["processing_capacity_fps"] == 1.0 / 0.275
+    assert summary["completion_fps"] == 4.0
+
+
 def test_task_drive_defaults(monkeypatch):
     for name in tuple(debug.ENV):
         if name.startswith("SWIN_L_APRILTAG_"):
@@ -108,7 +124,11 @@ def test_debug_mode_creates_only_camera_subscription_and_path_metrics_publishers
         ("nav_msgs.msg", nav_msgs),
     ):
         monkeypatch.setitem(sys.modules, name, module)
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _config: object())
+    monkeypatch.setattr(
+        debug,
+        "BestSoFarSegmenter",
+        lambda _config: SimpleNamespace(device=debug.torch.device("cpu")),
+    )
 
     args = debug.parse_args(["ros2"])
     assert not hasattr(args, "overlay_topic")

@@ -138,6 +138,7 @@ def test_jetson_swin_l_base_build_contract():
     assert "torchvision" in debug_dockerfile
     assert '"torchvision==${SWIN_L_TORCHVISION_VERSION}"' in debug_dockerfile
     assert '"torch-tensorrt==${SWIN_L_TORCH_TENSORRT_VERSION}"' in debug_dockerfile
+    assert '"dllist==2.0.0"' in debug_dockerfile
     assert "--no-deps" in debug_dockerfile
     assert "torch.version.cuda" in debug_dockerfile
     assert "12.6" in debug_dockerfile

@@ -41,6 +41,7 @@ from typing import Any, Sequence
 
 import cv2
 import numpy as np
+import torch
 from apriltag_stop import AprilTagDecision, AprilTagPolicy, AprilTagStopMonitor
 from best_so_far_runtime import (
     DEFAULT_EVALUATION_SIZE,
@@ -85,6 +86,8 @@ DEFAULT_OVERLAY_TOPIC = "/line_tracking/swin_l/overlay"
 DEFAULT_LOCAL_PATH_TOPIC = "/line_tracking/swin_l/local_path"
 DEFAULT_METRICS_TOPIC = "/line_tracking/swin_l/metrics"
 PATH_MASK_CLASSES = {1: "ROAD", 2: "SIDEWALK"}
+PERFORMANCE_WARMUP_FRAMES = 10
+PERFORMANCE_SAMPLE_WINDOW = 512
 
 
 def _load_dotenv_values() -> dict[str, str]:
@@ -131,6 +134,58 @@ def _env_bool(name: str, default: bool) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"{name} must be a boolean value")
+
+
+def summarize_performance(
+    inference_seconds: Sequence[float],
+    processing_seconds: Sequence[float],
+    completion_times: Sequence[float],
+) -> dict[str, float | int | None]:
+    """Summarize synchronized live-pipeline samples after warm-up."""
+
+    inference = np.asarray(inference_seconds, dtype=np.float64)
+    processing = np.asarray(processing_seconds, dtype=np.float64)
+    completion = np.asarray(completion_times, dtype=np.float64)
+
+    def milliseconds(values: np.ndarray, percentile: float) -> float | None:
+        return (
+            float(np.percentile(values, percentile) * 1000.0)
+            if values.size
+            else None
+        )
+
+    mean_processing = float(np.mean(processing)) if processing.size else 0.0
+    elapsed = float(completion[-1] - completion[0]) if completion.size >= 2 else 0.0
+    return {
+        "sample_count": int(inference.size),
+        "warmup_frames": PERFORMANCE_WARMUP_FRAMES,
+        "inference_mean_ms": (
+            float(np.mean(inference) * 1000.0) if inference.size else None
+        ),
+        "inference_p95_ms": milliseconds(inference, 95.0),
+        "inference_p99_ms": milliseconds(inference, 99.0),
+        "processing_mean_ms": float(mean_processing * 1000.0)
+        if processing.size
+        else None,
+        "processing_capacity_fps": 1.0 / mean_processing
+        if mean_processing > 0.0
+        else None,
+        "completion_fps": (completion.size - 1) / elapsed if elapsed > 0.0 else None,
+    }
+
+
+def cuda_memory_metrics(device: torch.device) -> dict[str, float] | None:
+    """Return memory visible to PyTorch's CUDA allocator."""
+
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    scale = 1024.0 * 1024.0
+    return {
+        "allocated_mib": torch.cuda.memory_allocated(device) / scale,
+        "reserved_mib": torch.cuda.memory_reserved(device) / scale,
+        "max_allocated_mib": torch.cuda.max_memory_allocated(device) / scale,
+        "max_reserved_mib": torch.cuda.max_memory_reserved(device) / scale,
+    }
 
 
 def selected_path_region(selected_mask: np.ndarray, path_mask_class: int) -> np.ndarray:
@@ -701,6 +756,9 @@ def run_ros2(args: argparse.Namespace) -> int:
         "sequence": 0,
         "inference_count": 0,
         "inference_times": deque(maxlen=32),
+        "performance_inference_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
+        "performance_processing_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
+        "performance_completion_times": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "last_image_at": None,
         "last_inference_at": None,
         "last_image_stamp_ns": None,
@@ -1103,6 +1161,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                 inference_times = (
                     list(state["inference_times"]) if extended_diagnostics else []
                 )
+                performance = summarize_performance(
+                    list(state["performance_inference_seconds"]),
+                    list(state["performance_processing_seconds"]),
+                    list(state["performance_completion_times"]),
+                )
             drive_decision = None
             if self.drive_config is not None:
                 path, ready_decision = self.drive_readiness(mask_class, now)
@@ -1181,6 +1244,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "drive_reason": drive_decision.reason if drive_decision else None,
                 "ready_reason": self.last_ready_reason if task_mode else None,
                 "task_active": self.tasks.active is not None if self.tasks else None,
+                "performance": performance,
+                "cuda_memory": cuda_memory_metrics(segmenter.device),
             }
             if tag_status is not None:
                 metrics["apriltag"] = {
@@ -1272,8 +1337,19 @@ def run_ros2(args: argparse.Namespace) -> int:
                         state["estimates"] = estimates
                         state["inference_times"].append(time.perf_counter() - started)
                     state["header"] = packet.source_header
+                    completed_before = int(state["inference_count"])
                     state["inference_count"] += 1
                     state["last_inference_at"] = inference_finished_at
+                    if completed_before >= PERFORMANCE_WARMUP_FRAMES:
+                        state["performance_inference_seconds"].append(
+                            result.inference_seconds
+                        )
+                        state["performance_processing_seconds"].append(
+                            inference_finished_at - inference_started_at
+                        )
+                        state["performance_completion_times"].append(
+                            inference_finished_at
+                        )
                     if task_mode:
                         state["last_inference_stamp_ns"] = _stamp_ns(
                             packet.source_header

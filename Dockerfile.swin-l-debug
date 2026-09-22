@@ -57,6 +57,7 @@ RUN /opt/venv/bin/python -m pip install --no-cache-dir \
         --only-binary=:all: \
         "torch-tensorrt==${SWIN_L_TORCH_TENSORRT_VERSION}" \
     && /opt/venv/bin/python -m pip install --no-cache-dir \
+        "dllist==2.0.0" \
         "numpy>=1.26,<2" \
         "pillow>=10,<14" \
         "scipy>=1.10,<2" \

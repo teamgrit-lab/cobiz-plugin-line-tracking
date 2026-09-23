@@ -52,8 +52,9 @@ def _manifest():
             "stages": [
                 {
                     "index": index,
-                    "file": f"stage_{index}.ep",
+                    "file": f"stage_{index}.ts",
                     "sha256": f"{index + 1:x}" * 64,
+                    "serialization_format": "torchscript",
                     "tensor_input_count": 1,
                     "has_downsample": index < 3,
                     "partition_count": 1,
@@ -98,8 +99,13 @@ def test_fixed_fp16_hybrid_manifest_is_accepted():
         ),
         (
             ("partitioning", "stages", 0, "file"),
-            "../stage_0.ep",
+            "../stage_0.ts",
             "stage file",
+        ),
+        (
+            ("partitioning", "stages", 0, "serialization_format"),
+            "exported_program",
+            "serialization format",
         ),
     ],
 )

@@ -260,18 +260,41 @@ class _CompiledStageProxy(torch.nn.Module):
         compiled: torch.nn.Module,
         tensor_input_count: int,
         *,
+        example_inputs: tuple[torch.Tensor, ...],
         has_downsample: bool,
         partition_count: int,
     ) -> None:
         super().__init__()
+        if len(example_inputs) != tensor_input_count:
+            raise ValueError("compiled Swin stage example input count changed")
         self.compiled = compiled
         self.tensor_input_count = tensor_input_count
         self.partition_count = partition_count
+        self._serialization_input_specs = tuple(
+            (
+                tuple(value.shape),
+                tuple(value.stride()),
+                value.dtype,
+                value.device,
+            )
+            for value in example_inputs
+        )
         # SwinEncoder uses this attribute after each stage to update the next
         # stage's static spatial dimensions. It only checks for None and does
         # not call the object, so retaining the original module would waste
         # memory and duplicate its parameters in the final artifact.
         self.downsample = True if has_downsample else None
+
+    def serialization_inputs(self) -> tuple[torch.Tensor, ...]:
+        return tuple(
+            torch.empty_strided(
+                shape,
+                stride,
+                dtype=dtype,
+                device=device,
+            ).zero_()
+            for shape, stride, dtype, device in self._serialization_input_specs
+        )
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         from torch.utils._pytree import tree_flatten
@@ -398,6 +421,7 @@ def _compile_swin_stages(
         stages[index] = _CompiledStageProxy(
             compiled,
             len(tensor_inputs),
+            example_inputs=tensor_inputs,
             has_downsample=stage.downsample is not None,
             partition_count=stage_partitions,
         )
@@ -442,19 +466,26 @@ def _save_stage_bundle(
         for index, stage in enumerate(stages):
             if not isinstance(stage, _CompiledStageProxy):
                 raise TypeError(f"Swin stage {index} is not a compiled stage proxy")
-            stage_name = f"stage_{index}.ep"
+            stage_name = f"stage_{index}.ts"
             stage_path = temporary_path / stage_name
-            # Torch-TensorRT's exporter knows how to lower its internal
-            # _run_on_acc modules to execute_engine. Re-exporting a parent
-            # PyTorch wrapper with torch.export does not and mixes CPU fake
-            # parameters with CUDA TensorRT engine state.
-            torch_tensorrt.save(
-                stage.compiled,
-                str(stage_path),
-                output_format="exported_program",
-                retrace=False,
-                pickle_protocol=4,
-            )
+            # Torch-TensorRT 2.8's ExportedProgram serializer cannot encode a
+            # multi-output execute_engine node when one output is consumed
+            # directly instead of through operator.getitem. Its TorchScript
+            # save path traces the already-compiled graph and preserves the
+            # embedded engines without going through that exporter.
+            serialization_inputs = stage.serialization_inputs()
+            try:
+                torch_tensorrt.save(
+                    stage.compiled,
+                    str(stage_path),
+                    output_format="torchscript",
+                    arg_inputs=serialization_inputs,
+                )
+            finally:
+                del serialization_inputs
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             if not stage_path.is_file() or stage_path.stat().st_size <= 0:
                 raise RuntimeError(f"serialized Swin stage {index} is empty")
             stage_metadata.append(
@@ -462,6 +493,7 @@ def _save_stage_bundle(
                     "index": index,
                     "file": stage_name,
                     "sha256": sha256_file(stage_path),
+                    "serialization_format": "torchscript",
                     "tensor_input_count": stage.tensor_input_count,
                     "has_downsample": stage.downsample is not None,
                     "partition_count": stage.partition_count,

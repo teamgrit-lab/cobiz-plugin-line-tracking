@@ -14,7 +14,7 @@ from zipfile import BadZipFile, ZipFile
 import torch
 from swin_l_tensorrt_model import SwinLSemanticScores, restore_swin_stage_outputs
 
-ENGINE_MANIFEST_SCHEMA_VERSION = 3
+ENGINE_MANIFEST_SCHEMA_VERSION = 4
 HYBRID_ARTIFACT_FORMAT = "torch_tensorrt_stage_bundle"
 
 
@@ -116,6 +116,8 @@ def validate_engine_manifest(
         ):
             raise RuntimeError("TensorRT Swin stage file is invalid")
         stage_files.add(stage_file)
+        if stage.get("serialization_format") != "torchscript":
+            raise RuntimeError("TensorRT Swin stage serialization format is invalid")
         if not _is_sha256(stage.get("sha256")):
             raise RuntimeError("TensorRT Swin stage SHA-256 is invalid")
         tensor_input_count = stage.get("tensor_input_count")

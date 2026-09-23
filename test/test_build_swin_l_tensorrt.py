@@ -63,6 +63,7 @@ def test_hybrid_stage_adapter_keeps_non_tensor_shape_arguments_in_pytorch():
     proxy = _CompiledStageProxy(
         fixed,
         tensor_input_count=1,
+        example_inputs=(hidden,),
         has_downsample=True,
         partition_count=2,
     )
@@ -94,6 +95,7 @@ def test_compiled_stages_are_saved_as_independent_bundle_entries(tmp_path):
             _CompiledStageProxy(
                 torch.nn.Identity(),
                 tensor_input_count=1,
+                example_inputs=(torch.ones(1, 2),),
                 has_downsample=False,
                 partition_count=2,
             )
@@ -107,12 +109,15 @@ def test_compiled_stages_are_saved_as_independent_bundle_entries(tmp_path):
         torch_tensorrt=FakeTorchTensorRT,
     )
 
-    assert metadata[0]["file"] == "stage_0.ep"
+    assert metadata[0]["file"] == "stage_0.ts"
+    assert metadata[0]["serialization_format"] == "torchscript"
     assert metadata[0]["partition_count"] == 2
-    assert calls[0][1]["retrace"] is False
+    assert calls[0][1]["output_format"] == "torchscript"
+    assert len(calls[0][1]["arg_inputs"]) == 1
+    assert tuple(calls[0][1]["arg_inputs"][0].shape) == (1, 2)
     with ZipFile(artifact) as archive:
-        assert archive.namelist() == ["stage_0.ep"]
-        assert archive.read("stage_0.ep") == b"serialized-stage"
+        assert archive.namelist() == ["stage_0.ts"]
+        assert archive.read("stage_0.ts") == b"serialized-stage"
 
 
 def test_rank_changing_shape_ops_are_forced_to_pytorch():

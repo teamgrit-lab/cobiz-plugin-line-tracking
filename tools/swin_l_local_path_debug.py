@@ -148,9 +148,7 @@ def summarize_performance(
 
     def milliseconds(values: np.ndarray, percentile: float) -> float | None:
         return (
-            float(np.percentile(values, percentile) * 1000.0)
-            if values.size
-            else None
+            float(np.percentile(values, percentile) * 1000.0) if values.size else None
         )
 
     mean_processing = float(np.mean(processing)) if processing.size else 0.0
@@ -166,6 +164,13 @@ def summarize_performance(
         "processing_mean_ms": float(mean_processing * 1000.0)
         if processing.size
         else None,
+        "processing_p95_ms": milliseconds(processing, 95.0),
+        "processing_p99_ms": milliseconds(processing, 99.0),
+        "completion_gap_max_ms": (
+            float(np.max(np.diff(completion)) * 1000.0)
+            if completion.size >= 2
+            else None
+        ),
         "processing_capacity_fps": 1.0 / mean_processing
         if mean_processing > 0.0
         else None,
@@ -880,8 +885,9 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             if args.unrestricted_path_mode:
                 self.get_logger().warning(
-                    "SWIN_L_UNRESTRICTED_PATH_MODE is enabled: inference rate limiting, "
-                    "path valid-ratio/confidence gates, and temporal smoothing are bypassed"
+                    "SWIN_L_UNRESTRICTED_PATH_MODE is enabled: path valid-ratio/"
+                    "confidence gates and temporal smoothing are bypassed; "
+                    "inference rate limiting remains enabled"
                 )
             if task_mode:
                 self.get_logger().info(
@@ -1208,6 +1214,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_age_sec": float(path.age_sec) if path else None,
                 "path_duration_sec": local_config.path_duration_sec,
                 "unrestricted_path_mode": args.unrestricted_path_mode,
+                "inference_target_hz": args.inference_hz,
                 "near_distance_m": local_config.near_distance_m,
                 "far_distance_m": local_config.far_distance_m,
                 "queue_overwritten": latest.overwritten,
@@ -1250,9 +1257,8 @@ def run_ros2(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, stop_on_sigterm)
 
     def worker() -> None:
-        inference_period = (
-            0.0 if args.unrestricted_path_mode else 1.0 / args.inference_hz
-        )
+        # Path acceptance settings must never disable the live GPU budget.
+        inference_period = 1.0 / args.inference_hz
         next_allowed = time.monotonic()
         try:
             while rclpy.ok():
@@ -1443,8 +1449,8 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         default=_env_bool("SWIN_L_UNRESTRICTED_PATH_MODE", True),
         help=(
-            "process the freshest frame without rate limiting and bypass path "
-            "valid-ratio, confidence, and temporal smoothing restrictions"
+            "bypass path valid-ratio, confidence, and temporal smoothing "
+            "restrictions; live inference still obeys --inference-hz"
         ),
     )
     parser.add_argument(
@@ -1559,8 +1565,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.path_mask_class not in PATH_MASK_CLASSES:
         parser.error("SWIN_L_PATH_MASK_CLASS must be 1 (road) or 2 (sidewalk)")
-    if args.inference_hz <= 0.0 or args.output_fps <= 0.0:
-        parser.error("inference/output FPS must be positive")
+    if not all(
+        math.isfinite(rate) and rate > 0.0
+        for rate in (args.inference_hz, args.output_fps)
+    ):
+        parser.error("inference/output FPS must be finite and positive")
     if args.mode in ("ros2", "task-drive") and args.output_hz <= 0.0:
         parser.error("output-hz must be positive")
     if args.mode == "mcap" and (args.start_offset < 0.0 or args.max_frames < 0):

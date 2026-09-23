@@ -271,3 +271,34 @@ def test_swin_l_fp32_rollback_scores_stay_float32_on_cpu():
 
     assert actual.dtype == torch.float32
     assert actual.device.type == "cpu"
+
+
+def test_temporal_history_does_not_retain_hybrid_decoder_graphs():
+    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter.backend = "tensorrt"
+    segmenter.device = torch.device("cpu")
+    segmenter.temporal_alpha = 0.62
+    segmenter.temporal_hysteresis_margin = 0.07
+    segmenter._previous_scores = None
+    segmenter._previous_selected = None
+    segmenter.road_ids = [1]
+    segmenter.sidewalk_ids = [2]
+    segmenter.pedestrian_area_road_expansion = 0
+    segmenter.maximum_road_island_area = 0
+    parameter = torch.nn.Parameter(torch.zeros((3, 12, 12)))
+    modes = []
+
+    def scores(_frame):
+        modes.append(torch.is_inference_mode_enabled())
+        return parameter + len(modes)
+
+    segmenter._semantic_scores = scores
+    expected = None
+    for index in range(1, 65):
+        segmenter.segment(np.zeros((12, 12, 3), dtype=np.uint8))
+        expected = index if expected is None else 0.62 * index + 0.38 * expected
+        history = segmenter._previous_scores
+        assert history.grad_fn is None
+        assert not history.requires_grad
+        assert torch.allclose(history, torch.full_like(history, expected))
+    assert all(modes)

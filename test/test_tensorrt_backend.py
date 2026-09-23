@@ -7,9 +7,10 @@ import pytest
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
 
-from tensorrt_backend import (
+from tensorrt_backend import (  # noqa: E402
     ENGINE_MANIFEST_SCHEMA_VERSION,
     HYBRID_ARTIFACT_FORMAT,
+    TensorRTSemanticBackend,
     _LoadedStageProxy,
     load_engine_manifest,
     normalize_cuda_device,
@@ -159,3 +160,40 @@ def test_loaded_stage_proxy_restores_unused_attention_output():
     assert torch.equal(output[0], torch.full((1, 2), 2.0))
     assert torch.equal(output[1], torch.full((1, 2), 3.0))
     assert output[2] is None
+
+
+def test_direct_hybrid_calls_disable_autograd_in_the_calling_thread():
+    import threading
+    import torch
+
+    class Decoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones((), dtype=torch.float16))
+
+        def forward(self, inputs):
+            return inputs[0] * self.weight
+
+    backend = object.__new__(TensorRTSemanticBackend)
+    backend.device = torch.device("cpu")
+    backend.input_shape = (1, 3, 4, 6)
+    backend.output_shape = (3, 4, 6)
+    backend._module = Decoder().eval()
+    outputs = []
+
+    def infer():
+        # New threads enable gradients even when startup used inference_mode.
+        assert torch.is_grad_enabled()
+        outputs.append(
+            backend.semantic_scores(
+                torch.ones(backend.input_shape, dtype=torch.float16)
+            )
+        )
+
+    thread = threading.Thread(target=infer)
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert len(outputs) == 1
+    assert outputs[0].grad_fn is None
+    assert not outputs[0].requires_grad

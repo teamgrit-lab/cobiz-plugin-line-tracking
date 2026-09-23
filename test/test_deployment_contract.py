@@ -165,21 +165,19 @@ def test_tensorrt_engine_build_services_use_target_gpu_and_artifact_mounts():
     assert build["runtime"] == "nvidia"
     assert "prepare_swin_l_checkpoint.py" in prepare["entrypoint"][1]
     assert "build_swin_l_tensorrt.py" in build["entrypoint"][1]
-    assert "torch_tensorrt" in (
-        ROOT / "tools" / "build_swin_l_tensorrt.py"
-    ).read_text()
+    assert "torch_tensorrt" in (ROOT / "tools" / "build_swin_l_tensorrt.py").read_text()
     assert any(mount.endswith(":/models/checkpoint:ro") for mount in build["volumes"])
     assert any(mount.endswith(":/models/output") for mount in build["volumes"])
 
 
-def test_actual_activate_builds_missing_tensorrt_artifacts_on_startup():
+def test_actual_activate_requires_opt_in_for_startup_engine_builds():
     import yaml
 
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     listener = services["actual-activate"]
     entrypoint = (ROOT / "docker" / "swin_l_debug_entrypoint.sh").read_text()
 
-    assert listener["environment"]["SWIN_L_TRT_AUTO_BUILD"].endswith(":-true}")
+    assert listener["environment"]["SWIN_L_TRT_AUTO_BUILD"].endswith(":-false}")
     assert listener["environment"]["SWIN_L_TRT_CHECKPOINT"].endswith(
         ":-/models/checkpoint}"
     )
@@ -200,6 +198,17 @@ def test_live_services_forward_unrestricted_path_mode_switch():
             ":-true}"
         )
     assert "SWIN_L_UNRESTRICTED_PATH_MODE=true" in (ROOT / ".env.example").read_text()
+
+
+def test_live_services_forward_rate_and_cpu_thread_budgets():
+    import yaml
+
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    for name in ("debugging-swin-l", "actual-activate"):
+        environment = services[name]["environment"]
+        assert "SWIN_L_INFERENCE_HZ" in environment
+        for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+            assert environment[variable] == "${" + variable + ":-2}"
 
 
 def test_jetson_image_builds_and_sources_unitree_request_interface():

@@ -169,6 +169,51 @@ never falls back automatically in `task-drive` mode. Set
 `SWIN_L_BACKEND=pytorch` explicitly to use the retained FP16 PyTorch rollback;
 `SWIN_L_ALLOW_BACKEND_FALLBACK=true` is allowed only for debug/offline use.
 
+## Jetson inference stability
+
+Live inference always obeys `SWIN_L_INFERENCE_HZ`, including when
+`SWIN_L_UNRESTRICTED_PATH_MODE=true`. The latest-frame queue holds one frame;
+it replaces pending frames while waiting for the next inference start. A late
+inference does not trigger a burst of catch-up jobs. Rate limiting reduces
+average load, but cannot guarantee latency or cap instantaneous GPU power.
+
+The hybrid backend and the complete segmentation/temporal pipeline run in
+`torch.inference_mode()` in the calling worker thread. This prevents the
+PyTorch decoder's autograd graph from being retained across frames by the
+temporal score average. `model.eval()` alone does not disable autograd.
+See the [PyTorch autograd documentation](https://docs.pytorch.org/docs/stable/notes/autograd).
+
+Compose defaults the OpenMP, MKL, and OpenBLAS thread pools to two threads.
+Engine auto-build is disabled by default (`SWIN_L_TRT_AUTO_BUILD=false`);
+prepare artifacts with the engine services during maintenance, with live
+inference stopped. Existing `.env` values still override these defaults.
+Run only one live Swin-L model at a time on the Jetson.
+
+For an **inference-only** 1 Hz acceptance run, use debug mode with
+`SWIN_L_INFERENCE_HZ=1.25` to leave scheduling margin. Warm up first, then
+measure for at least five minutes under the normal camera and service load:
+
+- `/line_tracking/swin_l/metrics`: `performance.completion_fps >= 1.0`,
+  `completion_gap_max_ms <= 1000`, and processing p95/p99 latency. These are
+  rolling-window metrics; record the entire run to detect intermittent stalls.
+- `tegrastats`: total RAM, swap activity, GPU load, temperature, and `VDD_IN`.
+  `cuda_memory` in the metrics covers only the PyTorch allocator, not all
+  TensorRT allocations or host memory. Memory should plateau after warm-up.
+- Kernel OOM logs, container restart count, and `oc*_event_cnt`: no increases
+  during the run. A five-minute pass is a smoke test, not a long-term guarantee.
+
+The task-driving path watchdog still expires at **0.45 seconds**. A 1 Hz
+inference rate therefore causes intermittent stops even if inference is
+stable. The live default remains 4 Hz; continuous driving requires measured
+path-update gaps below 0.45 seconds. Do not extend this watchdog just to hide
+slow inference without reviewing speed, stopping distance, and perception age.
+
+If an over-current warning appears, inspect the board's actual power modes
+with `nvpmodel -q` and `/etc/nvpmodel.conf`, then validate a supported power
+budget with the carrier board and supply. Do not disable hardware throttling
+or assume that a lower inference frequency alone prevents current spikes.
+See [NVIDIA's power and throttling documentation](https://docs.nvidia.com/jetson/archives/r36.5/DeveloperGuide/SD/PlatformPowerAndPerformance/JetsonOrinNanoSeriesJetsonOrinNxSeriesAndJetsonAgxOrinSeries.html).
+
 ## Offline camera overlay
 
 Convert an MCAP camera topic to MP4 without ROS 2:
@@ -198,6 +243,6 @@ live robot operation.
 ## Verification
 
 ```bash
-python -m pytest -q
+python -m pytest -q test/
 docker compose config --quiet
 ```

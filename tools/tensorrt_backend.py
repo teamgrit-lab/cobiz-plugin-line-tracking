@@ -396,6 +396,7 @@ class TensorRTSemanticBackend:
             raise
         self._artifact_directory = artifact_directory
 
+    @torch.inference_mode()
     def semantic_scores(self, pixel_values: torch.Tensor) -> torch.Tensor:
         if pixel_values.device != self.device:
             raise ValueError("TensorRT input is on the wrong device")

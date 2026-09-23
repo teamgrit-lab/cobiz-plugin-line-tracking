@@ -506,7 +506,11 @@ class BestSoFarSegmenter:
         expanded[(class_map == self.pedestrian_area_id) & road_neighborhood] = 1
         return expanded
 
+    @torch.inference_mode()
     def segment(self, frame_bgr: np.ndarray) -> BestSoFarResult:
+        # This guard must run in the calling worker thread. eval() alone does
+        # not disable autograd in the hybrid model's PyTorch decoders, and the
+        # temporal EMA would otherwise retain every previous frame's graph.
         if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
             raise ValueError("frame_bgr must be an HxWx3 BGR image")
 
@@ -524,7 +528,7 @@ class BestSoFarSegmenter:
                 self.temporal_alpha * scores
                 + (1.0 - self.temporal_alpha) * self._previous_scores
             )
-        self._previous_scores = smooth_scores
+        self._previous_scores = smooth_scores.detach()
 
         smooth_map = smooth_scores.argmax(dim=0).detach().cpu().numpy()
         minimum_area = max(48, int(smooth_map.size * 0.00035))

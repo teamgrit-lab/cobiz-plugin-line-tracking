@@ -3,7 +3,10 @@
 from pathlib import Path
 import json
 import sys
+import threading
 from types import ModuleType, SimpleNamespace
+
+import pytest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -25,6 +28,14 @@ def test_performance_summary_reports_latency_percentiles_and_completion_rate():
     assert summary["processing_mean_ms"] == 275.0
     assert summary["processing_capacity_fps"] == 1.0 / 0.275
     assert summary["completion_fps"] == 4.0
+    assert summary["completion_gap_max_ms"] == 250.0
+    assert summary["processing_p99_ms"] == pytest.approx(348.5)
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "0", "-1"])
+def test_live_inference_rejects_invalid_rate(value):
+    with pytest.raises(SystemExit):
+        debug.parse_args(["ros2", "--inference-hz", value])
 
 
 def test_task_drive_defaults(monkeypatch):
@@ -62,8 +73,10 @@ def test_task_drive_apriltag_environment_and_cli(monkeypatch):
     assert args.apriltag_confirm_min_hits == 5
 
 
-def test_debug_mode_creates_only_camera_subscription_and_path_metrics_publishers(
+@pytest.mark.parametrize("unrestricted", [True, False])
+def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
     monkeypatch,
+    unrestricted,
 ):
     published_topics = []
     subscribed_topics = []
@@ -95,8 +108,29 @@ def test_debug_mode_creates_only_camera_subscription_and_path_metrics_publishers
 
     rclpy = ModuleType("rclpy")
     rclpy.init = lambda **_kwargs: None
-    rclpy.ok = lambda: False
-    rclpy.spin = lambda node: node._publish_state()
+    deadlines = []
+    worker_finished = threading.Event()
+
+    class Queue:
+        overwritten = 0
+
+        def get_latest_at(self, deadline):
+            deadlines.append(deadline)
+            if len(deadlines) == 1:
+                return debug.FramePacket(debug.np.zeros((12, 12, 3)), 1)
+            worker_finished.set()
+            return None
+
+        def close(self):
+            pass
+
+    def spin(node):
+        assert worker_finished.wait(timeout=5)
+        node._publish_state()
+
+    monkeypatch.setattr(debug, "LatestFrameQueue", Queue)
+    rclpy.ok = lambda: True
+    rclpy.spin = spin
     rclpy.shutdown = lambda: None
     node_module = ModuleType("rclpy.node")
     node_module.Node = FakeNode
@@ -127,13 +161,30 @@ def test_debug_mode_creates_only_camera_subscription_and_path_metrics_publishers
     monkeypatch.setattr(
         debug,
         "BestSoFarSegmenter",
-        lambda _config: SimpleNamespace(device=debug.torch.device("cpu")),
+        lambda _config: SimpleNamespace(
+            device=debug.torch.device("cpu"),
+            segment=lambda _frame: SimpleNamespace(
+                selected_mask=debug.np.zeros((12, 12), dtype=debug.np.uint8),
+                inference_seconds=0.01,
+            ),
+        ),
     )
 
-    args = debug.parse_args(["ros2"])
+    args = debug.parse_args(
+        [
+            "ros2",
+            "--inference-hz",
+            "1.25",
+            "--unrestricted-path-mode"
+            if unrestricted
+            else "--no-unrestricted-path-mode",
+        ]
+    )
     assert not hasattr(args, "overlay_topic")
     assert not hasattr(args, "clearance_topic")
     assert debug.run_ros2(args) == 0
+    assert len(deadlines) == 2
+    assert deadlines[1] - deadlines[0] >= 0.8
     assert published_topics == [
         args.local_path_topic,
         args.metrics_topic,

@@ -195,9 +195,9 @@ def test_live_services_forward_unrestricted_path_mode_switch():
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("debugging-swin-l", "actual-activate"):
         assert services[name]["environment"]["SWIN_L_UNRESTRICTED_PATH_MODE"].endswith(
-            ":-false}"
+            ":-true}"
         )
-    assert "SWIN_L_UNRESTRICTED_PATH_MODE=false" in (ROOT / ".env.example").read_text()
+    assert "SWIN_L_UNRESTRICTED_PATH_MODE=true" in (ROOT / ".env.example").read_text()
 
 
 def test_jetson_image_builds_and_sources_unitree_request_interface():

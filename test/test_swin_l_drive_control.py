@@ -79,6 +79,14 @@ def test_unrestricted_path_mode_disables_confidence_gate(monkeypatch):
     assert _decide(_path(confidence=0.01), config=config).reason == "tracking"
 
 
+def test_unrestricted_path_mode_is_enabled_by_default(monkeypatch):
+    monkeypatch.delitem(debug.ENV, "SWIN_L_UNRESTRICTED_PATH_MODE", raising=False)
+
+    args = debug.parse_args(["task-drive"])
+
+    assert args.unrestricted_path_mode is True
+
+
 @pytest.mark.parametrize(
     "override,reason",
     [

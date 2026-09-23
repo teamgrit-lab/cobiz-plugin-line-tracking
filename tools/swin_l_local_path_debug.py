@@ -1504,7 +1504,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--unrestricted-path-mode",
         action=argparse.BooleanOptionalAction,
-        default=_env_bool("SWIN_L_UNRESTRICTED_PATH_MODE", False),
+        default=_env_bool("SWIN_L_UNRESTRICTED_PATH_MODE", True),
         help=(
             "process the freshest frame without rate limiting and bypass path "
             "valid-ratio, confidence, and temporal smoothing restrictions"

@@ -495,16 +495,7 @@ def test_server_abort_and_sigterm_use_ordered_hard_stop(ros, source):
     ros.run(scenario)
 
 
-def test_tag_metrics_and_overlay_report_verification_and_confirmation(ros, monkeypatch):
-    texts = []
-    put_text = debug.cv2.putText
-
-    def capture_text(frame, text, *args, **kwargs):
-        texts.append(text)
-        return put_text(frame, text, *args, **kwargs)
-
-    monkeypatch.setattr(debug.cv2, "putText", capture_text)
-
+def test_tag_metrics_report_verification_and_confirmation(ros):
     def scenario(node):
         node.publish_state()
         assert ros.metrics()["apriltag"] == {
@@ -531,12 +522,7 @@ def test_tag_metrics_and_overlay_report_verification_and_confirmation(ros, monke
             "confirmed_id": None,
             "window_elapsed_sec": 0.1,
         }
-        assert "APRILTAG VERIFY 2/3" in texts
-        assert ros.published["/line_tracking/swin_l/overlay"][-1].frame.shape == (
-            360,
-            640,
-            3,
-        )
+        assert "/line_tracking/swin_l/overlay" not in ros.published
         ros.now = 0.2
         ros.detect(tag_id=7, frame=3)
         ros.now = 1.0
@@ -544,24 +530,12 @@ def test_tag_metrics_and_overlay_report_verification_and_confirmation(ros, monke
         assert ros.metrics()["apriltag"]["state"] == "confirmed"
         assert ros.metrics()["apriltag"]["confirmed_id"] == 7
         assert ros.metrics()["apriltag"]["message_age_sec"] == pytest.approx(0.8)
-        assert "APRILTAG CONFIRMED ID 7" in texts
         assert "lidar" not in ros.metrics()
 
     ros.run(scenario)
 
 
-def test_callback_confirmation_display_survives_detections_until_publisher_release(
-    ros, monkeypatch
-):
-    texts = []
-    put_text = debug.cv2.putText
-
-    def capture_text(frame, text, *args, **kwargs):
-        texts.append(text)
-        return put_text(frame, text, *args, **kwargs)
-
-    monkeypatch.setattr(debug.cv2, "putText", capture_text)
-
+def test_callback_confirmation_state_survives_detections_until_publisher_release(ros):
     def scenario(node):
         ros.start()
         for frame, stamp in enumerate((0.0, 0.1, 0.2), start=1):
@@ -583,22 +557,18 @@ def test_callback_confirmation_display_survives_detections_until_publisher_relea
         assert ros.metrics()["apriltag"]["confirmed_id"] == 7
         assert ros.metrics()["apriltag"]["message_age_sec"] == pytest.approx(0.02)
         assert ros.metrics()["apriltag"]["stream_ready"] is True
-        assert "APRILTAG CONFIRMED ID 7" in texts
         ros.now = 1.99
         ros.detect(frame=6)
-        texts.clear()
         node.publish_state()
         assert node.command_publisher is not None
         assert ros.metrics()["apriltag"]["state"] == "confirmed"
-        assert "APRILTAG CONFIRMED ID 7" in texts
         ros.now = 2.0
-        texts.clear()
         node.publish_state()
         assert node.command_publisher is None
         assert ros.metrics()["apriltag"]["state"] == "no_tag"
         assert ros.metrics()["apriltag"]["confirmed_id"] is None
-        assert "APRILTAG CONFIRMED ID 7" not in texts
-        assert "task_idle" in texts
+        assert ros.metrics()["drive_reason"] == "task_idle"
+        assert "/line_tracking/swin_l/overlay" not in ros.published
         assert len(ros.published["/task_state"]) == 2
         assert all(
             message.header.identity.api_id == 1008
@@ -920,25 +890,14 @@ def test_abort_report_failure_cannot_keep_a_task_active(ros):
 
 
 @pytest.mark.parametrize("source", ["expired", "server"])
-def test_verification_display_clears_without_refreshing_heartbeat(
-    ros, monkeypatch, source
-):
-    texts = []
-    original_put_text = debug.cv2.putText
-
-    def capture_text(frame, text, *args, **kwargs):
-        texts.append(text)
-        return original_put_text(frame, text, *args, **kwargs)
-
-    monkeypatch.setattr(debug.cv2, "putText", capture_text)
-
+def test_verification_state_clears_without_refreshing_heartbeat(ros, source):
     def scenario(node):
         ros.establish_tracking()
         ros.now = 2.2
         ros.detect(tag_id=7)
         node.publish_state()
-        assert any("APRILTAG VERIFY" in text for text in texts)
-        texts.clear()
+        assert ros.metrics()["apriltag"]["state"] == "verifying"
+        assert ros.metrics()["drive_reason"] == "apriltag_verifying"
         ros.now = 3.21 if source == "server" else 4.2
         if source == "server":
             ros.subscriptions["/task_event"](
@@ -958,6 +917,6 @@ def test_verification_display_clears_without_refreshing_heartbeat(
             2.0 if source == "expired" else 1.01
         )
         assert ros.metrics()["apriltag"]["stream_ready"] is False
-        assert not any("APRILTAG VERIFY" in text for text in texts)
+        assert "/line_tracking/swin_l/overlay" not in ros.published
 
     ros.run(scenario, "--apriltag-confirm-window-sec", "2.0")

@@ -97,12 +97,14 @@ def test_task_control_ignores_external_publisher_count(
         camera.header.stamp = SimpleNamespace(sec=100, nanosec=0)
         node.on_image(camera)
         deadline = time.monotonic() + 2.0
-        while not published["/line_tracking/swin_l/overlay"]:
+        while True:
             node._publish_state()
-            assert time.monotonic() < deadline, "inference did not publish an overlay"
+            metrics = published.get("/line_tracking/swin_l/metrics", [])
+            if metrics and json.loads(metrics[-1].data)["inference_count"] > 0:
+                break
+            assert time.monotonic() < deadline, "inference did not publish metrics"
             time.sleep(0.001)
-        overlay = published["/line_tracking/swin_l/overlay"][-1]
-        assert overlay.frame.shape == (360, 640, 3)
+        assert "/line_tracking/swin_l/overlay" not in published
         checked_classes = []
 
         def readiness(mask_class, _now):

@@ -67,6 +67,7 @@ def test_default_compose_is_cobiz_task_listener():
     assert listener["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384-fp16"
     assert listener["environment"]["SWIN_L_BACKEND"].endswith(":-tensorrt}")
     assert listener["environment"]["SWIN_L_ALLOW_BACKEND_FALLBACK"] == "false"
+    assert "SWIN_L_OVERLAY_TOPIC" not in listener["environment"]
     assert listener["environment"]["SWIN_L_TRT_ENGINE"].endswith(
         ":-/models/swin-l-224x384-fp16.plan}"
     )
@@ -94,6 +95,7 @@ def test_default_compose_is_cobiz_task_listener():
         "LINE_TRACKING_DEFAULT_DURATION_SEC=500" in (ROOT / ".env.example").read_text()
     )
     assert "LINE_TRACKING_MAX_DURATION_SEC=1000" in (ROOT / ".env.example").read_text()
+    assert "SWIN_L_OVERLAY_TOPIC" not in (ROOT / ".env.example").read_text()
 
 
 def test_active_deployment_has_no_manual_arm_or_lidar_contract():

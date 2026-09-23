@@ -140,7 +140,7 @@ def test_debug_mode_creates_only_camera_subscription_and_path_metrics_publishers
     ]
 
     task_args = debug.parse_args(["task-drive"])
-    assert task_args.overlay_topic
+    assert not hasattr(task_args, "overlay_topic")
     assert not hasattr(task_args, "safety_topic")
     assert not hasattr(task_args, "clearance_topic")
     assert subscribed_topics == [args.image_topic]

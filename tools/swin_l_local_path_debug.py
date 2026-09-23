@@ -82,7 +82,6 @@ from unitree_sport_api import (
 )
 
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
-DEFAULT_OVERLAY_TOPIC = "/line_tracking/swin_l/overlay"
 DEFAULT_LOCAL_PATH_TOPIC = "/line_tracking/swin_l/local_path"
 DEFAULT_METRICS_TOPIC = "/line_tracking/swin_l/metrics"
 PATH_MASK_CLASSES = {1: "ROAD", 2: "SIDEWALK"}
@@ -734,8 +733,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "task-drive mode requires the sourced unitree_api and apriltag_msgs "
                 "ROS interfaces"
             ) from error
-    # Inspection mode keeps only lightweight path and metrics outputs.
-    extended_diagnostics = task_mode
     if task_mode:
         _validate_task_drive_preflight(args)
     local_config = _local_path_config_from_args(args)
@@ -749,13 +746,9 @@ def run_ros2(args: argparse.Namespace) -> int:
     latest = LatestFrameQueue()
     state_lock = threading.Lock()
     state: dict[str, Any] = {
-        "frame": None,
-        "selected_mask": None,
-        "estimates": {},
         "header": None,
         "sequence": 0,
         "inference_count": 0,
-        "inference_times": deque(maxlen=32),
         "performance_inference_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_processing_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_completion_times": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
@@ -835,11 +828,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 __import__("nav_msgs.msg", fromlist=["Path"]).Path,
                 args.local_path_topic,
                 output_qos,
-            )
-            self.overlay_publisher = (
-                self.create_publisher(Image, args.overlay_topic, input_qos)
-                if extended_diagnostics
-                else None
             )
             self.metrics_publisher = self.create_publisher(
                 String, args.metrics_topic, output_qos
@@ -1142,25 +1130,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             task_active = self.tasks.active if self.tasks is not None else None
             mask_class = active_path_mask_class(task_active, args.path_mask_class)
             with state_lock:
-                frame = (
-                    state["frame"].copy()
-                    if extended_diagnostics and state["frame"] is not None
-                    else None
-                )
-                selected = (
-                    state["selected_mask"].copy()
-                    if extended_diagnostics and state["selected_mask"] is not None
-                    else None
-                )
-                estimate = (
-                    state["estimates"].get(mask_class) if extended_diagnostics else None
-                )
                 header = state["header"]
-                sequence = int(state["sequence"]) if extended_diagnostics else 0
                 inference_count = int(state["inference_count"])
-                inference_times = (
-                    list(state["inference_times"]) if extended_diagnostics else []
-                )
                 performance = summarize_performance(
                     list(state["performance_inference_seconds"]),
                     list(state["performance_processing_seconds"]),
@@ -1262,34 +1233,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             path_message = _path_message(path, header, args.path_frame_id)
             self.path_publisher.publish(path_message)
-            if self.overlay_publisher is None or frame is None or selected is None:
-                return
-            mean_total = float(np.mean(inference_times)) if inference_times else 0.0
-            inference_hz = 1.0 / mean_total if mean_total > 0.0 else 0.0
-            status_text = drive_decision.reason if drive_decision else None
-            if tag_status is not None:
-                if tag_status.state == "verifying":
-                    hits = max((count for _, count in tag_status.hit_counts), default=0)
-                    status_text = (
-                        f"APRILTAG VERIFY {hits}/{self.apriltags.policy.min_hits}"
-                    )
-                elif tag_status.state == "confirmed":
-                    status_text = f"APRILTAG CONFIRMED ID {tag_status.confirmed_id}"
-            overlay = render_local_path_overlay(
-                frame,
-                selected,
-                estimate,
-                path,
-                local_config,
-                frame_index=sequence,
-                inference_count=inference_count,
-                inference_hz=inference_hz,
-                path_mask_class=mask_class,
-                status_text=status_text,
-            )
-            overlay_message = self.bridge.cv2_to_imgmsg(overlay, encoding="bgr8")
-            overlay_message.header = header
-            self.overlay_publisher.publish(overlay_message)
 
     rclpy.init(args=[])
     node = DebugNode()
@@ -1317,13 +1260,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                 if packet is None:
                     break
                 inference_started_at = time.monotonic()
-                started = time.perf_counter() if extended_diagnostics else 0.0
                 result: BestSoFarResult = segmenter.segment(packet.frame_bgr)
                 # The path becomes usable when this result is available. Using
                 # the camera-arrival timestamp here can expire a path before it
                 # is ever published when inference or rate limiting is slow.
                 path_updated_at = time.monotonic()
-                estimates = update_path_smoothers(
+                update_path_smoothers(
                     result.selected_mask,
                     smoothers,
                     local_config,
@@ -1331,11 +1273,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 )
                 inference_finished_at = time.monotonic()
                 with state_lock:
-                    if extended_diagnostics:
-                        state["frame"] = packet.frame_bgr
-                        state["selected_mask"] = result.selected_mask
-                        state["estimates"] = estimates
-                        state["inference_times"].append(time.perf_counter() - started)
                     state["header"] = packet.source_header
                     completed_before = int(state["inference_count"])
                     state["inference_count"] += 1
@@ -1547,11 +1484,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     ):
         live = subparsers.add_parser(mode, help=help_text)
         _add_common_arguments(live)
-        if mode != "ros2":
-            live.add_argument(
-                "--overlay-topic",
-                default=_env("SWIN_L_OVERLAY_TOPIC", DEFAULT_OVERLAY_TOPIC),
-            )
         live.add_argument(
             "--local-path-topic",
             default=_env("SWIN_L_LOCAL_PATH_TOPIC", DEFAULT_LOCAL_PATH_TOPIC),

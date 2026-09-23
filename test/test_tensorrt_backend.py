@@ -10,6 +10,7 @@ sys.path.insert(0, str(TOOLS))
 from tensorrt_backend import (
     ENGINE_MANIFEST_SCHEMA_VERSION,
     HYBRID_ARTIFACT_FORMAT,
+    _LoadedStageProxy,
     load_engine_manifest,
     normalize_cuda_device,
     sha256_file,
@@ -131,3 +132,24 @@ def test_indexless_cuda_device_is_normalized(monkeypatch):
 
     assert normalize_cuda_device(torch.device("cuda")) == torch.device("cuda:2")
     assert normalize_cuda_device(torch.device("cuda:1")) == torch.device("cuda:1")
+
+
+def test_loaded_stage_proxy_restores_unused_attention_output():
+    import torch
+
+    class SerializedStage(torch.nn.Module):
+        def forward(self, hidden):
+            return hidden + 1.0, hidden + 2.0
+
+    proxy = _LoadedStageProxy(
+        SerializedStage(),
+        tensor_input_count=1,
+        has_downsample=False,
+    )
+    hidden = torch.ones(1, 2)
+
+    output = proxy(hidden, (7, 11), False)
+
+    assert torch.equal(output[0], torch.full((1, 2), 2.0))
+    assert torch.equal(output[1], torch.full((1, 2), 3.0))
+    assert output[2] is None

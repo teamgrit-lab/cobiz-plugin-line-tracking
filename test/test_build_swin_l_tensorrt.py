@@ -54,7 +54,8 @@ def test_hybrid_stage_adapter_keeps_non_tensor_shape_arguments_in_pytorch():
         def forward(self, hidden, dimensions, head_mask=None, output_attentions=False):
             assert head_mask is None
             assert output_attentions is False
-            return hidden + dimensions[0]
+            adjusted = hidden + dimensions[0]
+            return adjusted, adjusted + 1.0, None
 
     hidden = torch.ones(1, 2)
     captured_args = (hidden, (7, 11), None, False)
@@ -66,8 +67,16 @@ def test_hybrid_stage_adapter_keeps_non_tensor_shape_arguments_in_pytorch():
         partition_count=2,
     )
 
-    assert torch.equal(fixed(hidden), torch.full((1, 2), 8.0))
-    assert torch.equal(proxy(*captured_args), torch.full((1, 2), 8.0))
+    fixed_output = fixed(hidden)
+    assert len(fixed_output) == 2
+    assert torch.equal(fixed_output[0], torch.full((1, 2), 8.0))
+    assert torch.equal(fixed_output[1], torch.full((1, 2), 9.0))
+
+    proxy_output = proxy(*captured_args)
+    assert len(proxy_output) == 3
+    assert torch.equal(proxy_output[0], torch.full((1, 2), 8.0))
+    assert torch.equal(proxy_output[1], torch.full((1, 2), 9.0))
+    assert proxy_output[2] is None
     assert proxy.downsample is not None
 
 

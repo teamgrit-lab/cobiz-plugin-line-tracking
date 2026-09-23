@@ -12,7 +12,7 @@ from typing import Any
 from zipfile import BadZipFile, ZipFile
 
 import torch
-from swin_l_tensorrt_model import SwinLSemanticScores
+from swin_l_tensorrt_model import SwinLSemanticScores, restore_swin_stage_outputs
 
 ENGINE_MANIFEST_SCHEMA_VERSION = 3
 HYBRID_ARTIFACT_FORMAT = "torch_tensorrt_stage_bundle"
@@ -171,7 +171,7 @@ class _LoadedStageProxy(torch.nn.Module):
         tensor_inputs = tuple(value for value in flat if isinstance(value, torch.Tensor))
         if len(tensor_inputs) != self.tensor_input_count:
             raise ValueError("Swin stage call no longer matches its TensorRT profile")
-        return self.compiled(*tensor_inputs)
+        return restore_swin_stage_outputs(self.compiled(*tensor_inputs))
 
 
 def _swin_stages(model: torch.nn.Module) -> torch.nn.ModuleList:

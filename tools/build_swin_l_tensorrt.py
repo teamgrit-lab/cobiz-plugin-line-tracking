@@ -19,7 +19,11 @@ from best_so_far_runtime import (
     SWIN_L_ASPECT_FP16_PROFILE,
     resolve_profile,
 )
-from swin_l_tensorrt_model import SwinLSemanticScores
+from swin_l_tensorrt_model import (
+    SwinLSemanticScores,
+    restore_swin_stage_outputs,
+    tensor_only_swin_stage_outputs,
+)
 from tensorrt_backend import (
     ENGINE_MANIFEST_SCHEMA_VERSION,
     HYBRID_ARTIFACT_FORMAT,
@@ -245,7 +249,7 @@ class _FixedStageCall(torch.nn.Module):
         for position, tensor in zip(self._tensor_positions, tensor_inputs):
             flat[position] = tensor
         args, kwargs = tree_unflatten(flat, self._spec)
-        return self.stage(*args, **kwargs)
+        return tensor_only_swin_stage_outputs(self.stage(*args, **kwargs))
 
 
 class _CompiledStageProxy(torch.nn.Module):
@@ -276,7 +280,7 @@ class _CompiledStageProxy(torch.nn.Module):
         tensor_inputs = tuple(value for value in flat if isinstance(value, torch.Tensor))
         if len(tensor_inputs) != self.tensor_input_count:
             raise ValueError("Swin stage call no longer matches its compiled profile")
-        return self.compiled(*tensor_inputs)
+        return restore_swin_stage_outputs(self.compiled(*tensor_inputs))
 
 
 def _swin_stages(model: torch.nn.Module) -> torch.nn.ModuleList:

@@ -1,4 +1,6 @@
+import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -91,10 +93,9 @@ def test_unrestricted_path_mode_is_enabled_by_default(monkeypatch):
     "override,reason",
     [
         ({"camera_age_sec": None}, "camera_stale"),
-        ({"camera_age_sec": 0.6}, "camera_stale"),
-        ({"inference_age_sec": 0.6}, "inference_stale"),
-        ({"path": _path(age=0.6)}, "path_stale"),
-        ({"path": _path(confidence=0.49)}, "path_low_confidence"),
+        ({"camera_age_sec": 5.1}, "camera_stale"),
+        ({"inference_age_sec": 5.1}, "inference_stale"),
+        ({"path": _path(confidence=0.48)}, "path_low_confidence"),
         ({"path": _path(lateral=1.0)}, "path_lateral_target_large"),
     ],
 )
@@ -104,7 +105,7 @@ def test_unsafe_inputs_return_zero_velocity(override, reason):
     assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
 
 
-def test_missing_or_malformed_path_stops():
+def test_missing_path_stops():
     assert (
         decide_drive(
             None,
@@ -114,13 +115,72 @@ def test_missing_or_malformed_path_stops():
         ).reason
         == "path_unavailable"
     )
-    malformed = SmoothedPath(
-        points_xy=np.asarray([[4.0, 0.0], [3.0, 0.0]], np.float32),
-        confidence=0.9,
-        age_sec=0.0,
-        source="test",
-    )
-    assert _decide(malformed).reason == "path_geometry_invalid"
+
+
+@pytest.mark.parametrize("age", [0.46, 2.0 / 3.0, 1.0, 5.0, float("nan")])
+def test_path_age_alone_does_not_interrupt_tracking(age):
+    command = _decide(_path(age=age))
+
+    assert command == _decide(_path(age=0.0))
+    assert command.reason == "tracking"
+
+
+@pytest.mark.parametrize("source", ["camera", "inference"])
+def test_old_path_still_obeys_sensor_freshness(source):
+    command = _decide(_path(age=6.0), **{f"{source}_age_sec": 5.1})
+
+    assert command.reason == f"{source}_stale"
+    assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    "points,lateral",
+    [
+        ([[5.0, 0.6], [3.0, 0.2]], 0.4),
+        ([[3.0, 0.2], [3.0, -0.2], [5.0, 0.6]], 0.4),
+        ([[3.0, 0.2], [3.5, 0.4]], 0.4),
+        ([[5.0, -0.2], [8.0, -0.4]], -0.2),
+        ([[3.0, 0.2]], 0.2),
+        ([[-1.0, 0.1], [3.0, 0.3]], 0.3),
+        (
+            [[3.0, 0.2], [float("nan"), 0.7], [4.0, float("inf")], [5.0, 0.6]],
+            0.4,
+        ),
+    ],
+)
+def test_partial_or_unordered_paths_use_available_numeric_points(points, lateral):
+    path = replace(_path(), points_xy=np.asarray(points, dtype=np.float64))
+
+    command = _decide(path)
+
+    assert command.reason == "tracking"
+    assert command.vx == pytest.approx(0.5)
+    assert command.yaw_rate == pytest.approx(math.atan2(lateral, 4.0))
+
+
+@pytest.mark.parametrize(
+    "points",
+    [
+        [],
+        [3.0, 0.2, 4.0],
+        [[3.0, float("nan")], [float("inf"), 0.0]],
+        [["bad", 0.2]],
+    ],
+)
+def test_path_without_numeric_xy_points_is_unavailable(points):
+    command = _decide(replace(_path(), points_xy=np.asarray(points)))
+
+    assert command.reason == "path_unavailable"
+    assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
+
+
+def test_endpoint_fallback_still_obeys_lateral_target_limit():
+    path = replace(_path(), points_xy=np.asarray([[3.0, 0.8]], dtype=np.float64))
+
+    command = _decide(path)
+
+    assert command.reason == "path_lateral_target_large"
+    assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
 
 
 def test_task_drive_preflight_requires_pinned_model():

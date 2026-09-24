@@ -27,7 +27,6 @@ class DriveConfig:
     max_lateral_target_m: float = 0.75
     max_camera_age_sec: float = 5.00
     max_inference_age_sec: float = 5.00
-    max_path_age_sec: float = 0.45
 
     def validate(self) -> None:
         positive = (
@@ -38,7 +37,6 @@ class DriveConfig:
             self.max_lateral_target_m,
             self.max_camera_age_sec,
             self.max_inference_age_sec,
-            self.max_path_age_sec,
         )
         if not all(math.isfinite(value) and value > 0.0 for value in positive):
             raise ValueError("drive limits must be finite and positive")
@@ -67,7 +65,7 @@ def decide_drive(
     inference_age_sec: float | None,
     config: DriveConfig,
 ) -> DriveDecision:
-    """Only permit low-speed motion with fresh camera/path inputs."""
+    """Track the available path while camera and inference inputs remain fresh."""
 
     config.validate()
     for name, age, maximum in (
@@ -78,27 +76,11 @@ def decide_drive(
             return DriveDecision.stop(f"{name}_stale")
     if path is None:
         return DriveDecision.stop("path_unavailable")
-    if (
-        not math.isfinite(path.age_sec)
-        or path.age_sec < 0.0
-        or path.age_sec > config.max_path_age_sec
-    ):
-        return DriveDecision.stop("path_stale")
     if not math.isfinite(path.confidence) or path.confidence < config.min_confidence:
         return DriveDecision.stop("path_low_confidence")
-    points = np.asarray(path.points_xy, dtype=np.float64)
-    if (
-        points.ndim != 2
-        or points.shape[1] != 2
-        or points.shape[0] < 2
-        or not np.all(np.isfinite(points))
-        or not np.all(np.diff(points[:, 0]) > 0.0)
-        or points[0, 0] <= 0.0
-        or points[0, 0] > config.lookahead_m
-        or points[-1, 0] < config.lookahead_m
-    ):
-        return DriveDecision.stop("path_geometry_invalid")
-    lateral = float(np.interp(config.lookahead_m, points[:, 0], points[:, 1]))
+    lateral = _target_lateral(path.points_xy, config.lookahead_m)
+    if lateral is None:
+        return DriveDecision.stop("path_unavailable")
     if abs(lateral) > config.max_lateral_target_m:
         return DriveDecision.stop("path_lateral_target_large")
     heading = math.atan2(lateral, config.lookahead_m)
@@ -106,3 +88,24 @@ def decide_drive(
         np.clip(config.heading_gain * heading, -config.max_yaw_rps, config.max_yaw_rps)
     )
     return DriveDecision(config.max_forward_mps, 0.0, yaw_rate, "tracking")
+
+
+def _target_lateral(points_xy: np.ndarray, lookahead_m: float) -> float | None:
+    """Use finite points in forward order, clamping to an available endpoint.
+
+    A single point is sufficient. Duplicate forward distances use their first
+    finite point. No numeric coordinates means there is no target to track.
+    """
+
+    try:
+        points = np.asarray(points_xy, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if points.ndim != 2 or points.shape[1] != 2:
+        return None
+    points = points[np.all(np.isfinite(points), axis=1)]
+    if points.shape[0] == 0:
+        return None
+    forward, indices = np.unique(points[:, 0], return_index=True)
+    lateral = float(np.interp(lookahead_m, forward, points[indices, 1]))
+    return lateral if math.isfinite(lateral) else None

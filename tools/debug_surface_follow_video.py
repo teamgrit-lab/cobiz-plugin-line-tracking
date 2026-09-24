@@ -47,7 +47,7 @@ from local_path import (
     pixel_to_ground_homography,
 )
 from segment_sidewalk_road import atomic_write_json, utc_now
-from swin_l_drive_control import DriveConfig
+from swin_l_drive_control import DriveConfig, decide_drive
 
 
 def choose_surface(
@@ -86,22 +86,11 @@ def choose_surface(
 def preview_yaw(path: SmoothedPath | None, config: DriveConfig) -> float | None:
     """Return logical steering only; this is not a motion authorization."""
 
-    if path is None or path.confidence < config.min_confidence:
-        return None
-    if path.age_sec > config.max_path_age_sec:
-        return None
-    lateral = float(
-        np.interp(config.lookahead_m, path.points_xy[:, 0], path.points_xy[:, 1])
+    # Offline annotation assumes fresh inputs; this never publishes a command.
+    decision = decide_drive(
+        path, camera_age_sec=0.0, inference_age_sec=0.0, config=config
     )
-    if not math.isfinite(lateral) or abs(lateral) > config.max_lateral_target_m:
-        return None
-    return float(
-        np.clip(
-            config.heading_gain * math.atan2(lateral, config.lookahead_m),
-            -config.max_yaw_rps,
-            config.max_yaw_rps,
-        )
-    )
+    return decision.yaw_rate if decision.reason == "tracking" else None
 
 
 def video_path_config(roi_top: float) -> LocalPathConfig:

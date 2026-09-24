@@ -4,6 +4,7 @@ import json
 import signal
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -256,6 +257,29 @@ def ros(monkeypatch):
     return RosHarness(monkeypatch)
 
 
+def test_available_path_keeps_moving_between_slow_inference_updates(ros):
+    def scenario(node):
+        ros.establish_tracking(detection_heartbeat=False)
+        updated_at = ros.now
+        inference_count = ros.metrics()["inference_count"]
+        for gap in (0.1, 0.45, 2.0 / 3.0, 1.0, 4.9):
+            ros.now = updated_at + gap
+            node.publish_state()
+            metrics = ros.metrics()
+            assert metrics["path_age_sec"] == pytest.approx(gap)
+            assert metrics["inference_count"] == inference_count
+            assert metrics["drive_reason"] == "tracking"
+            assert json.loads(ros.published[SPORT][-1].parameter)["x"] == 0.5
+            assert node.tasks.active is not None
+
+        ros.now = updated_at + 5.1
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "camera_stale"
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario)
+
+
 @pytest.mark.parametrize("confirm_in_callback", [False, True])
 def test_candidate_hard_stops_immediately_and_confirms_after_full_window(
     ros, confirm_in_callback
@@ -347,6 +371,8 @@ def test_absent_detection_publisher_permits_real_path_tracking(ros):
 
 def test_false_positive_resumes_only_after_camera_and_path_recover(ros):
     def scenario(node):
+        # Expire the camera inside the tag window; the runtime default is 5 s.
+        node.drive_config = replace(node.drive_config, max_camera_age_sec=0.5)
         ros.establish_tracking()
         ros.now = 2.2
         ros.detect(tag_id=7)
@@ -787,6 +813,8 @@ def test_old_window_boundary_cannot_shorten_the_next_confirmation_window(
     ros, timer_at_boundary, confirmed
 ):
     def scenario(node):
+        # Keep input expiry explicit instead of depending on the removed path timer.
+        node.drive_config = replace(node.drive_config, max_camera_age_sec=0.5)
         ros.establish_tracking(duration=3.5)
         command_start = len(ros.published[SPORT])
         ros.now = 2.45

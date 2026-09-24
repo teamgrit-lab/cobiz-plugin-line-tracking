@@ -1,5 +1,6 @@
-from pathlib import Path
 import sys
+from dataclasses import replace
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -47,13 +48,17 @@ def test_video_roi_below_horizon_recovers_visible_road():
     mask = np.zeros((360, 640), np.uint8)
     cv2.rectangle(mask, (0, 169), (639, 359), 1, thickness=-1)
     drive = DriveConfig(min_confidence=0.70)
-    assert choose_surface(mask, LocalPathConfig(), drive) is None
+    high_roi = replace(
+        LocalPathConfig(),
+        roi_polygon=(0.08, 1, 0.92, 1, 0.62, 0.22, 0.38, 0.22),
+    )
+    assert choose_surface(mask, high_roi, drive) is None
     selected = choose_surface(mask, video_path_config(0.55), drive)
     assert selected is not None
     assert selected[0] == "ROAD"
 
 
-def test_preview_yaw_is_bounded_and_rejects_stale_path():
+def test_preview_yaw_is_bounded_and_keeps_available_path():
     config = DriveConfig()
     path = SmoothedPath(
         points_xy=np.asarray([[3.0, 0.2], [8.0, 0.2]], np.float32),
@@ -67,8 +72,22 @@ def test_preview_yaw_is_bounded_and_rejects_stale_path():
         preview_yaw(
             SmoothedPath(path.points_xy, path.confidence, 1.0, path.source), config
         )
-        is None
+        == preview_yaw(path, config)
     )
     assert (
         preview_yaw(SmoothedPath(path.points_xy, 0.4, 0.1, path.source), config) is None
     )
+
+
+def test_preview_yaw_uses_endpoint_when_path_does_not_reach_lookahead():
+    config = DriveConfig()
+    path = SmoothedPath(
+        points_xy=np.asarray([[3.0, 0.2], [3.5, 0.4]], np.float32),
+        confidence=0.9,
+        age_sec=1.0,
+        source="test",
+    )
+
+    yaw = preview_yaw(path, config)
+
+    assert yaw is not None and 0.0 < yaw <= config.max_yaw_rps

@@ -17,7 +17,7 @@ from an AprilTag and instead ends through its duration or another lifecycle
 event. Empty `detections` arrays still expose detector liveness in metrics.
 
 - A valid Cobiz payload begins with a two-second zero-command startup hold.
-- Motion requires fresh camera, inference, and local-path data.
+- Motion requires fresh camera/inference inputs and an available local path.
 - The first AprilTag candidate immediately sends a hard zero-command stop.
 - The task completes only after three frames for the same tag ID arrive across
   a full one-second confirmation window. Completion sends the hard stop before
@@ -97,8 +97,8 @@ The default duration is 500 seconds. Requests above 1000 seconds are capped at
 1000 seconds. The listener
 reports task state on `/task_state`; core owns any corresponding HTTP report.
 It hard-stops on server cancellation, `SIGTERM`, publish errors, stale required
-camera/path inputs, or tag confirmation. Detection-stream loss is reported in
-metrics but does not abort or block the task.
+camera/inference inputs, an unavailable path, or tag confirmation.
+Detection-stream loss is reported in metrics but does not abort or block the task.
 No process can publish a final command after power loss or `SIGKILL`.
 
 ## Camera and path calibration
@@ -125,7 +125,7 @@ measure the distance from the camera.
 2. Measure known ground points to tune `SWIN_L_NEAR_DISTANCE_M`,
    `SWIN_L_FAR_DISTANCE_M`, and `SWIN_L_GROUND_HALF_WIDTH_M`.
 3. Select `SWIN_L_PATH_MASK_CLASS=1` for road or `2` for sidewalk.
-4. Verify the camera timestamp, path freshness, coordinate axes, speed limits,
+4. Verify the camera timestamp, inference freshness, coordinate axes, speed limits,
    and behavior with any concurrently active Sport publishers before a live task.
 
 For a 1280x720 Jetson camera, retain the 640x360 evaluation size and set only
@@ -163,17 +163,25 @@ A visible path does not imply permission to move. The default drive gates are:
 |---|---|
 | No accepted task | No Move publisher after control release |
 | First 2 seconds of a task | Zero velocity |
-| Path update age greater than 0.45 seconds | Zero velocity (`path_stale`) |
 | Camera or inference source age greater than 5 seconds, missing, or invalid | Zero velocity |
-| Missing path, non-finite points, invalid ordering, or no coverage of x=4 m | Zero velocity |
+| Missing path or no usable numeric x/y points | Zero velocity (`path_unavailable`) |
 | Absolute lateral target at x=4 m greater than 0.75 m | Zero velocity |
 | Non-finite confidence; or confidence below 0.49 when unrestricted mode is disabled | Zero velocity |
 | AprilTag candidate | Hard stop during confirmation; confirmed tag completes the task |
 
-Path age starts when the inference result becomes available, while camera and
-inference freshness also account for the original sensor timestamp. Repeating
-the same path at 10 Hz does not reset either age. Tracking sends the configured
-forward speed (default 0.50 m/s), zero lateral velocity, and a heading-based yaw
+The controller has no separate path-age cutoff and does not require the path
+to span x=4 m or arrive in increasing x order. It discards non-finite points,
+sorts by forward distance, and uses the first finite point at each duplicate
+distance. A single finite point is sufficient. If x=4 m is outside the available
+range, the nearest endpoint's lateral coordinate supplies the target. A path
+with no usable numeric x/y points remains unavailable; it does not produce an
+invented straight-ahead command. The heading calculation still uses the 4 m
+lookahead, and the 0.75 m lateral target limit still applies.
+
+Path age remains a diagnostic measured from inference-result availability.
+Camera and inference freshness also account for the original sensor timestamp;
+repeating a path at 10 Hz does not reset these timestamps. Tracking sends the
+configured forward speed (default 0.50 m/s), zero lateral velocity, and a heading-based yaw
 rate capped at +/-0.18 rad/s. A task aborts if tracking is unavailable at the
 end of startup hold, or if an unsafe tracking condition persists for 2 seconds
 after tracking has begun. Server cancellation, task termination, inference or
@@ -259,11 +267,13 @@ measure for at least five minutes under the normal camera and service load:
 - Kernel OOM logs, container restart count, and `oc*_event_cnt`: no increases
   during the run. A five-minute pass is a smoke test, not a long-term guarantee.
 
-The task-driving path watchdog still expires at **0.45 seconds**. A 1 Hz
-inference rate therefore causes intermittent stops even if inference is
-stable. The live default remains 4 Hz; continuous driving requires measured
-path-update gaps below 0.45 seconds. Do not extend this watchdog just to hide
-slow inference without reviewing speed, stopping distance, and perception age.
+The task-driving controller reuses the available path between inference results
+without a separate 0.45-second path timeout. A 1-1.5 Hz update rate alone no
+longer inserts zero commands between valid results. The live inference target
+remains 4 Hz. Missing paths and the 5-second camera/inference freshness checks
+still stop motion; other task and drive gates also remain active. In restricted
+path mode, the smoother's separate 0.90-second hold expiry can still make the
+path unavailable.
 
 If an over-current warning appears, inspect the board's actual power modes
 with `nvpmodel -q` and `/etc/nvpmodel.conf`, then validate a supported power

@@ -403,13 +403,20 @@ class BestSoFarSegmenter:
                 moved[name] = value.to(self.device)
         return moved
 
-    def _semantic_scores(self, frame_bgr: np.ndarray) -> torch.Tensor:
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    def _semantic_scores(
+        self, frame: np.ndarray, *, color_order: str = "bgr"
+    ) -> torch.Tensor:
+        frame_rgb = (
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if color_order == "bgr" else frame
+        )
         inputs = self.processor(images=frame_rgb, return_tensors="pt")
-        inputs = self._move_inputs(inputs)
         if getattr(self, "backend", "pytorch") == "tensorrt":
             assert self.tensorrt_backend is not None
+            # The fixed-shape TensorRT adapter consumes only pixel_values.
+            # Avoid transferring the processor's unused pixel_mask to CUDA.
+            inputs = self._move_inputs({"pixel_values": inputs["pixel_values"]})
             return self.tensorrt_backend.semantic_scores(inputs["pixel_values"])
+        inputs = self._move_inputs(inputs)
         with torch.inference_mode():
             assert self.model is not None
             outputs = self.model(**inputs)
@@ -507,15 +514,21 @@ class BestSoFarSegmenter:
         return expanded
 
     @torch.inference_mode()
-    def segment(self, frame_bgr: np.ndarray) -> BestSoFarResult:
+    def segment(
+        self, frame: np.ndarray, *, color_order: str = "bgr"
+    ) -> BestSoFarResult:
+        """Segment a BGR image, or native RGB from the live camera worker."""
+
         # This guard must run in the calling worker thread. eval() alone does
         # not disable autograd in the hybrid model's PyTorch decoders, and the
         # temporal EMA would otherwise retain every previous frame's graph.
-        if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
-            raise ValueError("frame_bgr must be an HxWx3 BGR image")
+        if color_order not in ("bgr", "rgb"):
+            raise ValueError("color_order must be 'bgr' or 'rgb'")
+        if frame.ndim != 3 or frame.shape[2] != 3:
+            raise ValueError("frame must be an HxWx3 image")
 
         total_started = time.perf_counter()
-        scores = self._semantic_scores(frame_bgr)
+        scores = self._semantic_scores(frame, color_order=color_order)
         self._synchronize()
         inference_finished = time.perf_counter()
 

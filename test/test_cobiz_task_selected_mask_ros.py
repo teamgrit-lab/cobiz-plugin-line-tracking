@@ -36,7 +36,9 @@ def test_task_control_ignores_external_publisher_count(
 
     class Message:
         def __init__(self, data=None):
-            self.data = data
+            self.data = bytes(12) if data is None else data
+            self.encoding = "rgb8"
+            self.height, self.width, self.step = 2, 2, 6
             self.header = SimpleNamespace()
 
     class Request:
@@ -175,6 +177,7 @@ def test_task_control_ignores_external_publisher_count(
         ),
         "cv_bridge": SimpleNamespace(
             CvBridge=lambda: SimpleNamespace(
+                encoding_to_dtype_with_channels=lambda _encoding: ("uint8", 3),
                 imgmsg_to_cv2=lambda *_args, **_kwargs: np.zeros(
                     (360, 640, 3), np.uint8
                 ),
@@ -194,8 +197,9 @@ def test_task_control_ignores_external_publisher_count(
         "BestSoFarSegmenter",
         lambda _config: SimpleNamespace(
             device=SimpleNamespace(type="cuda"),
-            segment=lambda _frame: SimpleNamespace(
-                selected_mask=np.zeros((360, 640), np.uint8)
+            segment=lambda _frame, **_kwargs: SimpleNamespace(
+                selected_mask=np.zeros((360, 640), np.uint8),
+                inference_seconds=0.01,
             ),
         ),
     )

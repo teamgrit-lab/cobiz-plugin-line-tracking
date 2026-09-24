@@ -309,7 +309,7 @@ block tracking.
 | `camera_stale` | 카메라 수신 또는 원본 센서 시각 기준 나이가 5초 초과. 수신 이력이 없거나 계산한 나이가 음수·NaN·Inf여도 정지 | 항상 검사. 저장한 회전 명령도 삭제 |
 | `inference_stale` | 마지막 추론 완료 시각 또는 추론에 사용한 원본 이미지 시각 기준 나이가 5초 초과. 이력이 없거나 나이가 잘못된 경우도 포함 | 항상 검사. 저장한 회전 명령도 삭제 |
 | `camera_timestamp_invalid` | 이미지 시각이 0 이하, 현재보다 50 ms 초과 미래, 5초 초과 과거, 또는 직전 수락한 이미지보다 같거나 이전 시각 | 콜백에서 0 속도 전송, 카메라 유효 상태와 저장 회전 명령 삭제. 이후 제어 주기에는 보통 `camera_stale`로 표시 |
-| `camera_conversion_error` | 이미지 변환·카메라 콜백 처리 중 예외 | 콜백에서 0 속도 전송, 카메라 유효 상태와 저장 회전 명령 삭제. 이후 보통 `camera_stale`로 표시 |
+| `camera_conversion_error` | 카메라 메타데이터 검사 또는 선택 프레임 변환 중 예외 | 콜백 또는 워커에서 0 속도 전송, 카메라 유효 상태와 저장 회전 명령 삭제. 이후 보통 `camera_stale`로 표시 |
 | `path_unavailable` | 선택한 클래스의 Path가 없거나 유한한 x/y 목표점을 만들 수 없음 | 기본은 즉시 정지. `LINE_TRACKING_BYPASS_PATH_STOPS=true`이고 현재 작업의 저장 회전 명령이 있으면 연속 실패 1–4회만 유지. **5회째부터 정지**. 저장 명령이 없으면 첫 실패부터 정지 |
 | `path_low_confidence` | 신뢰도가 NaN/Inf이거나 활성 임계값 0.49 미만 | 전체 Path 우회가 켜지면 검사 생략. 개별 `LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=false` 또는 unrestricted 모드는 유한한 저신뢰도만 허용하며 NaN/Inf는 계속 정지 |
 | `path_lateral_target_large` | 전방 4 m 기준 목표점의 좌우 좌표 절댓값이 0.75 m 초과 | 전체 Path 우회 또는 `LINE_TRACKING_STOP_ON_LATERAL_TARGET=false`로 생략. 회전 속도 제한 ±0.18 rad/s는 유지 |
@@ -428,6 +428,23 @@ Live inference always obeys `SWIN_L_INFERENCE_HZ`, including when
 it replaces pending frames while waiting for the next inference start. A late
 inference does not trigger a burst of catch-up jobs. Rate limiting reduces
 average load, but cannot guarantee latency or cap instantaneous GPU power.
+
+The camera callback validates timestamps, encoding, dimensions, row stride and
+buffer length, then queues the original ROS image message. Only the selected
+message is decoded by the worker. Native `rgb8` images reach the model as RGB
+without a BGR round trip; packed rows share the retained message buffer, while
+padded rows are made contiguous after selection. Other encodings are converted
+directly to RGB by `cv_bridge`. Camera conversion failures still stop motion.
+Offline BGR image/overlay callers keep the existing default input convention.
+The worker's processing latency now also includes selected-message decoding;
+previously callback decoding was outside that measurement. TensorRT transfers
+only `pixel_values`, leaving the unused processor `pixel_mask` on the CPU.
+
+BEV projection maps, metric axes and the closing kernel are cached by image
+dimensions and the frozen local-path configuration (up to eight entries).
+Road, sidewalk and union paths share this immutable geometry, but each current
+mask is remapped and each path/smoother is updated independently. ROI,
+calibration, image size, BEV size or kernel changes select a new cache entry.
 
 The hybrid backend and the complete segmentation/temporal pipeline run in
 `torch.inference_mode()` in the calling worker thread. This prevents the

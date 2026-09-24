@@ -10,6 +10,7 @@ base extrinsic calibration.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 import threading
 from typing import Iterable
@@ -195,14 +196,27 @@ def _runs(values: np.ndarray) -> list[tuple[int, int]]:
     ]
 
 
-def _birdseye_sidewalk(
-    sidewalk_mask: np.ndarray,
-    config: LocalPathConfig,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Warp a camera mask onto a metric x-forward/y-left grid."""
+@dataclass(frozen=True)
+class _BirdseyeGeometry:
+    map_x: np.ndarray
+    map_y: np.ndarray
+    x_values: np.ndarray
+    y_values: np.ndarray
+    close_kernel: np.ndarray | None
 
-    height, width = sidewalk_mask.shape[:2]
-    homography = pixel_to_ground_homography((height, width), config)
+
+@lru_cache(maxsize=8)
+def _birdseye_geometry(
+    frame_shape: tuple[int, int], config: LocalPathConfig
+) -> _BirdseyeGeometry:
+    """Share immutable projection maps across frames and surface classes.
+
+    The frozen config and image dimensions are the cache key, so calibration,
+    ROI, BEV size or kernel changes cannot reuse an obsolete map. Bound the
+    cache for offline tools that process several resolutions/configurations.
+    """
+
+    homography = pixel_to_ground_homography(frame_shape, config)
     x_values = np.linspace(
         config.near_distance_m,
         config.far_distance_m,
@@ -220,20 +234,39 @@ def _birdseye_sidewalk(
     image_points = ground_to_pixel(ground_points, homography).reshape(
         config.bev_height_px, config.bev_width_px, 2
     )
+    map_x = np.ascontiguousarray(image_points[..., 0])
+    map_y = np.ascontiguousarray(image_points[..., 1])
+    kernel = (
+        np.ones((config.close_kernel_px, config.close_kernel_px), dtype=np.uint8)
+        if config.close_kernel_px
+        else None
+    )
+    for array in (map_x, map_y, x_values, y_values, kernel):
+        if array is not None:
+            array.setflags(write=False)
+    return _BirdseyeGeometry(map_x, map_y, x_values, y_values, kernel)
+
+
+def _birdseye_sidewalk(
+    sidewalk_mask: np.ndarray,
+    config: LocalPathConfig,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Warp each fresh mask using the shared metric projection geometry."""
+
+    geometry = _birdseye_geometry(sidewalk_mask.shape[:2], config)
     birdseye = cv2.remap(
         np.where(sidewalk_mask > 0, 255, 0).astype(np.uint8),
-        image_points[..., 0],
-        image_points[..., 1],
+        geometry.map_x,
+        geometry.map_y,
         interpolation=cv2.INTER_NEAREST,
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=0,
     )
-    if config.close_kernel_px:
-        kernel = np.ones(
-            (config.close_kernel_px, config.close_kernel_px), dtype=np.uint8
+    if geometry.close_kernel is not None:
+        birdseye = cv2.morphologyEx(
+            birdseye, cv2.MORPH_CLOSE, geometry.close_kernel
         )
-        birdseye = cv2.morphologyEx(birdseye, cv2.MORPH_CLOSE, kernel)
-    return birdseye, x_values, y_values
+    return birdseye, geometry.x_values, geometry.y_values
 
 
 def extract_sidewalk_centerline(

@@ -3,6 +3,7 @@
 import json
 import signal
 import sys
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -21,7 +22,9 @@ ZERO = {"x": 0.0, "y": 0.0, "z": 0.0}
 
 class Message:
     def __init__(self, data=None):
-        self.data = data
+        self.data = bytes(12) if data is None else data
+        self.encoding = "rgb8"
+        self.height, self.width, self.step = 2, 2, 6
         self.header = SimpleNamespace(
             stamp=SimpleNamespace(sec=0, nanosec=0), frame_id="camera"
         )
@@ -135,6 +138,9 @@ class RosHarness:
             ),
             "cv_bridge": SimpleNamespace(
                 CvBridge=lambda: SimpleNamespace(
+                    encoding_to_dtype_with_channels=lambda encoding: {
+                        "rgb8": ("uint8", 3), "bgr8": ("uint8", 3)
+                    }[encoding],
                     imgmsg_to_cv2=lambda *_args, **_kwargs: np.zeros(
                         (360, 640, 3), np.uint8
                     ),
@@ -158,7 +164,7 @@ class RosHarness:
             "BestSoFarSegmenter",
             lambda _config: SimpleNamespace(
                 device=SimpleNamespace(type="cuda"),
-                segment=lambda _frame: SimpleNamespace(
+                segment=lambda _frame, **_kwargs: SimpleNamespace(
                     selected_mask=np.full((360, 640), 2, np.uint8),
                     inference_seconds=0.01,
                 ),
@@ -257,6 +263,74 @@ class RosHarness:
 @pytest.fixture
 def ros(monkeypatch):
     return RosHarness(monkeypatch)
+
+
+def test_live_callback_queues_messages_and_only_latest_frame_is_decoded(ros, monkeypatch):
+    release_worker = threading.Event()
+    original_queue = debug.LatestFrameQueue
+    decoded = []
+    decode = debug.camera_image_rgb
+
+    class GatedQueue(original_queue):
+        def get_latest_at(self, ready_at_sec):
+            assert release_worker.wait(timeout=3.0)
+            return super().get_latest_at(ready_at_sec)
+
+        def close(self):
+            release_worker.set()
+            super().close()
+
+    def record_decode(message, bridge):
+        decoded.append(message)
+        return decode(message, bridge)
+
+    monkeypatch.setattr(debug, "LatestFrameQueue", GatedQueue)
+    monkeypatch.setattr(debug, "camera_image_rgb", record_decode)
+
+    def scenario(node):
+        for index in range(12):
+            ros.now = 2.1 + index * 0.01
+            message = Message()
+            message.header.stamp = ros.stamp()
+            node.on_image(message)
+        assert decoded == []
+        node.publish_state()
+        assert ros.metrics()["queue_overwritten"] == 11
+        release_worker.set()
+        deadline = time.perf_counter() + 3.0
+        while True:
+            node.publish_state()
+            if ros.metrics()["inference_count"] == 1:
+                break
+            assert time.perf_counter() < deadline, "latest frame was not processed"
+            time.sleep(0.001)
+        assert len(decoded) == 1 and decoded[0] is message
+
+    ros.run(scenario)
+
+
+@pytest.mark.parametrize("invalid", [
+    {"width": 0}, {"step": 1}, {"data": bytes(1)}, {"encoding": "invalid"},
+])
+def test_invalid_image_metadata_stops_before_queueing(ros, monkeypatch, invalid):
+    def scenario(node):
+        ros.establish_tracking(detection_heartbeat=False)
+
+        def unexpected_enqueue(*_args):
+            pytest.fail("invalid metadata must not enter the inference queue")
+
+        monkeypatch.setattr(debug.LatestFrameQueue, "put", unexpected_enqueue)
+        ros.now = 2.5
+        message = Message()
+        message.header.stamp = ros.stamp()
+        message.__dict__.update(invalid)
+        node.on_image(message)
+        assert node.last_valid_yaw_rate is None
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "camera_stale"
+
+    ros.run(scenario, allow_errors=True)
 
 
 @pytest.fixture
@@ -453,7 +527,7 @@ def test_missing_path_streak_uses_the_task_selected_surface(ros, monkeypatch, ma
         debug, "BestSoFarSegmenter",
         lambda _config: SimpleNamespace(
             device=SimpleNamespace(type="cuda"),
-            segment=lambda _frame: SimpleNamespace(selected_mask=mask.copy()),
+            segment=lambda _frame, **_kwargs: SimpleNamespace(selected_mask=mask.copy()),
         ),
     )
 
@@ -522,7 +596,16 @@ def test_master_bypass_preserves_all_four_sensor_stops(ros, path_bypass, monkeyp
             # Unchanged source stamp exercises the duplicate-frame rejection.
             camera = Message()
             camera.header.stamp = ros.stamp()
+            if fault == "camera_conversion_error":
+                # Native rgb8 no longer needs a bridge conversion. Fail the
+                # selected frame's fallback decoder in the worker instead.
+                camera.encoding = "bgr8"
             node.on_image(camera)
+            if fault == "camera_conversion_error":
+                deadline = time.perf_counter() + 3.0
+                while fault not in reasons:
+                    assert time.perf_counter() < deadline, "conversion fault not reported"
+                    time.sleep(0.001)
         assert fault in reasons
         assert node.last_valid_yaw_rate is None
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
@@ -564,7 +647,7 @@ def test_combined_surface_tracks_either_class_and_stops_on_background(
         "BestSoFarSegmenter",
         lambda _config: SimpleNamespace(
             device=SimpleNamespace(type="cuda"),
-            segment=lambda _frame: SimpleNamespace(selected_mask=mask.copy()),
+            segment=lambda _frame, **_kwargs: SimpleNamespace(selected_mask=mask.copy()),
         ),
     )
 

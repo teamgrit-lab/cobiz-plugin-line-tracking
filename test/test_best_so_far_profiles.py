@@ -288,7 +288,8 @@ def test_temporal_history_does_not_retain_hybrid_decoder_graphs():
     parameter = torch.nn.Parameter(torch.zeros((3, 12, 12)))
     modes = []
 
-    def scores(_frame):
+    def scores(_frame, *, color_order):
+        assert color_order == "bgr"
         modes.append(torch.is_inference_mode_enabled())
         return parameter + len(modes)
 
@@ -302,3 +303,51 @@ def test_temporal_history_does_not_retain_hybrid_decoder_graphs():
         assert not history.requires_grad
         assert torch.allclose(history, torch.full_like(history, expected))
     assert all(modes)
+
+
+def test_native_rgb_matches_bgr_masks_and_skips_unused_tensorrt_inputs(monkeypatch):
+    import cv2
+
+    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter.backend = "tensorrt"
+    segmenter.device = torch.device("cpu")
+    segmenter.use_fp16 = True
+    segmenter.temporal_alpha = 0.62
+    segmenter.temporal_hysteresis_margin = 0.07
+    segmenter.road_ids = [1]
+    segmenter.sidewalk_ids = [2]
+    segmenter.pedestrian_area_road_expansion = 0
+    segmenter.maximum_road_island_area = 0
+    segmenter.reset()
+    seen_rgb = []
+
+    class UnusedMask:
+        def is_floating_point(self):
+            pytest.fail("TensorRT must not move pixel_mask to the accelerator")
+
+    def processor(*, images, return_tensors):
+        assert return_tensors == "pt"
+        seen_rgb.append(images.copy())
+        return {
+            "pixel_values": torch.from_numpy(images.copy()).permute(2, 0, 1)[None].float(),
+            "pixel_mask": UnusedMask(),
+        }
+
+    segmenter.processor = processor
+    segmenter.tensorrt_backend = SimpleNamespace(semantic_scores=lambda values: values[0])
+    rgb = np.zeros((12, 24, 3), dtype=np.uint8)
+    rgb[:, :12, 1] = 200
+    rgb[:, 12:, 2] = 250
+    expected = segmenter.segment(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    segmenter.reset()
+
+    def unexpected_color_conversion(*_args, **_kwargs):
+        pytest.fail("native RGB must reach the processor without a color conversion")
+
+    monkeypatch.setattr(cv2, "cvtColor", unexpected_color_conversion)
+    actual = segmenter.segment(rgb, color_order="rgb")
+
+    np.testing.assert_array_equal(seen_rgb[0], rgb)
+    np.testing.assert_array_equal(seen_rgb[1], rgb)
+    np.testing.assert_array_equal(actual.selected_mask, expected.selected_mask)
+    assert set(np.unique(actual.selected_mask)) == {1, 2}

@@ -143,7 +143,13 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
         def get_latest_at(self, deadline):
             deadlines.append(deadline)
             if len(deadlines) == 1:
-                return debug.FramePacket(debug.np.zeros((12, 12, 3)), 1)
+                return debug.FramePacket(
+                    SimpleNamespace(
+                        encoding="rgb8", height=12, width=12, step=36,
+                        data=bytes(12 * 36),
+                    ),
+                    1,
+                )
             worker_finished.set()
             return None
 
@@ -189,7 +195,7 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
         "BestSoFarSegmenter",
         lambda _config: SimpleNamespace(
             device=debug.torch.device("cpu"),
-            segment=lambda _frame: SimpleNamespace(
+            segment=lambda _frame, **_kwargs: SimpleNamespace(
                 selected_mask=debug.np.zeros((12, 12), dtype=debug.np.uint8),
                 inference_seconds=0.01,
             ),

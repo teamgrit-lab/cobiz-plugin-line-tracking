@@ -1,7 +1,9 @@
 from pathlib import Path
+from dataclasses import replace
 import sys
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
@@ -12,6 +14,55 @@ from local_path import (  # noqa: E402
     LocalPathSmoother,
     extract_sidewalk_centerline,
 )
+
+
+def test_bev_geometry_is_shared_but_each_surface_and_frame_is_remapped(monkeypatch):
+    local_path._birdseye_geometry.cache_clear()
+    builds = []
+    project = local_path.ground_to_pixel
+
+    def record(*args):
+        builds.append(1)
+        return project(*args)
+
+    monkeypatch.setattr(local_path, "ground_to_pixel", record)
+    config = LocalPathConfig()
+    selected = np.zeros((360, 640), dtype=np.uint8)
+    selected[:, :320], selected[:, 320:] = 1, 2
+    outputs = {}
+    for _ in range(2):
+        for surface in (0, 1, 2):
+            mask = local_path.selected_path_region(selected, surface)
+            outputs[surface] = local_path._birdseye_sidewalk(mask, config)[0]
+
+    assert builds == [1]
+    assert np.any(outputs[1]) and np.any(outputs[2])
+    assert not np.array_equal(outputs[1], outputs[2])
+    assert np.all(outputs[0] >= outputs[1])
+    assert np.all(outputs[0] >= outputs[2])
+    empty = local_path._birdseye_sidewalk(np.zeros_like(selected), config)[0]
+    assert not np.any(empty)
+    assert builds == [1]
+
+
+@pytest.mark.parametrize("changes", [
+    {"near_distance_m": 2.0}, {"far_distance_m": 9.0},
+    {"ground_half_width_m": 5.0}, {"search_half_width_m": 3.0},
+    {"roi_polygon": (0.1, 1.0, 0.9, 1.0, 0.6, 0.4, 0.4, 0.4)},
+    {"bev_width_px": 140}, {"bev_height_px": 80}, {"close_kernel_px": 3},
+])
+def test_bev_geometry_cache_tracks_calibration_and_grid_settings(changes):
+    local_path._birdseye_geometry.cache_clear()
+    config = LocalPathConfig()
+    base = local_path._birdseye_geometry((360, 640), config)
+    assert local_path._birdseye_geometry((360, 640), config) is base
+    changed = local_path._birdseye_geometry((360, 640), replace(config, **changes))
+    resized = local_path._birdseye_geometry((720, 1280), config)
+    assert changed is not base
+    assert resized is not base
+    assert not np.array_equal(resized.map_x, base.map_x)
+    for array in (base.map_x, base.map_y, base.x_values, base.y_values, base.close_kernel):
+        assert not array.flags.writeable
 
 
 def test_extracts_a_centerline_from_a_metric_straight_sidewalk():

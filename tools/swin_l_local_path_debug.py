@@ -335,9 +335,36 @@ def decode_ros_image(decoded: Any) -> np.ndarray:
 
 @dataclass(frozen=True)
 class FramePacket:
-    frame_bgr: np.ndarray
+    # Keep the ROS message (and its backing buffer) alive until inference ends.
+    image_message: Any
     sequence: int
     source_header: Any = None
+
+
+def validate_camera_image(message: Any, bridge: Any) -> None:
+    """Check each incoming message without decoding/copying its pixel buffer."""
+
+    dtype, channels = bridge.encoding_to_dtype_with_channels(message.encoding)
+    row_bytes = message.width * channels * np.dtype(dtype).itemsize
+    if message.width <= 0 or message.height <= 0 or message.step < row_bytes:
+        raise ValueError("invalid sensor_msgs/Image dimensions or step")
+    if len(message.data) < message.step * message.height:
+        raise ValueError("sensor_msgs/Image data is shorter than step * height")
+
+
+def camera_image_rgb(message: Any, bridge: Any) -> np.ndarray:
+    """Decode only the selected message, preserving native RGB and row stride."""
+
+    if message.encoding == "rgb8":
+        frame = np.ndarray(
+            shape=(message.height, message.width, 3),
+            dtype=np.uint8,
+            buffer=message.data,
+            strides=(message.step, 3, 1),
+        )
+    else:
+        frame = bridge.imgmsg_to_cv2(message, desired_encoding="rgb8")
+    return np.ascontiguousarray(frame)
 
 
 class LatestFrameQueue:
@@ -1121,10 +1148,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.last_valid_yaw_rate = None
                     self.publish_drive(DriveDecision.stop("camera_timestamp_invalid"))
                     return
-                frame = self.bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
+                validate_camera_image(message, self.bridge)
                 accepted = latest.put(
                     FramePacket(
-                        frame_bgr=np.ascontiguousarray(frame),
+                        image_message=message,
                         sequence=int(state["sequence"]),
                         source_header=message.header,
                     )
@@ -1136,12 +1163,16 @@ def run_ros2(args: argparse.Namespace) -> int:
                         if task_mode:
                             state["last_image_stamp_ns"] = source_stamp_ns
             except Exception as error:  # noqa: BLE001 - safe debug boundary.
-                if task_mode:
-                    with state_lock:
-                        state["last_image_at"] = None
-                    self.last_valid_yaw_rate = None
-                    self.publish_drive(DriveDecision.stop("camera_conversion_error"))
-                self.get_logger().error(f"camera conversion failed: {error}")
+                self.camera_conversion_failed(error)
+
+        def camera_conversion_failed(self, error: Exception) -> None:
+            # Also used by the worker after deferred image conversion fails.
+            if task_mode:
+                with state_lock:
+                    state["last_image_at"] = None
+                self.last_valid_yaw_rate = None
+                self.publish_drive(DriveDecision.stop("camera_conversion_error"))
+            self.get_logger().error(f"camera conversion failed: {error}")
 
         def publish_state(self) -> None:
             try:
@@ -1328,7 +1359,17 @@ def run_ros2(args: argparse.Namespace) -> int:
                 if packet is None:
                     break
                 inference_started_at = time.monotonic()
-                result: BestSoFarResult = segmenter.segment(packet.frame_bgr)
+                # Limit start-to-start frequency, including conversion failures.
+                # Slow inference must not incur an extra fixed-period sleep.
+                next_allowed = inference_started_at + inference_period
+                try:
+                    frame_rgb = camera_image_rgb(packet.image_message, node.bridge)
+                except Exception as error:  # noqa: BLE001 - retain camera fault handling.
+                    node.camera_conversion_failed(error)
+                    continue
+                result: BestSoFarResult = segmenter.segment(
+                    frame_rgb, color_order="rgb"
+                )
                 # The path becomes usable when this result is available. Using
                 # the camera-arrival timestamp here can expire a path before it
                 # is ever published when inference or rate limiting is slow.
@@ -1370,10 +1411,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                         state["last_inference_stamp_ns"] = _stamp_ns(
                             packet.source_header
                         )
-                # Limit start-to-start frequency. If inference itself consumed
-                # the period, process the next fresh frame immediately instead
-                # of adding another fixed 1 / inference_hz delay.
-                next_allowed = inference_started_at + inference_period
         except BaseException as error:  # noqa: BLE001 - forward to main thread.
             worker_error.append(error)
             if task_mode:

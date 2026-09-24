@@ -66,6 +66,9 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
     monkeypatch.setitem(debug.ENV, "SWIN_L_PROFILE", "r50-fp16-640x360")
     monkeypatch.setitem(debug.ENV, "SWIN_L_MODEL_ID", "different/checkpoint")
     monkeypatch.setitem(debug.ENV, "SWIN_L_MODEL_REVISION", "different-revision")
+    # This case verifies rate-limited replay, independently of the deployment
+    # default that intentionally processes every frame in unrestricted mode.
+    monkeypatch.setitem(debug.ENV, "SWIN_L_UNRESTRICTED_PATH_MODE", "false")
     if mode == "sidewalk":
 
         def no_path_config(_):

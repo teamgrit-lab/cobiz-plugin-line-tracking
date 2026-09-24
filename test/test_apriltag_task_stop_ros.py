@@ -159,7 +159,8 @@ class RosHarness:
             lambda _config: SimpleNamespace(
                 device=SimpleNamespace(type="cuda"),
                 segment=lambda _frame: SimpleNamespace(
-                    selected_mask=np.full((360, 640), 2, np.uint8)
+                    selected_mask=np.full((360, 640), 2, np.uint8),
+                    inference_seconds=0.01,
                 ),
             ),
         )
@@ -234,7 +235,8 @@ class RosHarness:
         self.subscriptions[debug.DEFAULT_IMAGE_TOPIC](message)
         deadline = time.perf_counter() + 3.0
         while True:
-            path, decision = self.node.drive_readiness(2, self.now)
+            mask_class = self.node.tasks.active.selected_mask if self.node.tasks.active else 2
+            path, decision = self.node.drive_readiness(mask_class, self.now)
             if decision.reason == "tracking":
                 assert path is not None
                 return
@@ -275,21 +277,29 @@ def path_bypass(ros, monkeypatch):
 
     monkeypatch.setattr(debug, "extract_sidewalk_centerline", estimate)
 
-    def refresh():
+    def refresh(*, publish=True):
+        mask_class = ros.node.tasks.active.selected_mask if ros.node.tasks.active else 2
+        ros.node.drive_readiness(mask_class, ros.now)
+        previous_losses = ros.node.path_unavailable_inferences
         camera = Message()
         camera.header.stamp = ros.stamp()
         ros.node.on_image(camera)
         deadline = time.perf_counter() + 3.0
         while True:
-            path, decision = ros.node.drive_readiness(2, ros.now)
-            if (state.lost and path is None and decision.reason == "tracking_path_hold") or (
+            path, decision = ros.node.drive_readiness(mask_class, ros.now)
+            if (
+                state.lost and path is None
+                and ros.node.path_unavailable_inferences == previous_losses + 1
+            ) or (
                 not state.lost and path is not None
+                and path.age_sec == 0.0
                 and abs(float(path.points_xy[0, 1]) - state.lateral) < 1e-6
             ):
                 break
             assert time.perf_counter() < deadline, decision.reason
             time.sleep(0.001)
-        ros.node.publish_state()
+        if publish:
+            ros.node.publish_state()
 
     state.refresh = refresh
     return state
@@ -357,6 +367,116 @@ def test_master_bypass_stops_and_clears_held_yaw_when_task_duration_ends(ros, pa
         assert ros.metrics()["drive_reason"] == "task_complete"
         assert ros.metrics()["path_yaw_held"] is False
         assert node.last_valid_yaw_rate is None
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario)
+
+
+@pytest.mark.parametrize("recover", [False, True])
+def test_fifth_missing_path_inference_stops_then_recovers_or_aborts(ros, path_bypass, recover):
+    def scenario(node):
+        ros.establish_tracking(detection_heartbeat=False)
+        path_bypass.lost = True
+        for count in range(1, 6):
+            ros.now = 2.1 + count * 0.2
+            path_bypass.refresh()
+            assert ros.metrics()["path_unavailable_inferences"] == count
+            assert ros.metrics()["path_unavailable_limit"] == 5
+            expected = "tracking_path_hold" if count < 5 else "path_unavailable"
+            assert ros.metrics()["drive_reason"] == expected
+            # Repeated 10 Hz control output is not another completed inference.
+            for _ in range(10):
+                node.publish_state()
+            assert ros.metrics()["path_unavailable_inferences"] == count
+            assert ros.metrics()["drive_reason"] == expected
+        assert node.tasks.active is not None
+        assert ros.metrics()["stop_checks"]["path_available"] is True
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        if recover:
+            ros.now = 3.3
+            path_bypass.lost = False
+            path_bypass.refresh()
+            assert ros.metrics()["path_unavailable_inferences"] == 0
+            assert ros.metrics()["drive_reason"] == "tracking"
+            assert node.tasks.unsafe_since is None
+            path_bypass.lost = True
+            ros.now = 3.5
+            path_bypass.refresh()
+            assert ros.metrics()["path_unavailable_inferences"] == 1
+            assert ros.metrics()["drive_reason"] == "tracking_path_hold"
+        else:
+            ros.now = 5.2
+            node.publish_state()
+            assert ros.task_state()["type"] == "TASK_ABORTED"
+            assert ros.task_state()["reason"] == "unsafe:path_unavailable"
+            assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario)
+
+
+def test_missing_path_streak_counts_inferences_between_control_ticks_and_resets(ros, path_bypass):
+    def scenario(node):
+        ros.establish_tracking(detection_heartbeat=False)
+        for lost in ([True] * 4 + [False] + [True] * 4):
+            path_bypass.lost = lost
+            ros.now += 0.2
+            path_bypass.refresh(publish=False)
+        node.publish_state()
+        assert ros.metrics()["path_unavailable_inferences"] == 4
+        assert ros.metrics()["drive_reason"] == "tracking_path_hold"
+        ros.now += 0.2
+        path_bypass.refresh(publish=False)
+        node.publish_state()
+        assert ros.metrics()["path_unavailable_inferences"] == 5
+        assert ros.metrics()["drive_reason"] == "path_unavailable"
+        node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "tag-stop-1"})))
+        ros.now += 1.1
+        node.publish_state()
+        ros.start(task_id="new-task")
+        assert node.path_unavailable_inferences == 0
+        ros.now += 0.2
+        path_bypass.refresh()
+        assert ros.metrics()["path_unavailable_inferences"] == 1
+        assert ros.metrics()["ready_reason"] == "path_unavailable"
+        assert node.last_valid_yaw_rate is None
+
+    ros.run(scenario)
+
+
+@pytest.mark.parametrize("mask_class", [0, 1, 2])
+def test_missing_path_streak_uses_the_task_selected_surface(ros, monkeypatch, mask_class):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BYPASS_PATH_STOPS", "true")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", str(mask_class))
+    initial_label = 1 if mask_class == 1 else 2
+    mask = np.full((360, 640), initial_label, np.uint8)
+    monkeypatch.setattr(
+        debug, "BestSoFarSegmenter",
+        lambda _config: SimpleNamespace(
+            device=SimpleNamespace(type="cuda"),
+            segment=lambda _frame: SimpleNamespace(selected_mask=mask.copy()),
+        ),
+    )
+
+    def scenario(node):
+        ros.establish_tracking(detection_heartbeat=False)
+        # The other surface remains valid for road-only / sidewalk-only tasks.
+        mask[:] = 0 if mask_class == 0 else 3 - mask_class
+        for count in range(1, 6):
+            ros.now += 0.2
+            camera = Message()
+            camera.header.stamp = ros.stamp()
+            node.on_image(camera)
+            deadline = time.perf_counter() + 3.0
+            while True:
+                node.drive_readiness(mask_class, ros.now)
+                if node.path_unavailable_inferences == count:
+                    break
+                assert time.perf_counter() < deadline
+                time.sleep(0.001)
+        node.publish_state()
+        assert ros.metrics()["path_mask_class"] == mask_class
+        assert ros.metrics()["path_unavailable_inferences"] == 5
+        assert ros.metrics()["drive_reason"] == "path_unavailable"
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
 
     ros.run(scenario)

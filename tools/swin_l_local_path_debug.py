@@ -73,9 +73,11 @@ from local_path import (
     selected_path_region,
 )
 from swin_l_drive_control import (
+    MAX_PATH_UNAVAILABLE_INFERENCES,
     DriveConfig,
     DriveDecision,
     decide_drive,
+    path_target_lateral,
 )
 from unitree_sport_api import (
     drive_to_sport_move,
@@ -199,6 +201,21 @@ def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
     return active_task.selected_mask if active_task is not None else default
 
 
+def extract_path_estimates(
+    selected_mask: np.ndarray,
+    mask_classes: Sequence[int],
+    config: LocalPathConfig,
+) -> dict[int, LocalPathEstimate | None]:
+    """Compute surface candidates without locking shared live control state."""
+
+    return {
+        mask_class: extract_sidewalk_centerline(
+            selected_path_region(selected_mask, mask_class), config
+        )
+        for mask_class in mask_classes
+    }
+
+
 def update_path_smoothers(
     selected_mask: np.ndarray,
     smoothers: dict[int, LocalPathSmoother],
@@ -207,13 +224,9 @@ def update_path_smoothers(
 ) -> dict[int, LocalPathEstimate | None]:
     """Keep all configured surface candidates current from one inference."""
 
-    estimates = {}
+    estimates = extract_path_estimates(selected_mask, tuple(smoothers), config)
     for mask_class, smoother in smoothers.items():
-        estimate = extract_sidewalk_centerline(
-            selected_path_region(selected_mask, mask_class), config
-        )
-        smoother.update(estimate, timestamp_sec)
-        estimates[mask_class] = estimate
+        smoother.update(estimates[mask_class], timestamp_sec)
     return estimates
 
 
@@ -750,6 +763,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         "header": None,
         "sequence": 0,
         "inference_count": 0,
+        "path_unavailable_inferences": {mask_class: 0 for mask_class in smoothers},
         "performance_inference_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_processing_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_completion_times": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
@@ -789,6 +803,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             self.last_ready_reason = "inputs_not_ready"
             self.last_valid_yaw_rate: float | None = None
+            self.path_unavailable_inferences = 0
             self.stop_until = 0.0
             self.apriltags = (
                 AprilTagStopMonitor(
@@ -987,7 +1002,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                 last_inference_at = state["last_inference_at"]
                 last_image_stamp_ns = state["last_image_stamp_ns"]
                 last_inference_stamp_ns = state["last_inference_stamp_ns"]
-            path = smoothers[mask_class].current(now)
+                path = smoothers[mask_class].current(now)
+                self.path_unavailable_inferences = state["path_unavailable_inferences"][
+                    mask_class
+                ]
             clock_now_ns = self.get_clock().now().nanoseconds
             camera_age_sec = _effective_source_age_sec(
                 last_image_at, last_image_stamp_ns, now, clock_now_ns
@@ -1001,6 +1019,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 inference_age_sec=inference_age_sec,
                 config=self.drive_config,
                 last_valid_yaw_rate=self.last_valid_yaw_rate,
+                path_unavailable_inferences=self.path_unavailable_inferences,
             )
             if decision.reason in ("camera_stale", "inference_stale"):
                 self.last_valid_yaw_rate = None
@@ -1028,6 +1047,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             if body["type"] == "TASK_STARTED":
                 self.last_valid_yaw_rate = None
+                self.path_unavailable_inferences = 0
+                with state_lock:
+                    state["path_unavailable_inferences"] = {
+                        mask_class: 0 for mask_class in smoothers
+                    }
                 self.terminal_apriltag_status = None
                 self.apriltag_window_resolved_at = None
                 try:
@@ -1248,6 +1272,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 }
             if self.drive_config is not None:
                 metrics["path_stop_bypass"] = self.drive_config.bypass_path_stops
+                metrics["path_unavailable_inferences"] = self.path_unavailable_inferences
+                metrics["path_unavailable_limit"] = MAX_PATH_UNAVAILABLE_INFERENCES
                 metrics["path_yaw_held"] = (
                     drive_decision is not None
                     and drive_decision.reason == "tracking_path_hold"
@@ -1255,7 +1281,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                 metrics["stop_checks"] = {
                     "camera_freshness": True,
                     "inference_freshness": True,
-                    "path_available": not self.drive_config.bypass_path_stops,
+                    "path_available": (
+                        not self.drive_config.bypass_path_stops
+                        or self.path_unavailable_inferences
+                        >= MAX_PATH_UNAVAILABLE_INFERENCES
+                    ),
                     "low_confidence": (
                         not self.drive_config.bypass_path_stops
                         and self.drive_config.stop_on_low_confidence
@@ -1303,14 +1333,25 @@ def run_ros2(args: argparse.Namespace) -> int:
                 # the camera-arrival timestamp here can expire a path before it
                 # is ever published when inference or rate limiting is slow.
                 path_updated_at = time.monotonic()
-                update_path_smoothers(
-                    result.selected_mask,
-                    smoothers,
-                    local_config,
-                    path_updated_at,
+                estimates = extract_path_estimates(
+                    result.selected_mask, tuple(smoothers), local_config
                 )
-                inference_finished_at = time.monotonic()
                 with state_lock:
+                    # Publish paths, loss streaks and source freshness as one
+                    # completed inference. Timer ticks never advance a streak.
+                    for mask_class, smoother in smoothers.items():
+                        smoother.update(estimates[mask_class], path_updated_at)
+                    inference_finished_at = time.monotonic()
+                    if task_mode:
+                        counts = state["path_unavailable_inferences"]
+                        for mask_class, smoother in smoothers.items():
+                            available = (
+                                path_target_lateral(
+                                    smoother.current(inference_finished_at),
+                                    node.drive_config.lookahead_m,
+                                ) is not None
+                            )
+                            counts[mask_class] = 0 if available else counts[mask_class] + 1
                     state["header"] = packet.source_header
                     completed_before = int(state["inference_count"])
                     state["inference_count"] += 1

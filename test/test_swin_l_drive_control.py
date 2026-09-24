@@ -198,6 +198,20 @@ def test_master_bypass_requires_a_finite_previous_yaw_for_missing_paths(yaw):
     assert command.vx == command.yaw_rate == 0.0
 
 
+@pytest.mark.parametrize("points", [None, [], [["bad", 0.2]], [[3., float("nan")]]])
+@pytest.mark.parametrize("count", [1, 4, 5, 6, 100])
+def test_path_loss_bypass_expires_on_the_fifth_inference(points, count):
+    path = None if points is None else replace(_path(), points_xy=np.asarray(points))
+    command = decide_drive(
+        path, camera_age_sec=0.1, inference_age_sec=0.1,
+        config=DriveConfig(bypass_path_stops=True), last_valid_yaw_rate=0.12,
+        path_unavailable_inferences=count,
+    )
+    assert command.reason == ("tracking_path_hold" if count < 5 else "path_unavailable")
+    assert command.vx == (0.5 if count < 5 else 0.0)
+    assert command.yaw_rate == (0.12 if count < 5 else 0.0)
+
+
 @pytest.mark.parametrize("source", ["camera", "inference"])
 @pytest.mark.parametrize("age", [None, -1., 5.01, float("nan"), float("inf")])
 def test_master_bypass_never_overrides_sensor_freshness(source, age):

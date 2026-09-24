@@ -15,6 +15,7 @@ from local_path import SmoothedPath
 
 
 MAX_FORWARD_MPS_HARD_LIMIT = 1.00
+MAX_PATH_UNAVAILABLE_INFERENCES = 5
 
 
 @dataclass(frozen=True)
@@ -77,8 +78,13 @@ def decide_drive(
     inference_age_sec: float | None,
     config: DriveConfig,
     last_valid_yaw_rate: float | None = None,
+    path_unavailable_inferences: int = 0,
 ) -> DriveDecision:
-    """Track a path or optionally hold its last yaw while sensor inputs stay fresh."""
+    """Track a path or briefly hold its last yaw while sensor inputs stay fresh.
+
+    The caller counts consecutive unavailable results at inference completion;
+    repeatedly evaluating the same result must not advance that count.
+    """
 
     config.validate()
     for name, age, maximum in (
@@ -92,12 +98,11 @@ def decide_drive(
         or (config.stop_on_low_confidence and path.confidence < config.min_confidence)
     ):
         return DriveDecision.stop("path_low_confidence")
-    lateral = (
-        _target_lateral(path.points_xy, config.lookahead_m) if path is not None else None
-    )
+    lateral = path_target_lateral(path, config.lookahead_m)
     if lateral is None:
         if (
             config.bypass_path_stops
+            and path_unavailable_inferences < MAX_PATH_UNAVAILABLE_INFERENCES
             and last_valid_yaw_rate is not None
             and math.isfinite(last_valid_yaw_rate)
         ):
@@ -121,15 +126,17 @@ def decide_drive(
     return DriveDecision(config.max_forward_mps, 0.0, yaw_rate, "tracking")
 
 
-def _target_lateral(points_xy: np.ndarray, lookahead_m: float) -> float | None:
+def path_target_lateral(path: SmoothedPath | None, lookahead_m: float) -> float | None:
     """Use finite points in forward order, clamping to an available endpoint.
 
     A single point is sufficient. Duplicate forward distances use their first
     finite point. No numeric coordinates means there is no target to track.
     """
 
+    if path is None:
+        return None
     try:
-        points = np.asarray(points_xy, dtype=np.float64)
+        points = np.asarray(path.points_xy, dtype=np.float64)
     except (TypeError, ValueError):
         return None
     if points.ndim != 2 or points.shape[1] != 2:

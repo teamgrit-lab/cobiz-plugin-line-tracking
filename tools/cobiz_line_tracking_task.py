@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 
 ACTION_NAME = "LINE_TRACKING"
+TRACKING_REASONS = frozenset(("tracking", "tracking_path_hold"))
 _TASK_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _ROUTES = {
     "TASK_STARTED": "start",
@@ -229,10 +230,10 @@ class LineTrackingTasks:
         elapsed = now - active.started_at
         if elapsed < self.policy.startup_hold_sec:
             return None
-        if not self.tracking_seen and drive_reason != "tracking":
+        if not self.tracking_seen and drive_reason not in TRACKING_REASONS:
             return self.finish("TASK_ABORTED", f"startup:{drive_reason}")
         tracked_before_this_tick = self.tracking_seen
-        if drive_reason == "tracking":
+        if drive_reason in TRACKING_REASONS:
             self.tracking_seen = True
             self.unsafe_since = None
         elif self.unsafe_since is None:
@@ -240,7 +241,7 @@ class LineTrackingTasks:
         elif now - self.unsafe_since >= self.policy.unsafe_timeout_sec:
             return self.finish("TASK_ABORTED", f"unsafe:{drive_reason}")
         if elapsed >= active.duration_sec:
-            if tracked_before_this_tick and drive_reason == "tracking":
+            if tracked_before_this_tick and drive_reason in TRACKING_REASONS:
                 return self.finish("TASK_COMPLETED")
             return self.finish("TASK_ABORTED", f"tracking_unavailable:{drive_reason}")
         return None

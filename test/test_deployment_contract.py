@@ -123,6 +123,10 @@ def test_optional_stop_switches_are_forwarded_and_default_enabled():
         name = "LINE_TRACKING_STOP_ON_" + check
         assert environment[name] == "${" + name + ":-true}"
         assert name + "=true" in example
+    assert environment["LINE_TRACKING_BYPASS_PATH_STOPS"] == (
+        "${LINE_TRACKING_BYPASS_PATH_STOPS:-false}"
+    )
+    assert "LINE_TRACKING_BYPASS_PATH_STOPS=false" in example
 
 
 def test_jetson_swin_l_base_build_contract():

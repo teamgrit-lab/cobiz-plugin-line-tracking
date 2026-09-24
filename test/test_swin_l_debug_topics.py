@@ -88,6 +88,17 @@ def test_stop_switch_environment_and_cli_override(monkeypatch, check):
         debug.parse_args(["task-drive"])
 
 
+def test_master_path_bypass_environment_and_cli_override(monkeypatch):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BYPASS_PATH_STOPS", "true")
+    config = debug._drive_config_from_args(debug.parse_args(["task-drive"]))
+    assert config.bypass_path_stops is True
+    args = debug.parse_args(["task-drive", "--no-bypass-path-stops"])
+    assert debug._drive_config_from_args(args).bypass_path_stops is False
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BYPASS_PATH_STOPS", "invalid")
+    with pytest.raises(ValueError, match="must be a boolean"):
+        debug.parse_args(["task-drive"])
+
+
 @pytest.mark.parametrize("unrestricted", [True, False])
 def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
     monkeypatch,

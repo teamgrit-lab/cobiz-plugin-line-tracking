@@ -209,6 +209,15 @@ def test_sustained_unsafe_state_aborts_but_short_blockage_pauses():
     assert stopped["reason"] == "unsafe:camera_stale"
 
 
+def test_held_path_yaw_remains_permitted_motion_until_task_duration_ends():
+    tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
+    tasks.handle_event(event(), now=0)
+    assert tasks.tick(now=2.1, drive_reason="tracking") is None
+    for now in (3., 5., 8.):
+        assert tasks.tick(now=now, drive_reason="tracking_path_hold") is None
+    assert tasks.tick(now=10.1, drive_reason="tracking_path_hold")["type"] == "TASK_COMPLETED"
+
+
 def test_startup_hold_aborts_at_deadline_when_never_ready():
     tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
     tasks.handle_event(event(), now=0, rejection_reason=None)

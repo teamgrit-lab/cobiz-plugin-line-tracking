@@ -162,6 +162,55 @@ def test_missing_path_stops():
     )
 
 
+@pytest.mark.parametrize("confidence", [0.1, float("nan"), float("inf")])
+@pytest.mark.parametrize("lateral", [-2.0, 2.0])
+def test_master_bypass_overrides_all_confidence_and_lateral_checks(confidence, lateral):
+    command = _decide(
+        _path(confidence=confidence, lateral=lateral),
+        config=DriveConfig(bypass_path_stops=True),
+    )
+    assert command.reason == "tracking"
+    assert command.vx == 0.5
+    assert command.yaw_rate == pytest.approx(math.copysign(0.18, lateral))
+
+
+@pytest.mark.parametrize("points", [None, [], [["bad", 0.2]], [[3., float("nan")]]])
+@pytest.mark.parametrize("bypass", [False, True])
+@pytest.mark.parametrize("yaw", [-0.9, -0.12, 0., 0.12, 0.9])
+def test_missing_or_unusable_target_holds_yaw_only_with_master_bypass(points, bypass, yaw):
+    path = None if points is None else replace(_path(), points_xy=np.asarray(points))
+    command = decide_drive(
+        path, camera_age_sec=0.1, inference_age_sec=0.1,
+        config=DriveConfig(bypass_path_stops=bypass), last_valid_yaw_rate=yaw,
+    )
+    assert command.reason == ("tracking_path_hold" if bypass else "path_unavailable")
+    assert command.vx == (0.5 if bypass else 0.0)
+    assert command.yaw_rate == (max(-0.18, min(0.18, yaw)) if bypass else 0.0)
+
+
+@pytest.mark.parametrize("yaw", [None, float("nan"), float("inf")])
+def test_master_bypass_requires_a_finite_previous_yaw_for_missing_paths(yaw):
+    command = decide_drive(
+        None, camera_age_sec=0.1, inference_age_sec=0.1,
+        config=DriveConfig(bypass_path_stops=True), last_valid_yaw_rate=yaw,
+    )
+    assert command.reason == "path_unavailable"
+    assert command.vx == command.yaw_rate == 0.0
+
+
+@pytest.mark.parametrize("source", ["camera", "inference"])
+@pytest.mark.parametrize("age", [None, -1., 5.01, float("nan"), float("inf")])
+def test_master_bypass_never_overrides_sensor_freshness(source, age):
+    ages = {"camera_age_sec": 0.1, "inference_age_sec": 0.1}
+    ages[f"{source}_age_sec"] = age
+    command = decide_drive(
+        None, **ages, config=DriveConfig(bypass_path_stops=True),
+        last_valid_yaw_rate=0.12,
+    )
+    assert command.reason == f"{source}_stale"
+    assert (command.vx, command.vy, command.yaw_rate) == (0., 0., 0.)
+
+
 @pytest.mark.parametrize("age", [0.46, 2.0 / 3.0, 1.0, 5.0, float("nan")])
 def test_path_age_alone_does_not_interrupt_tracking(age):
     command = _decide(_path(age=age))

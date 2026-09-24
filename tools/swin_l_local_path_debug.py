@@ -265,6 +265,7 @@ def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
         ),
         stop_on_low_confidence=args.stop_on_low_confidence,
         stop_on_lateral_target=args.stop_on_lateral_target,
+        bypass_path_stops=args.bypass_path_stops,
     )
     config.validate()
     return config
@@ -787,6 +788,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 else None
             )
             self.last_ready_reason = "inputs_not_ready"
+            self.last_valid_yaw_rate: float | None = None
             self.stop_until = 0.0
             self.apriltags = (
                 AprilTagStopMonitor(
@@ -924,6 +926,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.abort_active_task("stop_publish_error")
                 return
             body = self.tasks.finish("TASK_COMPLETED", reason)
+            self.last_valid_yaw_rate = None
             if body is not None:
                 self.terminal_apriltag_status = self.apriltags.snapshot(
                     now=time.monotonic()
@@ -957,6 +960,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.complete_apriltag_task(decision.confirmed_id)
 
         def release_task_control(self, reason: str) -> None:
+            self.last_valid_yaw_rate = None
             if self.command_publisher is not None:
                 self.publish_hard_stop(reason)
                 self.stop_until = time.monotonic() + 1.0
@@ -996,7 +1000,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                 camera_age_sec=camera_age_sec,
                 inference_age_sec=inference_age_sec,
                 config=self.drive_config,
+                last_valid_yaw_rate=self.last_valid_yaw_rate,
             )
+            if decision.reason in ("camera_stale", "inference_stale"):
+                self.last_valid_yaw_rate = None
+            elif self.tasks.active is not None and decision.reason == "tracking":
+                self.last_valid_yaw_rate = decision.yaw_rate
             return path, decision
 
         def on_task_event(self, message: Any) -> None:
@@ -1018,6 +1027,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if body is None:
                 return
             if body["type"] == "TASK_STARTED":
+                self.last_valid_yaw_rate = None
                 self.terminal_apriltag_status = None
                 self.apriltag_window_resolved_at = None
                 try:
@@ -1084,6 +1094,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 ):
                     with state_lock:
                         state["last_image_at"] = None
+                    self.last_valid_yaw_rate = None
                     self.publish_drive(DriveDecision.stop("camera_timestamp_invalid"))
                     return
                 frame = self.bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
@@ -1104,6 +1115,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 if task_mode:
                     with state_lock:
                         state["last_image_at"] = None
+                    self.last_valid_yaw_rate = None
                     self.publish_drive(DriveDecision.stop("camera_conversion_error"))
                 self.get_logger().error(f"camera conversion failed: {error}")
 
@@ -1174,9 +1186,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                         if terminal is not None:
                             self.apriltags.reset_task()
                             tag_status = self.apriltags.snapshot(now=now)
-                            self.release_task_control(
+                            drive_decision = DriveDecision.stop(
                                 terminal.get("reason", "task_complete")
                             )
+                            self.release_task_control(drive_decision.reason)
                             self.publish_task_state(terminal)
                         else:
                             self.publish_drive(drive_decision)
@@ -1234,15 +1247,24 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "window_elapsed_sec": tag_status.window_elapsed_sec,
                 }
             if self.drive_config is not None:
+                metrics["path_stop_bypass"] = self.drive_config.bypass_path_stops
+                metrics["path_yaw_held"] = (
+                    drive_decision is not None
+                    and drive_decision.reason == "tracking_path_hold"
+                )
                 metrics["stop_checks"] = {
                     "camera_freshness": True,
                     "inference_freshness": True,
-                    "path_available": True,
+                    "path_available": not self.drive_config.bypass_path_stops,
                     "low_confidence": (
-                        self.drive_config.stop_on_low_confidence
+                        not self.drive_config.bypass_path_stops
+                        and self.drive_config.stop_on_low_confidence
                         and self.drive_config.min_confidence > 0.0
                     ),
-                    "lateral_target": self.drive_config.stop_on_lateral_target,
+                    "lateral_target": (
+                        not self.drive_config.bypass_path_stops
+                        and self.drive_config.stop_on_lateral_target
+                    ),
                     "apriltag": args.stop_on_apriltag,
                 }
             self.metrics_publisher.publish(String(data=json.dumps(metrics)))
@@ -1520,6 +1542,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             default=_env("SWIN_L_INPUT_RELIABILITY", "best_effort"),
         )
         if mode == "task-drive":
+            live.add_argument(
+                "--bypass-path-stops",
+                action=argparse.BooleanOptionalAction,
+                default=_env_bool("LINE_TRACKING_BYPASS_PATH_STOPS", False),
+                help="Bypass path-based stops while preserving camera/inference checks",
+            )
             for check in ("low_confidence", "lateral_target", "apriltag"):
                 live.add_argument(
                     "--stop-on-" + check.replace("_", "-"),

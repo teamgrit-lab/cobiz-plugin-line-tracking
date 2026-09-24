@@ -1,4 +1,4 @@
-"""Fail-closed, low-speed drive decisions from a calibrated Swin-L local path.
+"""Low-speed path tracking with sensor guards and configurable path stops.
 
 This module has no ROS dependency so the control and stop gates can be tested
 without a robot. It does not establish camera extrinsic calibration.
@@ -29,6 +29,7 @@ class DriveConfig:
     max_inference_age_sec: float = 5.00
     stop_on_low_confidence: bool = True
     stop_on_lateral_target: bool = True
+    bypass_path_stops: bool = False
 
     def validate(self) -> None:
         positive = (
@@ -48,7 +49,11 @@ class DriveConfig:
             raise ValueError("min_confidence must be in [0, 1]")
         if any(
             type(enabled) is not bool
-            for enabled in (self.stop_on_low_confidence, self.stop_on_lateral_target)
+            for enabled in (
+                self.stop_on_low_confidence,
+                self.stop_on_lateral_target,
+                self.bypass_path_stops,
+            )
         ):
             raise ValueError("stop-check switches must be boolean values")
 
@@ -71,8 +76,9 @@ def decide_drive(
     camera_age_sec: float | None,
     inference_age_sec: float | None,
     config: DriveConfig,
+    last_valid_yaw_rate: float | None = None,
 ) -> DriveDecision:
-    """Track the available path while camera and inference inputs remain fresh."""
+    """Track a path or optionally hold its last yaw while sensor inputs stay fresh."""
 
     config.validate()
     for name, age, maximum in (
@@ -81,16 +87,32 @@ def decide_drive(
     ):
         if age is None or not math.isfinite(age) or age < 0.0 or age > maximum:
             return DriveDecision.stop(f"{name}_stale")
-    if path is None:
-        return DriveDecision.stop("path_unavailable")
-    if not math.isfinite(path.confidence) or (
-        config.stop_on_low_confidence and path.confidence < config.min_confidence
+    if path is not None and not config.bypass_path_stops and (
+        not math.isfinite(path.confidence)
+        or (config.stop_on_low_confidence and path.confidence < config.min_confidence)
     ):
         return DriveDecision.stop("path_low_confidence")
-    lateral = _target_lateral(path.points_xy, config.lookahead_m)
+    lateral = (
+        _target_lateral(path.points_xy, config.lookahead_m) if path is not None else None
+    )
     if lateral is None:
+        if (
+            config.bypass_path_stops
+            and last_valid_yaw_rate is not None
+            and math.isfinite(last_valid_yaw_rate)
+        ):
+            return DriveDecision(
+                config.max_forward_mps,
+                0.0,
+                float(np.clip(last_valid_yaw_rate, -config.max_yaw_rps, config.max_yaw_rps)),
+                "tracking_path_hold",
+            )
         return DriveDecision.stop("path_unavailable")
-    if config.stop_on_lateral_target and abs(lateral) > config.max_lateral_target_m:
+    if (
+        not config.bypass_path_stops
+        and config.stop_on_lateral_target
+        and abs(lateral) > config.max_lateral_target_m
+    ):
         return DriveDecision.stop("path_lateral_target_large")
     heading = math.atan2(lateral, config.lookahead_m)
     yaw_rate = float(

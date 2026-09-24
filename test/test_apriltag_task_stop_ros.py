@@ -257,6 +257,182 @@ def ros(monkeypatch):
     return RosHarness(monkeypatch)
 
 
+@pytest.fixture
+def path_bypass(ros, monkeypatch):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BYPASS_PATH_STOPS", "true")
+    state = SimpleNamespace(lost=False, lateral=0.4)
+    original = debug.extract_sidewalk_centerline
+
+    def estimate(mask, config):
+        if state.lost:
+            return None
+        result = original(mask, config)
+        if result is not None:
+            points = result.points_xy.copy()
+            points[:, 1] = state.lateral
+            return replace(result, points_xy=points)
+        return result
+
+    monkeypatch.setattr(debug, "extract_sidewalk_centerline", estimate)
+
+    def refresh():
+        camera = Message()
+        camera.header.stamp = ros.stamp()
+        ros.node.on_image(camera)
+        deadline = time.perf_counter() + 3.0
+        while True:
+            path, decision = ros.node.drive_readiness(2, ros.now)
+            if (state.lost and path is None and decision.reason == "tracking_path_hold") or (
+                not state.lost and path is not None
+                and abs(float(path.points_xy[0, 1]) - state.lateral) < 1e-6
+            ):
+                break
+            assert time.perf_counter() < deadline, decision.reason
+            time.sleep(0.001)
+        ros.node.publish_state()
+
+    state.refresh = refresh
+    return state
+
+
+def test_master_bypass_holds_last_yaw_and_never_reuses_it_in_another_task(ros, path_bypass):
+    def scenario(node):
+        ros.establish_tracking(detection_heartbeat=False)
+        previous = json.loads(ros.published[SPORT][-1].parameter)
+        assert abs(previous["z"]) > 0.05
+        path_bypass.lost = True
+        for now in (2.4, 3.4, 4.4, 5.4):
+            ros.now = now
+            path_bypass.refresh()
+            assert ros.metrics()["drive_reason"] == "tracking_path_hold"
+            assert ros.metrics()["path_yaw_held"] is True
+            assert ros.metrics()["path_stop_bypass"] is True
+            assert ros.metrics()["path_tracked"] is False
+            assert ros.published["/line_tracking/swin_l/local_path"][-1].poses == []
+            assert json.loads(ros.published[SPORT][-1].parameter) == previous
+            assert node.tasks.active is not None
+        assert ros.metrics()["stop_checks"] == {
+            "camera_freshness": True, "inference_freshness": True,
+            "path_available": False, "low_confidence": False,
+            "lateral_target": False, "apriltag": True,
+        }
+
+        # A new usable path replaces the saved turn.
+        path_bypass.lost = False
+        path_bypass.lateral = -0.4
+        ros.now = 5.6
+        path_bypass.refresh()
+        assert ros.metrics()["drive_reason"] == "tracking"
+        assert ros.metrics()["path_yaw_held"] is False
+        assert json.loads(ros.published[SPORT][-1].parameter)["z"] == pytest.approx(-previous["z"])
+        path_bypass.lost = True
+        ros.now = 5.8
+        path_bypass.refresh()
+
+        node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "tag-stop-1"})))
+        assert node.last_valid_yaw_rate is None
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        ros.now = 7.0
+        node.publish_state()
+        ros.start(task_id="new-task")
+        assert node.last_valid_yaw_rate is None
+        ros.now = 9.1
+        node.publish_state()
+        assert ros.task_state()["reason"] == "startup:path_unavailable"
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario)
+
+
+def test_master_bypass_stops_and_clears_held_yaw_when_task_duration_ends(ros, path_bypass):
+    def scenario(node):
+        ros.establish_tracking(duration=3, detection_heartbeat=False)
+        path_bypass.lost = True
+        ros.now = 2.4
+        path_bypass.refresh()
+        assert ros.metrics()["path_yaw_held"] is True
+        ros.now = 3.1
+        node.publish_state()
+        assert ros.task_state()["type"] == "TASK_COMPLETED"
+        assert ros.metrics()["drive_reason"] == "task_complete"
+        assert ros.metrics()["path_yaw_held"] is False
+        assert node.last_valid_yaw_rate is None
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario)
+
+
+@pytest.mark.parametrize("fault", [
+    "camera_stale", "inference_stale", "camera_timestamp_invalid", "camera_conversion_error",
+])
+def test_master_bypass_preserves_all_four_sensor_stops(ros, path_bypass, monkeypatch, fault):
+    def scenario(node):
+        ros.establish_tracking(detection_heartbeat=False)
+        path_bypass.lost = True
+        ros.now = 2.4
+        path_bypass.refresh()
+        assert ros.metrics()["drive_reason"] == "tracking_path_hold"
+        reasons = []
+        publish = node.publish_drive
+
+        def record(decision):
+            reasons.append(decision.reason)
+            publish(decision)
+
+        monkeypatch.setattr(node, "publish_drive", record)
+        if fault == "camera_stale":
+            ros.now = 7.5
+            node.publish_state()
+        elif fault == "inference_stale":
+            ros.now = 7.5
+            # A fresh camera frame arrives, but the inference worker has stalled.
+            monkeypatch.setattr(debug.LatestFrameQueue, "put", lambda *_args: True)
+            camera = Message()
+            camera.header.stamp = ros.stamp()
+            node.on_image(camera)
+            node.publish_state()
+        else:
+            if fault == "camera_conversion_error":
+                ros.now = 2.5
+
+                def fail(*_args, **_kwargs):
+                    raise RuntimeError("test conversion fault")
+
+                monkeypatch.setattr(node.bridge, "imgmsg_to_cv2", fail)
+            # Unchanged source stamp exercises the duplicate-frame rejection.
+            camera = Message()
+            camera.header.stamp = ros.stamp()
+            node.on_image(camera)
+        assert fault in reasons
+        assert node.last_valid_yaw_rate is None
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario, allow_errors=fault == "camera_conversion_error")
+
+
+def test_master_bypass_preserves_apriltag_stop_during_held_yaw(ros, path_bypass):
+    def scenario(node):
+        ros.establish_tracking(detection_heartbeat=False)
+        path_bypass.lost = True
+        ros.now = 2.4
+        path_bypass.refresh()
+        ros.detect(tag_id=7, frame=1)
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "apriltag_verifying"
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        ros.now = 2.6
+        ros.detect(tag_id=7, frame=2)
+        ros.now = 2.8
+        ros.detect(tag_id=7, frame=3)
+        ros.now = 3.5
+        node.publish_state()
+        assert ros.task_state()["type"] == "TASK_COMPLETED"
+        assert node.last_valid_yaw_rate is None
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario)
+
+
 @pytest.mark.parametrize("from_payload", [False, True])
 def test_combined_surface_tracks_either_class_and_stops_on_background(
     ros, monkeypatch, from_payload

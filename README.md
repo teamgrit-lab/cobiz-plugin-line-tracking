@@ -18,13 +18,14 @@ from an AprilTag and instead ends through its duration or another lifecycle
 event. Empty `detections` arrays still expose detector liveness in metrics.
 
 - A valid Cobiz payload begins with a two-second zero-command startup hold.
-- Motion requires fresh camera/inference inputs and an available local path.
+- Motion requires fresh camera/inference inputs and an available local path,
+  or a saved path-derived yaw when the path-stop bypass is enabled.
 - The first AprilTag candidate immediately sends a hard zero-command stop.
 - The task completes only after three frames for the same tag ID arrive across
   a full one-second confirmation window. Completion sends the hard stop before
   `TASK_COMPLETED` is published.
-- A one- or two-hit false positive remains stopped, then can resume only after
-  camera and path health recover.
+- A one- or two-hit false positive remains stopped, then can resume when the
+  configured drive checks permit motion.
 - If `/detections` stops during confirmation, an unconfirmed candidate is
   released as a false positive after the full confirmation window.
 - This service supplies no obstacle avoidance. Use independent, appropriate
@@ -35,7 +36,7 @@ Move API ID `1008`). It bypasses navigation-level command arbitration and does
 not reject or abort a task when other publishers exist. Concurrent publishers
 can therefore issue conflicting commands, and the downstream Unitree interface
 determines which command takes effect. Move serialization preserves the existing
-calibrated axes: `x=vx`, `y=-vy`, and `z=-yaw_rate`. Forward speed defaults to
+axis mapping: `x=vx`, `y=-vy`, and `z=-yaw_rate`. Forward speed defaults to
 `0.50 m/s`, can be adjusted through
 `LINE_TRACKING_MAX_FORWARD_MPS`, and is rejected above the hard `1.00 m/s`
 limit.
@@ -62,7 +63,38 @@ SWIN_L_APRILTAG_CONFIRM_MIN_HITS=3
 LINE_TRACKING_MAX_FORWARD_MPS=0.50
 ```
 
-Three automatic stop checks can be configured independently in `.env`:
+A single `.env` switch bypasses all three path-based stop checks:
+
+```dotenv
+LINE_TRACKING_BYPASS_PATH_STOPS=false
+```
+
+Set it to `true` to bypass `path_unavailable`, `path_low_confidence` (including
+NaN/Inf confidence), and `path_lateral_target_large`. With usable coordinates,
+tracking still uses the computed yaw, capped at 0.18 rad/s. If the path is
+missing or has no usable coordinates, the controller holds the last valid
+yaw from the current task and continues at the configured forward speed.
+Until a valid target has been obtained in that task, it still stops with
+`path_unavailable`; it does not invent an initial heading.
+
+The held command has no independent timeout. It ends when a valid path returns,
+a camera/inference check fails, or another stop/lifecycle condition applies.
+Camera/inference faults clear the saved yaw, as does ending or starting a task.
+The four camera/inference stops (`camera_stale`, `inference_stale`,
+`camera_timestamp_invalid`, and `camera_conversion_error`) always remain active.
+AprilTag policy, startup hold, explicit cancellation, task duration, faults,
+shutdown, and speed limits also remain active.
+
+The master switch overrides the two individual path-quality switches below;
+it does not override the AprilTag switch. Its default is `false`. Rebuild the
+image with this code and recreate the service after changing the setting.
+Metrics expose `path_stop_bypass` and `path_yaw_held`; held-yaw motion reports
+`tracking_path_hold` and can continue even while `path_tracked` is false and
+the published Path is empty. The task treats held-yaw motion as permitted
+motion, so it does not abort merely because the path has been missing for two
+seconds. This setting does not correct the steering sign conversion.
+
+Three automatic stop checks can also be configured independently in `.env`:
 
 ```dotenv
 LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=true
@@ -79,11 +111,11 @@ an image containing this code. Defaults preserve the existing behavior.
 | `LINE_TRACKING_STOP_ON_LATERAL_TARGET` | A lateral target beyond 0.75 m can be tracked; yaw remains capped at 0.18 rad/s. |
 | `LINE_TRACKING_STOP_ON_APRILTAG` | Tags neither stop nor complete a task, including a tag visible at startup. Detection-stream liveness is still reported. |
 
-These are not an all-stops bypass. Camera loss/invalid timestamps, the 5-second
-camera and inference age limits, a missing or nonnumeric path, non-finite
-confidence, startup hold, task cancellation/end, and fault/shutdown stops remain
-active. Speed limits and Unitree hardware protections are not changed. There
-is no environment switch to disable camera-disconnection stopping. The
+Camera loss/invalid timestamps, the 5-second camera and inference age limits,
+startup hold, task cancellation/end, and fault/shutdown stops remain active.
+Without the master bypass, a missing or nonnumeric path and non-finite
+confidence also stop motion. Speed limits and Unitree hardware protections are
+not changed. There is no environment switch to disable camera-disconnection stopping. The
 `stop_checks` object in metrics reports the effective checks, and
 `apriltag.stop_enabled` reports whether tag stopping is enabled. Changing a stop
 flag does not change the selected road/sidewalk class or create a missing path.
@@ -213,10 +245,10 @@ A visible path does not imply permission to move. The default drive gates are:
 | No accepted task | No Move publisher after control release |
 | First 2 seconds of a task | Zero velocity |
 | Camera or inference source age greater than 5 seconds, missing, or invalid | Zero velocity |
-| Missing path or no usable numeric x/y points | Zero velocity (`path_unavailable`) |
-| Absolute lateral target at x=4 m greater than 0.75 m | Zero velocity when `LINE_TRACKING_STOP_ON_LATERAL_TARGET=true` |
-| Non-finite confidence | Zero velocity |
-| Confidence below 0.49 when unrestricted mode is disabled | Zero velocity when `LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=true` |
+| Missing path or no usable numeric x/y points | With the master bypass, hold this task's last valid yaw; otherwise zero velocity (`path_unavailable`). No saved yaw always means stop. |
+| Absolute lateral target at x=4 m greater than 0.75 m | Zero velocity when the master bypass is off and `LINE_TRACKING_STOP_ON_LATERAL_TARGET=true` |
+| Non-finite confidence | Zero velocity unless the master bypass is on |
+| Confidence below 0.49 when unrestricted mode is disabled | Zero velocity when the master bypass is off and `LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=true` |
 | AprilTag candidate | When `LINE_TRACKING_STOP_ON_APRILTAG=true`, hard stop during confirmation; confirmed tag completes the task |
 
 The controller has no separate path-age cutoff and does not require the path
@@ -224,9 +256,10 @@ to span x=4 m or arrive in increasing x order. It discards non-finite points,
 sorts by forward distance, and uses the first finite point at each duplicate
 distance. A single finite point is sufficient. If x=4 m is outside the available
 range, the nearest endpoint's lateral coordinate supplies the target. A path
-with no usable numeric x/y points remains unavailable; it does not produce an
-invented straight-ahead command. The heading calculation still uses the 4 m
-lookahead, and the 0.75 m lateral target limit applies when its stop check is enabled.
+with no usable numeric x/y points remains unavailable; the master bypass may
+reuse a saved yaw but does not publish an invented path. The heading calculation
+still uses the 4 m lookahead, and the 0.75 m lateral target limit applies when
+its stop check is enabled and the master bypass is off.
 
 Path age remains a diagnostic measured from inference-result availability.
 Camera and inference freshness also account for the original sensor timestamp;

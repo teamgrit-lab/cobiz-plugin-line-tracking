@@ -44,8 +44,11 @@ class TaskPolicy:
             raise ValueError("default duration must exceed startup hold by 1 second")
         if type(
             self.default_selected_mask
-        ) is not int or self.default_selected_mask not in (1, 2):
-            raise ValueError("default selected_mask must be 1 (road) or 2 (sidewalk)")
+        ) is not int or self.default_selected_mask not in (0, 1, 2):
+            raise ValueError(
+                "default selected_mask must be 0 (road or sidewalk), "
+                "1 (road), or 2 (sidewalk)"
+            )
 
 
 @dataclass(frozen=True)
@@ -91,7 +94,7 @@ def requested_selected_mask(event: Mapping[str, Any], default: int) -> int:
 
 def _selected_mask(payload: Mapping[str, Any], default: int) -> int:
     value = payload.get("selected_mask", default)
-    if type(value) is not int or value not in (1, 2):
+    if type(value) is not int or value not in (0, 1, 2):
         raise ValueError("invalid_selected_mask")
     return value
 

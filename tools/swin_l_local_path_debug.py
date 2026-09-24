@@ -61,6 +61,7 @@ from cobiz_line_tracking_task import (
 from evaluate_mapillary_temporal import upscale_mask
 from local_path import (
     DEFAULT_ROI_POLYGON,
+    PATH_MASK_CLASSES,
     LocalPathConfig,
     LocalPathEstimate,
     LocalPathSmoother,
@@ -69,6 +70,7 @@ from local_path import (
     ground_to_pixel,
     normalized_polygon_pixels,
     pixel_to_ground_homography,
+    selected_path_region,
 )
 from swin_l_drive_control import (
     DriveConfig,
@@ -84,7 +86,6 @@ from unitree_sport_api import (
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
 DEFAULT_LOCAL_PATH_TOPIC = "/line_tracking/swin_l/local_path"
 DEFAULT_METRICS_TOPIC = "/line_tracking/swin_l/metrics"
-PATH_MASK_CLASSES = {1: "ROAD", 2: "SIDEWALK"}
 PERFORMANCE_WARMUP_FRAMES = 10
 PERFORMANCE_SAMPLE_WINDOW = 512
 
@@ -192,14 +193,6 @@ def cuda_memory_metrics(device: torch.device) -> dict[str, float] | None:
     }
 
 
-def selected_path_region(selected_mask: np.ndarray, path_mask_class: int) -> np.ndarray:
-    """Select only the configured drivable class; background is never a path."""
-
-    if path_mask_class not in PATH_MASK_CLASSES:
-        raise ValueError("SWIN_L_PATH_MASK_CLASS must be 1 (road) or 2 (sidewalk)")
-    return selected_mask == path_mask_class
-
-
 def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
     """Use the Cobiz task's class only for the lifetime of that task."""
 
@@ -212,7 +205,7 @@ def update_path_smoothers(
     config: LocalPathConfig,
     timestamp_sec: float,
 ) -> dict[int, LocalPathEstimate | None]:
-    """Keep both task-mode path candidates current for safe task preflight."""
+    """Keep all configured surface candidates current from one inference."""
 
     estimates = {}
     for mask_class, smoother in smoothers.items():
@@ -748,7 +741,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         raise RuntimeError("Swin-L task-drive mode requires a CUDA model device")
     smoothers = {
         mask_class: LocalPathSmoother(local_config)
-        for mask_class in ((1, 2) if task_mode else (args.path_mask_class,))
+        for mask_class in (PATH_MASK_CLASSES if task_mode else (args.path_mask_class,))
     }
     latest = LatestFrameQueue()
     state_lock = threading.Lock()
@@ -1398,7 +1391,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         type=int,
         choices=tuple(PATH_MASK_CLASSES),
         default=_env("SWIN_L_PATH_MASK_CLASS", "2"),
-        help="1=road, 2=sidewalk (default from SWIN_L_PATH_MASK_CLASS)",
+        help="0=road or sidewalk, 1=road, 2=sidewalk (default from SWIN_L_PATH_MASK_CLASS)",
     )
     parser.add_argument(
         "--near-distance-m",
@@ -1588,7 +1581,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             )
     args = parser.parse_args(argv)
     if args.path_mask_class not in PATH_MASK_CLASSES:
-        parser.error("SWIN_L_PATH_MASK_CLASS must be 1 (road) or 2 (sidewalk)")
+        parser.error(
+            "SWIN_L_PATH_MASK_CLASS must be 0 (road or sidewalk), "
+            "1 (road), or 2 (sidewalk)"
+        )
     if not all(
         math.isfinite(rate) and rate > 0.0
         for rate in (args.inference_hz, args.output_fps)

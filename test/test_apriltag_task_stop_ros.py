@@ -257,6 +257,76 @@ def ros(monkeypatch):
     return RosHarness(monkeypatch)
 
 
+@pytest.mark.parametrize("from_payload", [False, True])
+def test_combined_surface_tracks_either_class_and_stops_on_background(
+    ros, monkeypatch, from_payload
+):
+    mask = np.ones((360, 640), np.uint8)
+    monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", "2" if from_payload else "0")
+    monkeypatch.setattr(
+        debug,
+        "BestSoFarSegmenter",
+        lambda _config: SimpleNamespace(
+            device=SimpleNamespace(type="cuda"),
+            segment=lambda _frame: SimpleNamespace(selected_mask=mask.copy()),
+        ),
+    )
+
+    def scenario(node):
+        payload = {"duration_sec": 30}
+        if from_payload:
+            payload["selected_mask"] = 0
+        node.on_task_event(Message(json.dumps({
+            "type": "TASK_REGISTERED", "action_name": "LINE_TRACKING",
+            "task_id": "combined-1", "payload": payload,
+        })))
+        assert ros.task_state()["type"] == "TASK_STARTED"
+        assert node.tasks.active.selected_mask == 0
+        node.publish_state()
+
+        for surface in (1, 2, "mixed", 0):
+            if surface == "mixed":
+                mask[:, :320], mask[:, 320:] = 1, 2
+            else:
+                mask.fill(surface)
+            ros.now += 2.1
+            count = ros.metrics()["inference_count"]
+            camera = Message()
+            camera.header.stamp = ros.stamp()
+            node.on_image(camera)
+            deadline = time.perf_counter() + 3.0
+            while True:
+                assert time.perf_counter() < deadline, "inference did not finish"
+                # Let the first frame finish before evaluating the startup hold.
+                if count == 0:
+                    _, decision = node.drive_readiness(0, ros.now)
+                    if decision.reason != "tracking":
+                        time.sleep(0.001)
+                        continue
+                node.publish_state()
+                metrics = ros.metrics()
+                if metrics["inference_count"] > count:
+                    break
+                time.sleep(0.001)
+
+            assert metrics["inference_count"] == count + 1
+            assert metrics["path_mask_class"] == 0
+            assert metrics["path_surface"] == "ROAD_OR_SIDEWALK"
+            path = ros.published["/line_tracking/swin_l/local_path"][-1]
+            move = json.loads(ros.published[SPORT][-1].parameter)
+            if surface == 0:
+                assert metrics["drive_reason"] == "path_unavailable"
+                assert path.poses == []
+                assert move == ZERO
+            else:
+                assert metrics["drive_reason"] == "tracking"
+                assert len(path.poses) == 20
+                assert move["x"] == 0.5
+                assert abs(move["z"]) <= 0.18
+
+    ros.run(scenario)
+
+
 def test_available_path_keeps_moving_between_slow_inference_updates(ros):
     def scenario(node):
         ros.establish_tracking(detection_heartbeat=False)

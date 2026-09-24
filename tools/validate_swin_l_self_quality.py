@@ -38,9 +38,11 @@ from best_so_far_runtime import (
     BestSoFarSegmenter,
 )
 from local_path import (
+    PATH_MASK_CLASSES,
     LocalPathConfig,
     LocalPathSmoother,
     extract_sidewalk_centerline,
+    selected_path_region,
 )
 
 
@@ -251,7 +253,7 @@ def _capture(
             sequences.append(packet.sequence)
             timestamps.append(packet.source_timestamp_ns)
             estimate = extract_sidewalk_centerline(
-                result.selected_mask == path_mask_class,
+                selected_path_region(result.selected_mask, path_mask_class),
                 local_config,
             )
             smoothed = smoother.update(
@@ -374,7 +376,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backend", choices=INFERENCE_BACKENDS, default="pytorch")
     parser.add_argument("--tensorrt-engine")
     parser.add_argument("--tensorrt-manifest")
-    parser.add_argument("--path-mask-class", type=int, choices=(1, 2), default=2)
+    parser.add_argument(
+        "--path-mask-class", type=int, choices=tuple(PATH_MASK_CLASSES), default=2
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--label", required=True)

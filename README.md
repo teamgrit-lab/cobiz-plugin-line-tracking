@@ -5,7 +5,8 @@ For an accepted task it follows the selected Swin-L surface-center path with
 the pinned FP16 TensorRT profile `swin-l-aspect-224x384-fp16`, and it uses AprilTag
 detections to stop and complete that task. With no accepted task, it publishes
 no Sport Move request. The default path class is sidewalk
-(`SWIN_L_PATH_MASK_CLASS=2`); a task can request road (`1`) with
+(`SWIN_L_PATH_MASK_CLASS=2`); a task can request road (`1`) or road/sidewalk
+combined (`0`) with
 `payload.selected_mask`.
 
 ## Runtime contract
@@ -128,6 +129,19 @@ Use a finite task payload such as:
 {"duration_sec": 30, "selected_mask": 2}
 ```
 
+`selected_mask` accepts `0` (road or sidewalk), `1` (road only), or `2`
+(sidewalk only). With `0`, both surface labels from the same inference form
+one combined region for path generation and tracking. Either surface alone
+can produce a path, and adjacent road/sidewalk regions can form one wider
+region. Semantic background pixels (label `0`) are still excluded. This mode
+does not prefer sidewalk over road or run the model a second time.
+
+To use this mode when a task omits `selected_mask`, set
+`SWIN_L_PATH_MASK_CLASS=0` in `.env` and recreate the service with an updated
+image. An explicit task value overrides the environment default. Metrics
+report `path_mask_class: 0` and `path_surface: "ROAD_OR_SIDEWALK"`. Existing
+stop checks still apply; no road/sidewalk region means no path.
+
 The default duration is 500 seconds. Requests above 1000 seconds are capped at
 1000 seconds. The listener
 reports task state on `/task_state`; core owns any corresponding HTTP report.
@@ -174,7 +188,7 @@ SWIN_L_EVALUATION_HEIGHT=360
 
 ## Path generation and motion gates
 
-The selected road (`1`) or sidewalk (`2`) mask is projected into a 280-by-160
+The road (`1`), sidewalk (`2`), or combined (`0`) region is projected into a 280-by-160
 ground grid spanning the configured 3-8 m forward range and +/-3.5 m sideways.
 A 5-by-5 morphological closing fills small mask gaps. Each forward-distance
 row selects a contiguous region at least 0.12 m wide, favoring width and

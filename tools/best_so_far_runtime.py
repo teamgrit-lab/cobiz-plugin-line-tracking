@@ -364,6 +364,7 @@ class BestSoFarSegmenter:
         self.model_load_seconds = time.perf_counter() - load_started
         self._previous_scores: torch.Tensor | None = None
         self._previous_selected: np.ndarray | None = None
+        self._surface_lookup: torch.Tensor | None = None
 
     def _load_pytorch_model(self) -> Any:
         if self.profile.model_family == "mask2former":
@@ -393,6 +394,7 @@ class BestSoFarSegmenter:
 
         self._previous_scores = None
         self._previous_selected = None
+        self._surface_lookup = None
 
     def _move_inputs(self, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         moved: dict[str, torch.Tensor] = {}
@@ -513,6 +515,86 @@ class BestSoFarSegmenter:
         expanded[(class_map == self.pedestrian_area_id) & road_neighborhood] = 1
         return expanded
 
+    def _cpu_selected_mask(self, smooth_scores: torch.Tensor) -> tuple[np.ndarray, float]:
+        """Retain the CPU aggregation and changed-pixel hysteresis path."""
+
+        smooth_map = smooth_scores.argmax(dim=0).detach().cpu().numpy()
+        selected = aggregated_selected_mask(
+            smooth_map, road_ids=self.road_ids, sidewalk_ids=self.sidewalk_ids
+        )
+        selected = self._expand_road_into_pedestrian_area(selected, smooth_map)
+        hold_ratio = 0.0
+        if self._previous_selected is not None and self.temporal_hysteresis_margin > 0.0:
+            hold_mask = _changed_pixel_hysteresis_hold_mask(
+                smooth_scores,
+                selected,
+                self._previous_selected,
+                self.temporal_hysteresis_margin,
+            )
+            selected[hold_mask] = self._previous_selected[hold_mask]
+            hold_ratio = float(np.mean(hold_mask))
+        return selected, hold_ratio
+
+    def _accelerator_selected_mask(
+        self, smooth_scores: torch.Tensor
+    ) -> tuple[np.ndarray, float]:
+        """Aggregate and apply hysteresis before one compact download to CPU."""
+
+        use_hysteresis = (
+            self._previous_selected is not None and self.temporal_hysteresis_margin > 0.0
+        )
+        if use_hysteresis:
+            # Upload the final CPU morphology result from the previous frame
+            # before running this frame's class reduction and hysteresis.
+            previous = torch.from_numpy(self._previous_selected).to(
+                smooth_scores.device, non_blocking=True
+            )
+            # max, like argmax, chooses the first class on ties. topk indices
+            # do not guarantee that ordering and can change the surface label.
+            best_scores, class_map = smooth_scores.max(dim=0)
+        else:
+            class_map = smooth_scores.argmax(dim=0)
+        if (
+            self._surface_lookup is None
+            or self._surface_lookup.device != smooth_scores.device
+            or self._surface_lookup.numel() != smooth_scores.shape[0]
+        ):
+            lookup = torch.zeros(smooth_scores.shape[0], dtype=torch.uint8)
+            lookup[self.road_ids] = 1
+            lookup[self.sidewalk_ids] = 2
+            self._surface_lookup = lookup.to(smooth_scores.device)
+        selected = self._surface_lookup[class_map]
+
+        radius = self.pedestrian_area_road_expansion
+        if radius > 0:
+            road_neighborhood = functional.max_pool2d(
+                (selected == 1).float()[None, None],
+                kernel_size=radius * 2 + 1,
+                stride=1,
+                padding=radius,
+            )[0, 0].bool()
+            selected = selected.masked_fill(
+                (class_map == self.pedestrian_area_id) & road_neighborhood, 1
+            )
+
+        if not use_hysteresis:
+            return selected.cpu().numpy(), 0.0
+
+        # A second reduction is much cheaper on Jetson than strided full-frame
+        # topk. scatter is out-of-place: never mutate the scores used by the EMA.
+        second_scores = smooth_scores.scatter(
+            0, class_map.unsqueeze(0), float("-inf")
+        ).amax(dim=0)
+        # Subtract in the original dtype, then compare in FP32, matching the
+        # existing NumPy threshold even at FP16 rounding boundaries.
+        score_margin = (best_scores - second_scores).float()
+        hold = (selected != previous) & (score_margin < self.temporal_hysteresis_margin)
+        selected = torch.where(hold, previous, selected)
+        # Download two uint8 planes together (labels + hold statistics), rather
+        # than an int64 class map followed by another confidence download.
+        downloaded = torch.stack((selected, hold.to(torch.uint8))).cpu().numpy()
+        return downloaded[0], float(np.mean(downloaded[1]))
+
     @torch.inference_mode()
     def segment(
         self, frame: np.ndarray, *, color_order: str = "bgr"
@@ -543,30 +625,11 @@ class BestSoFarSegmenter:
             )
         self._previous_scores = smooth_scores.detach()
 
-        smooth_map = smooth_scores.argmax(dim=0).detach().cpu().numpy()
-        minimum_area = max(48, int(smooth_map.size * 0.00035))
-        selected = aggregated_selected_mask(
-            smooth_map,
-            road_ids=self.road_ids,
-            sidewalk_ids=self.sidewalk_ids,
-        )
-        selected = self._expand_road_into_pedestrian_area(selected, smooth_map)
-
-        hold_ratio = 0.0
-        if (
-            self._previous_selected is not None
-            and self.temporal_hysteresis_margin > 0.0
-        ):
-            hold_mask = _changed_pixel_hysteresis_hold_mask(
-                smooth_scores,
-                selected,
-                self._previous_selected,
-                self.temporal_hysteresis_margin,
-            )
-            if np.any(hold_mask):
-                selected = selected.copy()
-                selected[hold_mask] = self._previous_selected[hold_mask]
-                hold_ratio = float(np.mean(hold_mask))
+        if smooth_scores.device.type == "cpu":
+            selected, hold_ratio = self._cpu_selected_mask(smooth_scores)
+        else:
+            selected, hold_ratio = self._accelerator_selected_mask(smooth_scores)
+        minimum_area = max(48, int(selected.size * 0.00035))
         retained_sidewalk = remove_small_components(selected == 2, minimum_area)
         retained_road, retained_sidewalk = self._refine_road_components(
             selected == 1,

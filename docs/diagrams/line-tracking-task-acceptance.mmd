@@ -1,0 +1,31 @@
+sequenceDiagram
+    title Line tracking — 작업 수락
+    participant Cam as 전방 카메라
+    participant Li as LiDAR
+    participant V as Swin-L 작업자
+    participant N as actual-activate
+    participant C as cobiz-core
+    participant S as Cobiz 서버
+
+    loop 영상 추론 — 목표 4Hz
+        Cam->>N: 전방 영상
+        N->>V: 최신 프레임 전달
+        V->>V: 전체 영상 분할
+        V-->>N: 차도(1)·인도(2) 중심 경로 갱신
+    end
+    Li->>N: PointCloud2 갱신
+    S->>C: TASK_REGISTERED + payload
+    C->>N: /task_event JSON
+    N->>N: 요청 selected_mask 확인
+    Note over N: selected_mask 생략 시 .env 기본값 사용
+    N->>N: 요청 selected_mask로 drive_readiness(mask, now) 재계산
+    Note over N: 마지막 metrics.ready_reason을 재사용하지 않음
+    N->>N: 경로·LiDAR·센서 신선도·제어권 검사 → ready_reason
+    N->>N: handle_event: 중복·payload 검증 후 tracking 비교
+    alt ready_reason != tracking 또는 작업 조건 실패
+        N-->>C: /task_state TASK_REJECTED (reason 포함)
+        C-->>S: HTTP reject 보고
+    else ready_reason == tracking 및 작업 조건 충족
+        N-->>C: /task_state TASK_STARTED
+        C-->>S: HTTP start 보고
+    end

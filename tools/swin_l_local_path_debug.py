@@ -270,6 +270,8 @@ def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
         min_confidence=(
             0.0 if args.unrestricted_path_mode else DriveConfig.min_confidence
         ),
+        stop_on_low_confidence=args.stop_on_low_confidence,
+        stop_on_lateral_target=args.stop_on_lateral_target,
     )
     config.validate()
     return config
@@ -922,6 +924,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             return succeeded
 
         def complete_apriltag_task(self, tag_id: int) -> None:
+            if not args.stop_on_apriltag:
+                return
             reason = f"apriltag_confirmed:{tag_id}"
             if not self.publish_hard_stop(reason):
                 self.abort_active_task("stop_publish_error")
@@ -947,7 +951,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 ids=self.latest_apriltag_ids,
                 frame_key=frame_key,
                 now=now,
-                task_active=self.tasks.active is not None,
+                task_active=args.stop_on_apriltag and self.tasks.active is not None,
             )
             # Evaluate deadlines at this boundary, not a later timer's time:
             # a newly seeded window still owns its full confirmation period.
@@ -1029,7 +1033,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         Request, args.sport_request_topic, self.command_qos
                     )
                     tag_status = self.apriltags.begin_task(
-                        ids=self.latest_apriltag_ids,
+                        ids=self.latest_apriltag_ids if args.stop_on_apriltag else (),
                         frame_key=self.latest_apriltag_frame_key,
                         now=now,
                     )
@@ -1126,7 +1130,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             tag_status = None
             if self.apriltags is not None:
                 tag_status = (
-                    self.apriltags.tick(now=now, task_active=True)
+                    self.apriltags.tick(now=now, task_active=args.stop_on_apriltag)
                     if self.tasks.active is not None
                     else self.apriltags.snapshot(now=now)
                 )
@@ -1228,12 +1232,25 @@ def run_ros2(args: argparse.Namespace) -> int:
             if tag_status is not None:
                 metrics["apriltag"] = {
                     "topic": args.apriltag_detections_topic,
+                    "stop_enabled": args.stop_on_apriltag,
                     "stream_ready": self.apriltags.stream_ready(now),
                     "message_age_sec": self.apriltags.message_age_sec(now),
                     "state": tag_status.state,
                     "hit_counts": dict(tag_status.hit_counts),
                     "confirmed_id": tag_status.confirmed_id,
                     "window_elapsed_sec": tag_status.window_elapsed_sec,
+                }
+            if self.drive_config is not None:
+                metrics["stop_checks"] = {
+                    "camera_freshness": True,
+                    "inference_freshness": True,
+                    "path_available": True,
+                    "low_confidence": (
+                        self.drive_config.stop_on_low_confidence
+                        and self.drive_config.min_confidence > 0.0
+                    ),
+                    "lateral_target": self.drive_config.stop_on_lateral_target,
+                    "apriltag": args.stop_on_apriltag,
                 }
             self.metrics_publisher.publish(String(data=json.dumps(metrics)))
             if header is None:
@@ -1510,6 +1527,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             default=_env("SWIN_L_INPUT_RELIABILITY", "best_effort"),
         )
         if mode == "task-drive":
+            for check in ("low_confidence", "lateral_target", "apriltag"):
+                live.add_argument(
+                    "--stop-on-" + check.replace("_", "-"),
+                    action=argparse.BooleanOptionalAction,
+                    default=_env_bool("LINE_TRACKING_STOP_ON_" + check.upper(), True),
+                    help="Enable or disable this automatic stop check only",
+                )
             live.add_argument(
                 "--apriltag-detections-topic",
                 default=_env("SWIN_L_APRILTAG_DETECTIONS_TOPIC", "/detections"),

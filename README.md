@@ -61,6 +61,41 @@ SWIN_L_APRILTAG_CONFIRM_MIN_HITS=3
 LINE_TRACKING_MAX_FORWARD_MPS=0.50
 ```
 
+Three automatic stop checks can be configured independently in `.env`:
+
+```dotenv
+LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=true
+LINE_TRACKING_STOP_ON_LATERAL_TARGET=true
+LINE_TRACKING_STOP_ON_APRILTAG=true
+```
+
+Set a flag to `false` to disable that check, then recreate the task service with
+an image containing this code. Defaults preserve the existing behavior.
+
+| Setting | Behavior when `false` |
+|---|---|
+| `LINE_TRACKING_STOP_ON_LOW_CONFIDENCE` | A finite low confidence value does not stop tracking. Unrestricted path mode already bypasses this threshold. |
+| `LINE_TRACKING_STOP_ON_LATERAL_TARGET` | A lateral target beyond 0.75 m can be tracked; yaw remains capped at 0.18 rad/s. |
+| `LINE_TRACKING_STOP_ON_APRILTAG` | Tags neither stop nor complete a task, including a tag visible at startup. Detection-stream liveness is still reported. |
+
+These are not an all-stops bypass. Camera loss/invalid timestamps, the 5-second
+camera and inference age limits, a missing or nonnumeric path, non-finite
+confidence, startup hold, task cancellation/end, and fault/shutdown stops remain
+active. Speed limits and Unitree hardware protections are not changed. There
+is no environment switch to disable camera-disconnection stopping. The
+`stop_checks` object in metrics reports the effective checks, and
+`apriltag.stop_enabled` reports whether tag stopping is enabled. Changing a stop
+flag does not change the selected road/sidewalk class or create a missing path.
+
+`path_lateral_target_large` means that a path exists, but its lateral coordinate
+at the 4 m lookahead exceeds 0.75 m in absolute value. This is a stop decision,
+not an inference failure. A split or off-center segmentation region, sparse
+path support, or inaccurate camera-to-ground geometry can produce that target.
+With `LINE_TRACKING_STOP_ON_LATERAL_TARGET=false`, the controller instead uses
+`yaw = clip(atan2(y_at_4m, 4), -0.18, 0.18)` rad/s and the configured forward
+speed, provided the remaining checks pass. This does not repair the estimated
+path or guarantee that a sharp bend can be followed.
+
 `debugging-swin-l` is an explicit debug profile and never publishes Sport
 requests. It can be used to inspect the camera path and metrics before a live
 task run.
@@ -165,9 +200,10 @@ A visible path does not imply permission to move. The default drive gates are:
 | First 2 seconds of a task | Zero velocity |
 | Camera or inference source age greater than 5 seconds, missing, or invalid | Zero velocity |
 | Missing path or no usable numeric x/y points | Zero velocity (`path_unavailable`) |
-| Absolute lateral target at x=4 m greater than 0.75 m | Zero velocity |
-| Non-finite confidence; or confidence below 0.49 when unrestricted mode is disabled | Zero velocity |
-| AprilTag candidate | Hard stop during confirmation; confirmed tag completes the task |
+| Absolute lateral target at x=4 m greater than 0.75 m | Zero velocity when `LINE_TRACKING_STOP_ON_LATERAL_TARGET=true` |
+| Non-finite confidence | Zero velocity |
+| Confidence below 0.49 when unrestricted mode is disabled | Zero velocity when `LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=true` |
+| AprilTag candidate | When `LINE_TRACKING_STOP_ON_APRILTAG=true`, hard stop during confirmation; confirmed tag completes the task |
 
 The controller has no separate path-age cutoff and does not require the path
 to span x=4 m or arrive in increasing x order. It discards non-finite points,
@@ -176,7 +212,7 @@ distance. A single finite point is sufficient. If x=4 m is outside the available
 range, the nearest endpoint's lateral coordinate supplies the target. A path
 with no usable numeric x/y points remains unavailable; it does not produce an
 invented straight-ahead command. The heading calculation still uses the 4 m
-lookahead, and the 0.75 m lateral target limit still applies.
+lookahead, and the 0.75 m lateral target limit applies when its stop check is enabled.
 
 Path age remains a diagnostic measured from inference-result availability.
 Camera and inference freshness also account for the original sensor timestamp;

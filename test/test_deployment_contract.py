@@ -112,6 +112,19 @@ def test_active_deployment_has_no_manual_arm_or_lidar_contract():
         assert forbidden not in active
 
 
+def test_optional_stop_switches_are_forwarded_and_default_enabled():
+    import yaml
+
+    environment = yaml.safe_load((ROOT / "docker-compose.yml").read_text())[
+        "services"
+    ]["actual-activate"]["environment"]
+    example = (ROOT / ".env.example").read_text()
+    for check in ("LOW_CONFIDENCE", "LATERAL_TARGET", "APRILTAG"):
+        name = "LINE_TRACKING_STOP_ON_" + check
+        assert environment[name] == "${" + name + ":-true}"
+        assert name + "=true" in example
+
+
 def test_jetson_swin_l_base_build_contract():
     compose = (ROOT / "docker-compose.yml").read_text()
     env_example = (ROOT / ".env.example").read_text()

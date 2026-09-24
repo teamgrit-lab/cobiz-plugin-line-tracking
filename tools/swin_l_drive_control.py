@@ -27,6 +27,8 @@ class DriveConfig:
     max_lateral_target_m: float = 0.75
     max_camera_age_sec: float = 5.00
     max_inference_age_sec: float = 5.00
+    stop_on_low_confidence: bool = True
+    stop_on_lateral_target: bool = True
 
     def validate(self) -> None:
         positive = (
@@ -44,6 +46,11 @@ class DriveConfig:
             raise ValueError("max_forward_mps must be at most 1.0 m/s")
         if not 0.0 <= self.min_confidence <= 1.0:
             raise ValueError("min_confidence must be in [0, 1]")
+        if any(
+            type(enabled) is not bool
+            for enabled in (self.stop_on_low_confidence, self.stop_on_lateral_target)
+        ):
+            raise ValueError("stop-check switches must be boolean values")
 
 
 @dataclass(frozen=True)
@@ -76,12 +83,14 @@ def decide_drive(
             return DriveDecision.stop(f"{name}_stale")
     if path is None:
         return DriveDecision.stop("path_unavailable")
-    if not math.isfinite(path.confidence) or path.confidence < config.min_confidence:
+    if not math.isfinite(path.confidence) or (
+        config.stop_on_low_confidence and path.confidence < config.min_confidence
+    ):
         return DriveDecision.stop("path_low_confidence")
     lateral = _target_lateral(path.points_xy, config.lookahead_m)
     if lateral is None:
         return DriveDecision.stop("path_unavailable")
-    if abs(lateral) > config.max_lateral_target_m:
+    if config.stop_on_lateral_target and abs(lateral) > config.max_lateral_target_m:
         return DriveDecision.stop("path_lateral_target_large")
     heading = math.atan2(lateral, config.lookahead_m)
     yaw_rate = float(

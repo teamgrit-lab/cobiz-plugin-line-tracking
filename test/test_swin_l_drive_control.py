@@ -89,6 +89,51 @@ def test_unrestricted_path_mode_is_enabled_by_default(monkeypatch):
     assert args.unrestricted_path_mode is True
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_path_quality_stop_switches_come_from_env(monkeypatch, enabled):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_UNRESTRICTED_PATH_MODE", "false")
+    for check in ("LOW_CONFIDENCE", "LATERAL_TARGET"):
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check, str(enabled))
+    config = debug._drive_config_from_args(debug.parse_args(["task-drive"]))
+
+    low_confidence = _decide(_path(confidence=0.1), config=config)
+    far_target = _decide(_path(lateral=2.0), config=config)
+
+    assert low_confidence.reason == ("path_low_confidence" if enabled else "tracking")
+    assert far_target.reason == ("path_lateral_target_large" if enabled else "tracking")
+    if not enabled:
+        assert far_target.vx == pytest.approx(config.max_forward_mps)
+        assert far_target.yaw_rate == pytest.approx(config.max_yaw_rps)
+
+
+@pytest.mark.parametrize("source", ["camera", "inference"])
+@pytest.mark.parametrize("age", [None, 5.1, float("nan"), -1.0])
+def test_disabling_quality_stops_cannot_bypass_input_freshness(source, age):
+    config = DriveConfig(stop_on_low_confidence=False, stop_on_lateral_target=False)
+
+    command = _decide(
+        _path(confidence=0.1, lateral=2.0),
+        config=config,
+        **{f"{source}_age_sec": age},
+    )
+
+    assert command.reason == f"{source}_stale"
+    assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
+
+
+@pytest.mark.parametrize("path", [None, _path(confidence=float("nan"))])
+def test_disabling_quality_stops_still_requires_usable_path(path):
+    command = decide_drive(
+        path,
+        camera_age_sec=0.1,
+        inference_age_sec=0.1,
+        config=DriveConfig(stop_on_low_confidence=False, stop_on_lateral_target=False),
+    )
+
+    assert command.reason in ("path_unavailable", "path_low_confidence")
+    assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
+
+
 @pytest.mark.parametrize(
     "override,reason",
     [

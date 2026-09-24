@@ -73,6 +73,21 @@ def test_task_drive_apriltag_environment_and_cli(monkeypatch):
     assert args.apriltag_confirm_min_hits == 5
 
 
+@pytest.mark.parametrize("check", ["low_confidence", "lateral_target", "apriltag"])
+def test_stop_switch_environment_and_cli_override(monkeypatch, check):
+    env_name = "LINE_TRACKING_STOP_ON_" + check.upper()
+    monkeypatch.setitem(debug.ENV, env_name, "false")
+    args = debug.parse_args(["task-drive"])
+    assert getattr(args, "stop_on_" + check) is False
+
+    args = debug.parse_args(["task-drive", "--stop-on-" + check.replace("_", "-")])
+    assert getattr(args, "stop_on_" + check) is True
+
+    monkeypatch.setitem(debug.ENV, env_name, "invalid")
+    with pytest.raises(ValueError, match="must be a boolean"):
+        debug.parse_args(["task-drive"])
+
+
 @pytest.mark.parametrize("unrestricted", [True, False])
 def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
     monkeypatch,

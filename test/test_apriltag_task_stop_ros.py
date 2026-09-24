@@ -340,6 +340,60 @@ def test_candidate_hard_stops_immediately_and_confirms_after_full_window(
     ros.run(scenario)
 
 
+def test_optional_stops_can_be_disabled_but_camera_loss_and_cancel_still_stop(
+    ros, monkeypatch
+):
+    for check in ("LOW_CONFIDENCE", "LATERAL_TARGET", "APRILTAG"):
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check, "false")
+
+    def scenario(node):
+        ros.detect(tag_id=7, frame=1)
+        ros.establish_tracking(detection_heartbeat=False)
+        command_start = len(ros.published[SPORT])
+        for frame, stamp in ((2, 2.2), (3, 2.7), (4, 3.2), (5, 3.3)):
+            ros.now = stamp
+            ros.detect(tag_id=7, frame=frame)
+            node.publish_state()
+            assert ros.metrics()["drive_reason"] == "tracking"
+            assert ros.metrics()["apriltag"]["stop_enabled"] is False
+            assert ros.metrics()["apriltag"]["stream_ready"] is True
+            assert ros.task_state()["type"] == "TASK_STARTED"
+        assert all(
+            message.header.identity.api_id == 1008
+            and json.loads(message.parameter)["x"] == 0.5
+            for message in ros.published[SPORT][command_start:]
+        )
+        assert ros.metrics()["stop_checks"] == {
+            "camera_freshness": True,
+            "inference_freshness": True,
+            "path_available": True,
+            "low_confidence": False,
+            "lateral_target": False,
+            "apriltag": False,
+        }
+
+        ros.now = 7.2
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "camera_stale"
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+        # Restore perception, then verify explicit cancellation still takes control.
+        ros.now = 7.3
+        ros.camera_ready()
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "tracking"
+        node.on_task_event(Message(json.dumps({
+            "type": "TASK_ABORTED", "task_id": "tag-stop-1",
+            "action_name": "LINE_TRACKING",
+        })))
+        assert ros.task_state()["type"] == "TASK_ABORTED"
+        assert node.tasks.active is None
+        assert ros.published[SPORT][-2].header.identity.api_id == 1003
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario)
+
+
 def test_verification_defers_startup_failure_until_its_full_window(ros):
     def scenario(node):
         ros.start()
@@ -526,6 +580,7 @@ def test_tag_metrics_report_verification_and_confirmation(ros):
         node.publish_state()
         assert ros.metrics()["apriltag"] == {
             "topic": "/detections",
+            "stop_enabled": True,
             "stream_ready": False,
             "message_age_sec": None,
             "state": "no_tag",
@@ -541,6 +596,7 @@ def test_tag_metrics_report_verification_and_confirmation(ros):
         node.publish_state()
         assert ros.metrics()["apriltag"] == {
             "topic": "/detections",
+            "stop_enabled": True,
             "stream_ready": True,
             "message_age_sec": 0.0,
             "state": "verifying",

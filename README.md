@@ -191,8 +191,10 @@ image. An explicit task value overrides the environment default. Metrics
 report `path_mask_class: 0` and `path_surface: "ROAD_OR_SIDEWALK"`. Existing
 stop checks still apply; no road/sidewalk region means no path.
 
-The default duration is 500 seconds. Requests above 1000 seconds are capped at
-1000 seconds. The listener
+The default duration is 500 seconds. Requests above 10000 seconds are capped at
+10000 seconds. Existing deployments with `LINE_TRACKING_MAX_DURATION_SEC=1000`
+in `.env` must change it to `10000` and recreate the service to apply the new limit.
+The listener
 reports task state on `/task_state`; core owns any corresponding HTTP report.
 It sends stop commands on server cancellation, `SIGTERM`, publish errors, stale
 required camera/inference inputs, an unavailable path that cannot use the
@@ -339,7 +341,7 @@ block tracking.
 |---|---|
 | `startup_hold` | 작업 시작 후 2초 동안 0 속도 유지 |
 | `task_idle` | 활성 작업 없음. 종료 직후 약 1초 동안 0 속도를 반복한 뒤 Sport publisher 해제 |
-| `task_complete` / `TASK_COMPLETED` | 정상 추종/허용된 회전 유지 상태로 작업 시간 종료. 기본 500초, 요청 최대 1000초. 정지 후 완료 보고하며 `/task_state`에 reason은 생략될 수 있음 |
+| `task_complete` / `TASK_COMPLETED` | 정상 추종/허용된 회전 유지 상태로 작업 시간 종료. 기본 500초, 요청 최대 10000초. 정지 후 완료 보고하며 `/task_state`에 reason은 생략될 수 있음 |
 | `apriltag_confirmed:<ID>` / `TASK_COMPLETED` | AprilTag 확인 성공. 정지 후 완료 보고 |
 | `inputs_not_ready` | 최초 판단 전 `ready_reason`의 초기값. 실제 입력 검사는 위 카메라·추론·Path 사유로 구체화 |
 

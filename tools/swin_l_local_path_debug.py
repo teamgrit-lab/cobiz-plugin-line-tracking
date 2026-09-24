@@ -1641,7 +1641,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument(
                 "--max-task-duration-sec",
                 type=float,
-                default=_env_float("LINE_TRACKING_MAX_DURATION_SEC", 1000.0),
+                default=_env_float("LINE_TRACKING_MAX_DURATION_SEC", 10000.0),
             )
             live.add_argument(
                 "--unsafe-timeout-sec",

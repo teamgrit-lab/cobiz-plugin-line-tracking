@@ -50,7 +50,7 @@ def test_task_drive_defaults(monkeypatch):
     assert args.apriltag_confirm_window_sec == 1.0
     assert args.apriltag_confirm_min_hits == 3
     assert args.default_task_duration_sec == 500.0
-    assert args.max_task_duration_sec == 1000.0
+    assert args.max_task_duration_sec == 10000.0
     assert not hasattr(args, "drive_enabled")
     assert not hasattr(args, "calibration_confirmed")
     assert not hasattr(args, "safety_topic")

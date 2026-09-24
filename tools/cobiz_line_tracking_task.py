@@ -24,7 +24,7 @@ _ROUTES = {
 @dataclass(frozen=True)
 class TaskPolicy:
     default_duration_sec: float = 500.0
-    max_duration_sec: float = 1000.0
+    max_duration_sec: float = 10000.0
     unsafe_timeout_sec: float = 2.0
     startup_hold_sec: float = 2.0
     default_selected_mask: int = 2

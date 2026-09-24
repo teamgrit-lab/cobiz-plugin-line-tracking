@@ -89,12 +89,12 @@ def test_default_compose_is_cobiz_task_listener():
     assert listener["environment"]["LINE_TRACKING_DEFAULT_DURATION_SEC"].endswith(
         ":-500}"
     )
-    assert listener["environment"]["LINE_TRACKING_MAX_DURATION_SEC"].endswith(":-1000}")
+    assert listener["environment"]["LINE_TRACKING_MAX_DURATION_SEC"].endswith(":-10000}")
     assert "LINE_TRACKING_MAX_FORWARD_MPS=0.50" in (ROOT / ".env.example").read_text()
     assert (
         "LINE_TRACKING_DEFAULT_DURATION_SEC=500" in (ROOT / ".env.example").read_text()
     )
-    assert "LINE_TRACKING_MAX_DURATION_SEC=1000" in (ROOT / ".env.example").read_text()
+    assert "LINE_TRACKING_MAX_DURATION_SEC=10000" in (ROOT / ".env.example").read_text()
     assert "SWIN_L_OVERLAY_TOPIC" not in (ROOT / ".env.example").read_text()
 
 

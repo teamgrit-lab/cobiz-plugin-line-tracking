@@ -68,9 +68,15 @@ def test_missing_duration_uses_five_hundred_seconds():
 
 @pytest.mark.parametrize(
     ("requested", "expected"),
-    [(1000, 1000.0), (1000.1, 1000.0), (5000, 1000.0)],
+    [
+        (1000, 1000.0),
+        (5000, 5000.0),
+        (10000, 10000.0),
+        (10000.1, 10000.0),
+        (20000, 10000.0),
+    ],
 )
-def test_duration_is_capped_at_one_thousand_seconds(requested, expected):
+def test_duration_is_capped_at_ten_thousand_seconds(requested, expected):
     tasks = LineTrackingTasks()
 
     state = tasks.handle_event(

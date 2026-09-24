@@ -106,6 +106,19 @@ No process can publish a final command after power loss or `SIGKILL`.
 `.env.example` is not a calibrated deployment file. Before operation, validate
 the camera-to-`base_link` geometry and Swin-L path against the installed A2.
 
+Road and sidewalk share the same ROI. Its default bottom width is 84% of the
+image, top width is 24%, and height is 55% (top at image y=45%):
+
+```dotenv
+SWIN_L_ROI_POLYGON=0.08,1.00,0.92,1.00,0.62,0.45,0.38,0.45
+```
+
+An existing deployment `.env` overrides this default. Update its value and
+recreate the service to apply it. The ROI also defines the camera-to-ground
+homography: moving its top changes which pixels map to the configured 8 m far
+distance. Check known ground points after changing it; this setting does not
+measure the distance from the camera.
+
 1. In the debug profile, adjust `SWIN_L_ROI_POLYGON` while inspecting the
    `nav_msgs/Path` local path in RViz; use the offline overlay workflow for a
    rendered camera view.
@@ -123,6 +136,50 @@ SWIN_L_IMAGE_TOPIC=/a2/front_camera/image_raw
 SWIN_L_EVALUATION_WIDTH=640
 SWIN_L_EVALUATION_HEIGHT=360
 ```
+
+## Path generation and motion gates
+
+The selected road (`1`) or sidewalk (`2`) mask is projected into a 280-by-160
+ground grid spanning the configured 3-8 m forward range and +/-3.5 m sideways.
+A 5-by-5 morphological closing fills small mask gaps. Each forward-distance
+row selects a contiguous region at least 0.12 m wide, favoring width and
+continuity with the preceding row. Its center contributes to a quadratic fit,
+which is sampled into 20 path points and clipped to +/-3.5 m laterally.
+
+With the deployed default `SWIN_L_UNRESTRICTED_PATH_MODE=true`, at least two
+usable rows are sufficient. No path is produced when fewer than two rows have
+a qualifying region, including when the selected class is absent from the
+ROI. An invalid new estimate clears the previous path. Valid-ratio and drive
+confidence thresholds, temporal smoothing, and the smoother's hold expiry are
+bypassed in this mode. Sparse observations can therefore be extrapolated over
+the full forward range; neither fitting nor gap filling establishes obstacle
+clearance. With unrestricted mode disabled, the default valid-row requirement
+is 35% (56 of 160 rows), and the smoother can retain a previous valid path for
+up to 0.90 seconds.
+
+A visible path does not imply permission to move. The default drive gates are:
+
+| Condition | Result |
+|---|---|
+| No accepted task | No Move publisher after control release |
+| First 2 seconds of a task | Zero velocity |
+| Path update age greater than 0.45 seconds | Zero velocity (`path_stale`) |
+| Camera or inference source age greater than 5 seconds, missing, or invalid | Zero velocity |
+| Missing path, non-finite points, invalid ordering, or no coverage of x=4 m | Zero velocity |
+| Absolute lateral target at x=4 m greater than 0.75 m | Zero velocity |
+| Non-finite confidence; or confidence below 0.49 when unrestricted mode is disabled | Zero velocity |
+| AprilTag candidate | Hard stop during confirmation; confirmed tag completes the task |
+
+Path age starts when the inference result becomes available, while camera and
+inference freshness also account for the original sensor timestamp. Repeating
+the same path at 10 Hz does not reset either age. Tracking sends the configured
+forward speed (default 0.50 m/s), zero lateral velocity, and a heading-based yaw
+rate capped at +/-0.18 rad/s. A task aborts if tracking is unavailable at the
+end of startup hold, or if an unsafe tracking condition persists for 2 seconds
+after tracking has begun. Server cancellation, task termination, inference or
+publish faults, and handled shutdown also stop motion. AprilTag confirmation
+has its own stop-and-confirm lifecycle; detector-stream loss alone does not
+block tracking.
 
 ## FP16 TensorRT Swin-L and Jetson image
 

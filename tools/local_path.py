@@ -18,15 +18,16 @@ import cv2
 import numpy as np
 
 
+# Preserve the 84% bottom and 24% top widths; cover the lower 55% of the image.
 DEFAULT_ROI_POLYGON = (
     0.08,
     1.00,
     0.92,
     1.00,
     0.62,
-    0.22,
+    0.45,
     0.38,
-    0.22,
+    0.45,
 )
 
 

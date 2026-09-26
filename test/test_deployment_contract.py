@@ -41,7 +41,8 @@ def test_swin_l_debug_service_is_explicit_and_has_no_drive_contract():
     debug_service = yaml.safe_load(compose)["services"]["debugging-swin-l"]
     assert "LINE_TRACKING_SPORT_REQUEST_TOPIC" not in debug_service["environment"]
     assert (
-        debug_service["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384-fp16"
+        debug_service["environment"]["SWIN_L_PROFILE"]
+        == "${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}"
     )
     assert "SWIN_L_MODE:-ros2" in entrypoint
     assert 'swin_l_local_path_debug.py "${mode}"' in entrypoint
@@ -64,7 +65,9 @@ def test_default_compose_is_cobiz_task_listener():
     listener = services["actual-activate"]
     assert "profiles" not in listener
     assert listener["environment"]["SWIN_L_MODE"] == "task-drive"
-    assert listener["environment"]["SWIN_L_PROFILE"] == "swin-l-aspect-224x384-fp16"
+    assert listener["environment"]["SWIN_L_PROFILE"] == (
+        "${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}"
+    )
     assert listener["environment"]["SWIN_L_BACKEND"].endswith(":-tensorrt}")
     assert listener["environment"]["SWIN_L_ALLOW_BACKEND_FALLBACK"] == "false"
     assert "SWIN_L_OVERLAY_TOPIC" not in listener["environment"]

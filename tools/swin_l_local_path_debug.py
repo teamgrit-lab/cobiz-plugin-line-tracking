@@ -13,7 +13,7 @@
 #   "transformers==5.16.1",
 # ]
 # ///
-"""Run Swin-L surface segmentation and local path smoothing.
+"""Run Mapillary surface segmentation and local path smoothing.
 
 The ``mcap`` mode replays the supplied rosbag without ROS 2 and writes a
 camera-rate MP4 overlay.  Swin-L is intentionally scheduled at a lower rate;
@@ -47,6 +47,7 @@ from best_so_far_runtime import (
     DEFAULT_EVALUATION_SIZE,
     INFERENCE_BACKENDS,
     PROFILE_NAMES,
+    R50_PROFILE,
     SWIN_L_ASPECT_FP16_PROFILE,
     BestSoFarConfig,
     BestSoFarResult,
@@ -727,14 +728,19 @@ def _path_message(path: SmoothedPath | None, header: Any, frame_id: str) -> Any:
 def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
     """Reject task-driven control unless its model and calibration are explicit."""
 
-    pinned = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
-    if args.profile != SWIN_L_ASPECT_FP16_PROFILE:
-        raise ValueError("task-drive mode is pinned to swin-l-aspect-224x384-fp16")
+    if args.profile not in (SWIN_L_ASPECT_FP16_PROFILE, R50_PROFILE):
+        raise ValueError(
+            "task-drive mode requires a pinned FP16 deployment profile: "
+            f"{SWIN_L_ASPECT_FP16_PROFILE} or {R50_PROFILE}"
+        )
+    pinned = resolve_profile(args.profile)
     if args.model_id not in (None, pinned.model_id) or args.model_revision not in (
         None,
         pinned.model_revision,
     ):
         raise ValueError("task-drive mode cannot override the pinned checkpoint")
+    if args.profile == R50_PROFILE and args.backend != "pytorch":
+        raise ValueError("R50 task-drive mode requires the pytorch backend")
     if tuple(args.evaluation_size) != DEFAULT_EVALUATION_SIZE:
         raise ValueError("task-drive mode requires a 360x640 score map")
     if args.path_frame_id != "base_link":
@@ -779,7 +785,7 @@ def run_ros2(args: argparse.Namespace) -> int:
     local_config = _local_path_config_from_args(args)
     segmenter = BestSoFarSegmenter(_runtime_config(args))
     if task_mode and segmenter.device.type != "cuda":
-        raise RuntimeError("Swin-L task-drive mode requires a CUDA model device")
+        raise RuntimeError("task-drive mode requires a CUDA model device")
     smoothers = {
         mask_class: LocalPathSmoother(local_config)
         for mask_class in (PATH_MASK_CLASSES if task_mode else (args.path_mask_class,))

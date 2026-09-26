@@ -26,7 +26,7 @@ services:
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
-      SWIN_L_PROFILE: swin-l-aspect-224x384-fp16
+      SWIN_L_PROFILE: ${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}
       SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
       SWIN_L_BACKEND: ${SWIN_L_BACKEND:-tensorrt}
@@ -41,7 +41,7 @@ services:
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
 
-  # Swin-L task-driving mode. It listens for Cobiz custom actions and creates
+  # Swin-L or R50 task-driving mode. It listens for Cobiz custom actions and creates
   # direct Sport requests only for an accepted LINE_TRACKING task.
   actual-activate:
     build: *swin-l-build
@@ -60,7 +60,7 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_MODE: task-drive
-      SWIN_L_PROFILE: swin-l-aspect-224x384-fp16
+      SWIN_L_PROFILE: ${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}
       SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
       SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
       SWIN_L_BACKEND: ${SWIN_L_BACKEND:-tensorrt}

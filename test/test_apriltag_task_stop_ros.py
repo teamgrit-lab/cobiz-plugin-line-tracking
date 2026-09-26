@@ -265,6 +265,63 @@ def ros(monkeypatch):
     return RosHarness(monkeypatch)
 
 
+def test_r50_task_drive_accepts_720p_rgb_and_keeps_camera_stop(ros, monkeypatch):
+    configurations = []
+    frames = []
+
+    def segment(frame, *, color_order):
+        assert frame.shape == (720, 1280, 3)
+        assert color_order == "rgb"
+        assert frame[0, 0].tolist() == [20, 30, 40]
+        frames.append(frame)
+        return SimpleNamespace(
+            selected_mask=np.full((360, 640), 2, np.uint8),
+            inference_seconds=0.01,
+        )
+
+    def create_segmenter(config):
+        configurations.append(config)
+        return SimpleNamespace(device=SimpleNamespace(type="cuda"), segment=segment)
+
+    monkeypatch.setattr(debug, "BestSoFarSegmenter", create_segmenter)
+
+    def scenario(node):
+        camera = Message(bytes([20, 30, 40]) * 720 * 1280)
+        camera.height, camera.width, camera.step = 720, 1280, 1280 * 3
+        camera.header.stamp = ros.stamp()
+        node.on_image(camera)
+        deadline = time.perf_counter() + 3.0
+        while True:
+            node.publish_state()
+            if ros.metrics()["inference_count"]:
+                break
+            assert time.perf_counter() < deadline, ros.errors
+            time.sleep(0.001)
+
+        assert ros.metrics()["profile"] == debug.R50_PROFILE
+        assert ros.metrics()["path_tracked"] is True
+        assert ros.published["/line_tracking/swin_l/local_path"][-1].poses
+        assert SPORT not in ros.published
+        ros.start()
+        ros.now = 2.1
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "tracking"
+        assert json.loads(ros.published[SPORT][-1].parameter)["x"] == 0.5
+
+        ros.now = 6.0
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "camera_stale"
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(
+        scenario, "--profile", debug.R50_PROFILE, "--backend", "pytorch",
+        "--path-mask-class", "0",
+    )
+    assert len(configurations) == len(frames) == 1
+    assert configurations[0].profile == debug.R50_PROFILE
+    assert configurations[0].backend == "pytorch"
+
+
 def test_live_callback_queues_messages_and_only_latest_frame_is_decoded(ros, monkeypatch):
     release_worker = threading.Event()
     original_queue = debug.LatestFrameQueue

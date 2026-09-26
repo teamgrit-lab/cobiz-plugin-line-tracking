@@ -314,9 +314,70 @@ def test_cobiz_task_listener_pins_swin_profile():
         debug._validate_task_drive_preflight(args)
 
 
-def test_task_drive_prohibits_automatic_backend_fallback():
-    args = debug.parse_args(["task-drive", "--allow-backend-fallback"])
+@pytest.mark.parametrize("profile", [debug.SWIN_L_ASPECT_FP16_PROFILE, debug.R50_PROFILE])
+def test_task_drive_prohibits_automatic_backend_fallback(profile):
+    args = debug.parse_args(
+        ["task-drive", "--profile", profile, "--backend", "pytorch", "--allow-backend-fallback"]
+    )
     with pytest.raises(ValueError, match="prohibits"):
+        debug._validate_task_drive_preflight(args)
+
+
+def test_task_drive_selects_pinned_r50_runtime_from_environment(monkeypatch):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_PROFILE", debug.R50_PROFILE)
+    monkeypatch.setitem(debug.ENV, "SWIN_L_BACKEND", "pytorch")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_DEVICE", "cuda")
+    args = debug.parse_args(["task-drive"])
+
+    debug._validate_task_drive_preflight(args)
+    config = debug._runtime_config(args)
+    config.validate()
+    profile = debug.resolve_profile(config.profile)
+    assert profile.model_id == "facebook/maskformer-resnet50-vistas"
+    assert profile.model_revision == "ae4b8c2590c0a090fc32d5c217d78738a2dd4b19"
+    assert (profile.input_height, profile.input_width) == (360, 640)
+    assert profile.precision == "fp16"
+    assert config.backend == "pytorch"
+    assert config.device == "cuda"
+
+
+def test_task_drive_rejects_r50_with_swin_tensorrt_engine():
+    args = debug.parse_args(
+        ["task-drive", "--profile", debug.R50_PROFILE, "--backend", "tensorrt"]
+    )
+    with pytest.raises(ValueError, match="R50.*pytorch"):
+        debug._validate_task_drive_preflight(args)
+
+
+@pytest.mark.parametrize("profile", [debug.SWIN_L_ASPECT_FP16_PROFILE, debug.R50_PROFILE])
+@pytest.mark.parametrize("field", ["model_id", "model_revision"])
+def test_task_drive_keeps_each_profiles_checkpoint_pinned(profile, field):
+    pinned = debug.resolve_profile(profile)
+    args = debug.parse_args(
+        [
+            "task-drive", "--profile", profile, "--backend", "pytorch",
+            "--model-id", pinned.model_id, "--model-revision", pinned.model_revision,
+        ]
+    )
+    debug._validate_task_drive_preflight(args)
+    setattr(args, field, "different-checkpoint")
+    with pytest.raises(ValueError, match="cannot override the pinned checkpoint"):
+        debug._validate_task_drive_preflight(args)
+
+
+@pytest.mark.parametrize(
+    "arguments,message",
+    [
+        (["--evaluation-size", "720", "1280"], "360x640"),
+        (["--path-frame-id", "camera"], "base_link"),
+        (["--output-hz", "5"], "at least 10 Hz"),
+    ],
+)
+def test_r50_keeps_live_path_and_control_requirements(arguments, message):
+    args = debug.parse_args(
+        ["task-drive", "--profile", debug.R50_PROFILE, "--backend", "pytorch", *arguments]
+    )
+    with pytest.raises(ValueError, match=message):
         debug._validate_task_drive_preflight(args)
 
 

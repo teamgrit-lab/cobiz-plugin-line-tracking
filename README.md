@@ -1,9 +1,11 @@
 # cobiz-plugin-line-tracking
 
 `actual-activate` is a Cobiz `LINE_TRACKING` task listener for the Unitree A2.
-For an accepted task it follows the selected Swin-L surface-center path with
-the pinned FP16 TensorRT profile `swin-l-aspect-224x384-fp16`, and it uses AprilTag
-detections to stop and complete that task. With no accepted task, it publishes
+For an accepted task it follows the selected surface-center path, defaulting to
+the pinned Swin-L FP16 TensorRT profile `swin-l-aspect-224x384-fp16`. The existing
+MaskFormer R50 profile `r50-fp16-640x360` is also supported with the PyTorch
+backend. It uses AprilTag detections to stop and complete the task. With no
+accepted task, it publishes
 no Sport Move request. The default path class is sidewalk
 (`SWIN_L_PATH_MASK_CLASS=2`); a task can request road (`1`) or road/sidewalk
 combined (`0`) with
@@ -364,7 +366,7 @@ block tracking.
 잘못된 최상위 이벤트 JSON, 잘못된 task ID/다른 action, 중복 등록 이벤트 등은
 대체로 무시하며 별도 주행 정지 사유가 아니다. 프로세스 실행 전에는 ROS 메시지
 패키지·CUDA·모델/엔진 로딩 실패, TensorRT manifest/체크섬/버전 불일치, 잘못된
-환경변수·ROI·속도/시간 설정, 고정 profile/360×640 출력/`base_link` 조건 위반,
+환경변수·ROI·속도/시간 설정, 허용 profile·고정 checkpoint/360×640 출력/`base_link` 조건 위반,
 출력 주기 10 Hz 미만, `use_sim_time=true`, 자동 backend fallback 허용 등이
 시작 자체를 막을 수 있다. 이 경우 아직 작업을 수락하지 않았으므로
 `/task_state` 대신 컨테이너 시작 로그를 확인한다.
@@ -378,7 +380,7 @@ AprilTag 검출 스트림 단절만으로는 별도 정지하지 않는다. 단,
 
 ## FP16 TensorRT Swin-L and Jetson image
 
-The live task profile is fixed to `swin-l-aspect-224x384-fp16`:
+The default live task profile is `swin-l-aspect-224x384-fp16`:
 
 - model: `facebook/mask2former-swin-large-mapillary-vistas-semantic`
 - revision: `4772b6bf101d91f2534c106dc524d906aeb3c68a`
@@ -420,6 +422,57 @@ TensorRT version, and GPU compute capability before accepting inference. It
 never falls back automatically in `task-drive` mode. Set
 `SWIN_L_BACKEND=pytorch` explicitly to use the retained FP16 PyTorch rollback;
 `SWIN_L_ALLOW_BACKEND_FALLBACK=true` is allowed only for debug/offline use.
+
+## MaskFormer R50 on Jetson
+
+Both `actual-activate` and `debugging-swin-l` read `SWIN_L_PROFILE` from `.env`.
+To select the existing R50 runtime, set both the profile and backend:
+
+```dotenv
+SWIN_L_PROFILE=r50-fp16-640x360
+SWIN_L_BACKEND=pytorch
+SWIN_L_DEVICE=cuda
+SWIN_L_TRT_AUTO_BUILD=false
+SWIN_L_ALLOW_BACKEND_FALLBACK=false
+```
+
+R50 uses `facebook/maskformer-resnet50-vistas` at revision
+`ae4b8c2590c0a090fc32d5c217d78738a2dd4b19`. Its PyTorch weights are loaded through
+the existing Hugging Face cache, then run in FP16 on CUDA. The image already
+includes its dependencies; no ONNX conversion or TensorRT engine build is needed.
+An R50/TensorRT combination fails before any startup engine build.
+
+The 720p camera topic can stay unchanged: the processor resizes each selected
+frame to 640x360 before model-specific padding, and the output score map remains
+640x360 for BEV and Path calculation. Latest-frame selection, RGB handling,
+BEV caching, task-selected masks 0/1/2, and Sport control use the shared pipeline.
+CUDA, checkpoint pinning, camera freshness, task lifecycle, and control checks
+still apply. The live inference target remains `SWIN_L_INFERENCE_HZ` (default 4).
+
+R50 retains its existing label aggregation and cleanup: Bike Lane and Manhole
+join the sidewalk group, while Parking and Service Lane are excluded from the
+road group. Its temporal hysteresis margin defaults to zero. This can change
+the resulting Path, including the union selected by mask 0; changing models
+does not establish equivalent segmentation quality or a Jetson speedup.
+
+After updating `.env`, rebuild/recreate the selected service on the Jetson:
+
+```bash
+docker compose up -d --build actual-activate
+docker compose logs -f actual-activate
+```
+
+For inspection without Sport commands, use `debugging-swin-l` instead of
+`actual-activate`. Avoid running both while comparing inference speed because
+they share the GPU. Check the metrics `profile`, `inference_count`,
+and `performance` together with the generated Path. The Swin-L-specific
+`swin_l_rosbag_overlay.py` wrapper remains pinned to Swin-L; use
+`swin_l_local_path_debug.py mcap --profile r50-fp16-640x360 --backend pytorch`
+with the input/output arguments for offline R50 Path inspection.
+
+To restore the default runtime, set `SWIN_L_PROFILE=swin-l-aspect-224x384-fp16`
+and `SWIN_L_BACKEND=tensorrt`, then recreate the service with its matching
+Swin-L engine and manifest.
 
 ## Jetson inference stability
 

@@ -89,6 +89,8 @@ def test_default_compose_is_cobiz_task_listener():
         "/task_state}"
     )
     assert listener["environment"]["LINE_TRACKING_MAX_FORWARD_MPS"].endswith(":-0.50}")
+    assert listener["environment"]["LINE_TRACKING_MAX_TARGET_HEADING_DEG"].endswith(":-60.0}")
+    assert "LINE_TRACKING_MAX_TARGET_HEADING_DEG=60.0" in (ROOT / ".env.example").read_text()
     assert listener["environment"]["LINE_TRACKING_DEFAULT_DURATION_SEC"].endswith(
         ":-500}"
     )
@@ -130,25 +132,6 @@ def test_optional_stop_switches_are_forwarded_and_default_enabled():
         "${LINE_TRACKING_BYPASS_PATH_STOPS:-false}"
     )
     assert "LINE_TRACKING_BYPASS_PATH_STOPS=false" in example
-
-
-def test_adaptive_control_settings_are_forwarded_to_the_live_service():
-    import yaml
-
-    environment = yaml.safe_load((ROOT / "docker-compose.yml").read_text())[
-        "services"
-    ]["actual-activate"]["environment"]
-    example = (ROOT / ".env.example").read_text()
-    expected = {
-        "ADAPTIVE_CONTROL": "true", "SLOW_AGE_SEC": "0.50", "STOP_AGE_SEC": "1.20",
-        "CURVE_SLOW_RADIUS_M": "4.0", "TURN_ENTER_DEG": "15.0", "TURN_EXIT_DEG": "5.0",
-        "TURN_STOP_SEC": "0.60", "TURN_PULSE_SEC": "0.35", "TURN_SETTLE_SEC": "0.15",
-        "TURN_TIMEOUT_SEC": "30.0", "TURN_CONFIRM_FRAMES": "2", "MAX_ACCEL_MPS2": "0.30",
-    }
-    for suffix, default in expected.items():
-        key = "LINE_TRACKING_" + suffix
-        assert environment[key] == "${" + key + ":-" + default + "}"
-        assert key + "=" + default in example
 
 
 def test_jetson_swin_l_base_build_contract():

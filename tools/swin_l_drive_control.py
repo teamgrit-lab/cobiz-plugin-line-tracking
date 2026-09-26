@@ -25,7 +25,7 @@ class DriveConfig:
     heading_gain: float = 1.0
     lookahead_m: float = 4.0
     min_confidence: float = 0.49
-    max_lateral_target_m: float = 0.75
+    max_target_heading_deg: float = 60.0
     max_camera_age_sec: float = 5.00
     max_inference_age_sec: float = 5.00
     stop_on_low_confidence: bool = True
@@ -38,7 +38,7 @@ class DriveConfig:
             self.max_yaw_rps,
             self.heading_gain,
             self.lookahead_m,
-            self.max_lateral_target_m,
+            self.max_target_heading_deg,
             self.max_camera_age_sec,
             self.max_inference_age_sec,
         )
@@ -46,6 +46,8 @@ class DriveConfig:
             raise ValueError("drive limits must be finite and positive")
         if self.max_forward_mps > MAX_FORWARD_MPS_HARD_LIMIT:
             raise ValueError("max_forward_mps must be at most 1.0 m/s")
+        if self.max_target_heading_deg >= 90.0:
+            raise ValueError("max_target_heading_deg must be in (0, 90)")
         if not 0.0 <= self.min_confidence <= 1.0:
             raise ValueError("min_confidence must be in [0, 1]")
         if any(
@@ -57,6 +59,12 @@ class DriveConfig:
             )
         ):
             raise ValueError("stop-check switches must be boolean values")
+
+    @property
+    def max_lateral_target_m(self) -> float:
+        """Equivalent lateral limit at the configured lookahead distance."""
+
+        return self.lookahead_m * math.tan(math.radians(self.max_target_heading_deg))
 
 
 @dataclass(frozen=True)
@@ -78,12 +86,16 @@ def decide_drive(
     inference_age_sec: float | None,
     config: DriveConfig,
     last_valid_yaw_rate: float | None = None,
+    last_valid_forward_mps: float | None = None,
     path_unavailable_inferences: int = 0,
 ) -> DriveDecision:
-    """Track a path or briefly hold its last yaw while sensor inputs stay fresh.
+    """Slow forward motion when heading demand exceeds available yaw rate.
 
     The caller counts consecutive unavailable results at inference completion;
     repeatedly evaluating the same result must not advance that count.
+    During an optional path-loss hold, retain the last forward speed as well as
+    yaw so losing a sharp-turn path cannot accelerate the robot. Older callers
+    that supply only a saved yaw retain their configured speed behavior.
     """
 
     config.validate()
@@ -100,14 +112,21 @@ def decide_drive(
         return DriveDecision.stop("path_low_confidence")
     lateral = path_target_lateral(path, config.lookahead_m)
     if lateral is None:
+        held_speed = (
+            config.max_forward_mps
+            if last_valid_forward_mps is None
+            else last_valid_forward_mps
+        )
         if (
             config.bypass_path_stops
             and path_unavailable_inferences < MAX_PATH_UNAVAILABLE_INFERENCES
             and last_valid_yaw_rate is not None
             and math.isfinite(last_valid_yaw_rate)
+            and math.isfinite(held_speed)
+            and held_speed >= 0.0
         ):
             return DriveDecision(
-                config.max_forward_mps,
+                min(held_speed, config.max_forward_mps),
                 0.0,
                 float(np.clip(last_valid_yaw_rate, -config.max_yaw_rps, config.max_yaw_rps)),
                 "tracking_path_hold",
@@ -120,10 +139,19 @@ def decide_drive(
     ):
         return DriveDecision.stop("path_lateral_target_large")
     heading = math.atan2(lateral, config.lookahead_m)
+    requested_yaw = config.heading_gain * heading
     yaw_rate = float(
-        np.clip(config.heading_gain * heading, -config.max_yaw_rps, config.max_yaw_rps)
+        np.clip(requested_yaw, -config.max_yaw_rps, config.max_yaw_rps)
     )
-    return DriveDecision(config.max_forward_mps, 0.0, yaw_rate, "tracking")
+    # Once yaw saturates, scale forward speed by the same ratio. This preserves
+    # the requested yaw/speed ratio instead of widening the commanded turn.
+    speed_scale = config.max_yaw_rps / max(config.max_yaw_rps, abs(requested_yaw))
+    return DriveDecision(
+        config.max_forward_mps * speed_scale,
+        0.0,
+        yaw_rate,
+        "tracking_slow_turn" if speed_scale < 1.0 else "tracking",
+    )
 
 
 def path_target_lateral(path: SmoothedPath | None, lookahead_m: float) -> float | None:

@@ -90,7 +90,10 @@ def preview_yaw(path: SmoothedPath | None, config: DriveConfig) -> float | None:
     decision = decide_drive(
         path, camera_age_sec=0.0, inference_age_sec=0.0, config=config
     )
-    return decision.yaw_rate if decision.reason == "tracking" else None
+    return (
+        decision.yaw_rate
+        if decision.reason in ("tracking", "tracking_slow_turn") else None
+    )
 
 
 def video_path_config(roi_top: float) -> LocalPathConfig:

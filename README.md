@@ -21,8 +21,7 @@ event. Empty `detections` arrays still expose detector liveness in metrics.
 
 - A valid Cobiz payload begins with a two-second zero-command startup hold.
 - Motion requires fresh camera/inference inputs and an available local path,
-  with curvature/age speed regulation by default. The legacy controller can
-  briefly reuse a saved yaw when its path-stop bypass is enabled.
+  or a saved path-derived yaw when the path-stop bypass is enabled.
 - The first AprilTag candidate immediately sends a hard zero-command stop.
 - The task completes only after three frames for the same tag ID arrive across
   a full one-second confirmation window. Completion sends the hard stop before
@@ -64,82 +63,52 @@ SWIN_L_APRILTAG_MAX_AGE_SEC=1.0
 SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC=1.0
 SWIN_L_APRILTAG_CONFIRM_MIN_HITS=3
 LINE_TRACKING_MAX_FORWARD_MPS=0.50
+LINE_TRACKING_MAX_TARGET_HEADING_DEG=60.0
 ```
 
-## 곡률·지연 기반 감속과 정지 후 방향 정렬
+## 목표 방향에 따른 전진 감속
 
-`actual-activate`는 기본적으로 `LINE_TRACKING_ADAPTIVE_CONTROL=true`를 사용한다.
-R50와 Swin-L 모두 같은 제어를 사용하며 odometry/IMU/TF 기반 이동 보정은 하지 않는다.
-추론 모델과 입력 해상도 설정은 그대로 사용할 수 있다.
+급하게 꺾어야 할수록 전진 속도를 줄인다. 목표 방향은 기존 방식대로
+`heading = atan2(y_at_lookahead, lookahead)`로 계산하며 기본 lookahead는 4m다.
+허용 목표각은 좌우 각각 **60° 이하**로, 이전 횡방향 ±0.75m 제한을 대체한다.
+각도 제한이 켜져 있을 때 60°를 초과하면 `path_lateral_target_large`로 정지한다.
+60°는 Path 목표각이며 회전 속도는 기존 **±0.18rad/s(약 ±10.31°/초)**다.
 
-- 정상 추종: 전방 목표점의 pure-pursuit 곡률과 보이는 Path의 최대 굽음을 계산해
-  전진 속도를 제한한다. `LINE_TRACKING_MAX_FORWARD_MPS`는 고정 속도가 아닌 상한이다.
-  좌우 이동은 0이며 최대 yaw는 기존 ±0.18 rad/s(약 ±10.31°/초)를 유지한다.
-- 지연: 카메라와 추론에 사용한 원본 이미지의 나이 중 큰 값을 사용한다.
-  0.50초까지 정상 상한, 0.50~1.20초는 선형 감속, 1.20초 이상은
-  `perception_delay_stop`으로 전진·회전 모두 0을 요청한다. 결과 발행 시각으로
-  나이를 초기화하지 않는다. 기존 5초 sensor watchdog도 유지한다.
-- 급회전: 목표 방향이 15° 이상이거나, 활성화된 기존 횡방향 기준(전방 4m에서
-  ±0.75m)을 넘으면 `turn_braking`으로 0 속도를 요청한다. 횡방향 조건 때문에
-  약 10.62°부터 정렬에 들어갈 수도 있다.
-- 방향 정렬: 0.60초 정지 대기 후에 촬영된 서로 다른 프레임 2개가 회전 방향을
-  일관되게 지지할 때만 `turn_aligning`으로 전진 0, yaw만 출력한다. 연속 목표각
-  변화가 진입 각도보다 크면 확인 횟수를 다시 센다. 반복된 제어 tick은 확인으로 세지 않는다.
-- 각 회전은 명령상 0.35초이며 다음 제어 tick에서 0으로 돌아간다. 0.15초 안정화
-  이후 촬영된 새 프레임을 기다린다. 회전 중 이미지가 오래되거나 Path가 사라지면
-  바로 0을 요청한다. 제어 스케줄 지연과 로봇의 실제 응답 지연은 이 시간에 포함되지 않는다.
-- 목표 방향이 5° 이내이고 횡방향 기준도 충족한 새 프레임 2개를 확인하면
-  `turn_reacquired`를 거쳐 전진을 재개한다. 가속 상한은 0.30m/s²이며 감속/정지
-  요청은 즉시 적용한다. odometry가 없으므로 실제 정지 여부는 확인하지 못한다.
-- 회전 시도는 최대 30초다. 초과하면 `turn_timeout`으로 정지를 유지하며,
-  기존 작업 중단 정책이 적용된다. 정렬 중에는 일반 2초 unsafe 타이머가 시작되지
-  않지만, 정렬만으로 작업 시간 만료를 정상 완료 처리하지 않는다.
-- 작업 취소·종료·AprilTag 정지·카메라 오류는 회전 상태와 확인 횟수를 초기화한다.
-  새 작업과 startup hold 동안 쌓인 관측은 회전 허가로 재사용하지 않는다.
-
-```dotenv
-LINE_TRACKING_ADAPTIVE_CONTROL=true
-LINE_TRACKING_SLOW_AGE_SEC=0.50
-LINE_TRACKING_STOP_AGE_SEC=1.20
-LINE_TRACKING_CURVE_SLOW_RADIUS_M=4.0
-LINE_TRACKING_TURN_ENTER_DEG=15.0
-LINE_TRACKING_TURN_EXIT_DEG=5.0
-LINE_TRACKING_TURN_STOP_SEC=0.60
-LINE_TRACKING_TURN_PULSE_SEC=0.35
-LINE_TRACKING_TURN_SETTLE_SEC=0.15
-LINE_TRACKING_TURN_TIMEOUT_SEC=30.0
-LINE_TRACKING_TURN_CONFIRM_FRAMES=2
-LINE_TRACKING_MAX_ACCEL_MPS2=0.30
+```text
+requested_yaw = heading_gain × heading_radians
+yaw = clip(requested_yaw, -max_yaw, +max_yaw)
+forward_speed = max_forward × max_yaw / max(max_yaw, abs(requested_yaw))
 ```
 
-위 값은 초기 제어 설정이며 실제 A2의 제동거리나 회전 공간을 검증한 값은 아니다.
-현재 3~8m Path와 지면 투영은 유지한다. 도로 경계/장애물/로봇 외곽의 충돌 검사,
-가려진 코너의 진행 방향 선택, 90° 이상 경로를 위한 새 경로 추출기는 추가하지 않는다.
-따라서 Path가 없어지면 회전을 계속하지 않으며, 코너 통과나 범위 내 주행을 보장하지 않는다.
+회전 요구가 상한을 넘으면 전진 속도도 같은 비율로 줄여 명령의 회전/전진 비율을
+유지한다. 기본 gain=1, 전진 상한=0.50m/s, yaw 상한=0.18rad/s일 때:
 
-`/line_tracking/swin_l/metrics`의 `adaptive_control`에 phase, 목표 방향(도),
-곡률, 원본 정보 나이, 확인 횟수, 전진/yaw 명령을 추가한다. `drive_reason`에는
-`tracking_slow_curve`, `tracking_slow_age`, `turn_braking`, `turn_waiting_frame`,
-`turn_aligning`, `turn_reacquired`, `perception_delay_stop`, `turn_timeout`이 표시된다.
-Adaptive 모드에서는 `stop_checks.lateral_target=false`가 횡방향 hard stop을
-정렬 동작으로 대체했다는 뜻이며, 경로 상실 정지는 항상 켜진다.
+| 목표각 절댓값 | 전진 속도 | 회전 속도 절댓값 |
+|---|---|---|
+| 0° | 0.500m/s | 0°/초 |
+| 10° | 0.500m/s | 10°/초 |
+| 15° | 0.344m/s | 10.31°/초 |
+| 30° | 0.172m/s | 10.31°/초 |
+| 45° | 0.115m/s | 10.31°/초 |
+| 60° | 0.086m/s | 10.31°/초 |
 
-Jetson에서 이 코드를 가져온 뒤 `.env`를 설정하고 사용자가 직접 적용한다:
+이전 곡률·영상 나이 기반 감속, 1.2초 `perception_delay_stop`, 정지 후 방향 정렬,
+두 프레임 확인, 회전 펄스, 가속 제한은 제거했다. 추론 결과를 기다리는 추가 단계 없이
+기본 10Hz 제어 주기에서 적용하며 추론 루프는 그대로다. 기존 5초 카메라/추론
+watchdog, 시작 2초 대기, 작업 취소·종료 및 AprilTag 정지는 유지한다.
 
-```bash
-docker compose up -d --build actual-activate
-docker compose logs -f actual-activate
-```
+감속 중 `drive_reason`은 `tracking_slow_turn`이며 정상 추종으로 처리한다.
+metrics의 `turn_speed_control`에서 목표각, 허용각, 전진·회전 명령을 확인할 수 있다.
+60°에서 전방 4m 기준 횡방향 한계는 약 6.93m다. 현재 BEV 반폭 4m와 Path 추출
+범위는 그대로이므로 허용각을 높여도 카메라가 60° 또는 90° 코너의 Path를 추가로
+검출하게 되지는 않는다. 감속은 코너 통과나 도로 경계 안의 주행을 보장하지 않는다.
 
-`LINE_TRACKING_ADAPTIVE_CONTROL=false`로 설정하고 서비스를 재생성하면 기존
-고정 속도/횡방향 정지 제어로 돌아간다. 단순 `restart`는 새 코드나 환경값을 반영하지 않는다.
+Jetson 적용 시 사용자가 `.env`의 `LINE_TRACKING_MAX_TARGET_HEADING_DEG=60.0`을
+확인하고 `docker compose up -d --build actual-activate`로 빌드·재생성한다.
+제거된 `LINE_TRACKING_ADAPTIVE_CONTROL`, `LINE_TRACKING_TURN_*` 등 예전 설정은
+사용하지 않는다. 모델/백엔드 설정은 유지한다.
 
-### Legacy path-stop bypass
-
-아래 저장 yaw 유지 동작은 `LINE_TRACKING_ADAPTIVE_CONTROL=false`일 때만 적용된다.
-Adaptive 모드는 Path 상실·유효하지 않은 좌표·NaN/Inf 신뢰도·지연 정지를 우회하지 않는다.
-유한한 신뢰도 임계값과 횡방향 기반 정렬 진입 조건에는 기존 개별/전체 우회 설정을 적용하지만,
-목표 방향 각도에 따른 정렬, 지연 감속, 회전 timeout은 계속 적용한다.
+## Path 정지 우회
 
 A single `.env` switch bypasses path-quality stops and briefly tolerates path loss:
 
@@ -150,9 +119,10 @@ LINE_TRACKING_BYPASS_PATH_STOPS=false
 Set it to `true` to temporarily bypass `path_unavailable` and bypass
 `path_low_confidence` (including NaN/Inf confidence) and
 `path_lateral_target_large`. With usable coordinates,
-tracking still uses the computed yaw, capped at 0.18 rad/s. If the path is
+tracking still uses the computed yaw, capped at 0.18 rad/s, and turn-based
+forward slowdown remains active. If the path is
 missing or has no usable coordinates, the controller holds the last valid
-yaw from the current task and continues at the configured forward speed.
+yaw and forward speed from the current task, including any turn slowdown.
 Until a valid target has been obtained in that task, it still stops with
 `path_unavailable`; it does not invent an initial heading.
 
@@ -203,24 +173,25 @@ an image containing this code. Defaults preserve the existing behavior.
 | Setting | Behavior when `false` |
 |---|---|
 | `LINE_TRACKING_STOP_ON_LOW_CONFIDENCE` | A finite low confidence value does not stop tracking. Unrestricted path mode already bypasses this threshold. |
-| `LINE_TRACKING_STOP_ON_LATERAL_TARGET` | Disables the 0.75 m lateral trigger. Adaptive angle-based alignment and speed regulation remain active; legacy control continues tracking at its speed cap. |
+| `LINE_TRACKING_STOP_ON_LATERAL_TARGET` | A target beyond the configured angle (default 60°) can be tracked; turn slowdown and the 0.18 rad/s yaw cap remain. |
 | `LINE_TRACKING_STOP_ON_APRILTAG` | Tags neither stop nor complete a task, including a tag visible at startup. Detection-stream liveness is still reported. |
 
 Camera loss/invalid timestamps, the 5-second camera and inference age limits,
 startup hold, task cancellation/end, and fault/shutdown stops remain active.
-Adaptive control always stops on missing/invalid paths and non-finite confidence.
-Legacy control applies these stops when its master bypass is off. Speed limits and Unitree hardware protections are
+Without the master bypass, a missing or nonnumeric path and non-finite
+confidence also stop motion. Speed limits and Unitree hardware protections are
 not changed. There is no environment switch to disable camera-disconnection stopping. The
 `stop_checks` object in metrics reports the effective checks, and
 `apriltag.stop_enabled` reports whether tag stopping is enabled. Changing a stop
 flag does not change the selected road/sidewalk class or create a missing path.
 
-In legacy mode, `path_lateral_target_large` means that a path exists, but its lateral coordinate
-at the 4 m lookahead exceeds 0.75 m in absolute value. This is a stop decision,
+`path_lateral_target_large` means that a path exists, but its target bearing
+exceeds `LINE_TRACKING_MAX_TARGET_HEADING_DEG` (default ±60°), equivalent to
+about ±6.93m at the 4m lookahead. This is a stop decision,
 not an inference failure. A split or off-center segmentation region, sparse
 path support, or inaccurate camera-to-ground geometry can produce that target.
 With `LINE_TRACKING_STOP_ON_LATERAL_TARGET=false`, the controller instead uses
-`yaw = clip(atan2(y_at_4m, 4), -0.18, 0.18)` rad/s and the configured forward
+`yaw = clip(atan2(y_at_4m, 4), -0.18, 0.18)` rad/s and the heading-regulated forward
 speed, provided the remaining checks pass. This does not repair the estimated
 path or guarantee that a sharp bend can be followed.
 
@@ -276,7 +247,7 @@ The listener
 reports task state on `/task_state`; core owns any corresponding HTTP report.
 It sends stop commands on server cancellation, `SIGTERM`, publish errors, stale
 required camera/inference inputs, an unavailable path that cannot use the
-legacy limited yaw hold, or tag confirmation.
+limited yaw hold, or tag confirmation.
 Detection-stream loss is reported in metrics but does not abort or block the task.
 No process can publish a final command after power loss or `SIGKILL`.
 
@@ -336,31 +307,40 @@ clearance. With unrestricted mode disabled, the default valid-row requirement
 is 35% (56 of 160 rows), and the smoother can retain a previous valid path for
 up to 0.90 seconds.
 
-A visible path does not imply permission to move. Default adaptive drive behavior:
+A visible path does not imply permission to move. The default drive gates are:
 
 | Condition | Result |
 |---|---|
-| No accepted task / first 2 seconds | No motion; controller state resets |
-| Missing/invalid camera or inference age, or age >5s | Sensor stop |
-| Original source age 0.50–1.20s / >=1.20s | Gradual speed reduction / zero command |
-| Missing, non-finite or fewer than two distinct forward Path points | Immediate `path_unavailable` |
-| Non-finite confidence | Immediate `path_low_confidence`, including with legacy bypass enabled |
-| Finite confidence below active threshold | Stop unless its quality check is bypassed |
-| High path curvature | Reduce forward speed; yaw is limited to ±0.18 rad/s |
-| Large target bearing / active lateral trigger | Stop, then confirm fresh images before bounded turn pulses |
-| AprilTag candidate | Existing hard-stop and confirmation lifecycle |
+| No accepted task | No Move publisher after control release |
+| First 2 seconds of a task | Zero velocity |
+| Camera or inference source age greater than 5 seconds, missing, or invalid | Zero velocity |
+| Missing path or no usable numeric x/y points | With the master bypass and a saved yaw, hold through failures 1–4; the fifth consecutive unavailable inference stops with `path_unavailable`. Without bypass or a saved yaw, stop immediately. |
+| Absolute target heading greater than 60° (configurable) | Zero velocity when the master bypass is off and `LINE_TRACKING_STOP_ON_LATERAL_TARGET=true` |
+| Heading-based yaw demand exceeds 0.18 rad/s | Reduce forward speed proportionally, with yaw capped at ±0.18 rad/s |
+| Non-finite confidence | Zero velocity unless the master bypass is on |
+| Confidence below 0.49 when unrestricted mode is disabled | Zero velocity when the master bypass is off and `LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=true` |
+| AprilTag candidate | When `LINE_TRACKING_STOP_ON_APRILTAG=true`, hard stop during confirmation; confirmed tag completes the task |
 
-The adaptive controller requires two distinct finite forward points, sorts them
-by x and clamps lookahead to available support. It computes curvature from the
-visible centerline; this does not measure road-edge clearance. Original sensor
-age limits motion independently of the smoother's diagnostic `path_age_sec`.
-The legacy single-point/held-yaw behavior is available only with adaptive control off.
+The controller has no separate path-age cutoff and does not require the path
+to span x=4 m or arrive in increasing x order. It discards non-finite points,
+sorts by forward distance, and uses the first finite point at each duplicate
+distance. A single finite point is sufficient. If x=4 m is outside the available
+range, the nearest endpoint's lateral coordinate supplies the target. A path
+with no usable numeric x/y points remains unavailable; the master bypass may
+reuse a saved yaw but does not publish an invented path. The heading calculation
+still uses the 4 m lookahead, and the configured 60° target angle limit applies when
+its stop check is enabled and the master bypass is off.
 
-Tasks may start with tracking or bounded alignment recovery. Missing/stale inputs
-at startup still abort; sustained unsafe states after startup retain the 2-second
-unsafe policy. Alignment has its own deadline and does not count as successful
-forward tracking when task duration expires. Cancellation, faults and AprilTag
-confirmation retain their stop behavior.
+Path age remains a diagnostic measured from inference-result availability.
+Camera and inference freshness also account for the original sensor timestamp;
+repeating a path at 10 Hz does not reset these timestamps. Tracking sends the
+heading-regulated forward speed (default ceiling 0.50 m/s), zero lateral velocity, and a heading-based yaw
+rate capped at +/-0.18 rad/s. A task aborts if tracking is unavailable at the
+end of startup hold, or if an unsafe tracking condition persists for 2 seconds
+after tracking has begun. Server cancellation, task termination, inference or
+publish faults, and handled shutdown also stop motion. AprilTag confirmation
+has its own stop-and-confirm lifecycle; detector-stream loss alone does not
+block tracking.
 
 ## 정지·작업 중단·시작 거절 사유
 
@@ -380,28 +360,16 @@ confirmation retain their stop behavior.
 | `inference_stale` | 마지막 추론 완료 시각 또는 추론에 사용한 원본 이미지 시각 기준 나이가 5초 초과. 이력이 없거나 나이가 잘못된 경우도 포함 | 항상 검사. 저장한 회전 명령도 삭제 |
 | `camera_timestamp_invalid` | 이미지 시각이 0 이하, 현재보다 50 ms 초과 미래, 5초 초과 과거, 또는 직전 수락한 이미지보다 같거나 이전 시각 | 콜백에서 0 속도 전송, 카메라 유효 상태와 저장 회전 명령 삭제. 이후 제어 주기에는 보통 `camera_stale`로 표시 |
 | `camera_conversion_error` | 카메라 메타데이터 검사 또는 선택 프레임 변환 중 예외 | 콜백 또는 워커에서 0 속도 전송, 카메라 유효 상태와 저장 회전 명령 삭제. 이후 보통 `camera_stale`로 표시 |
-| `path_unavailable` | 선택한 클래스의 Path가 없거나 유효한 좌표가 부족함 | Adaptive는 즉시 정지. 이하 yaw 유지는 legacy에서만 적용: `LINE_TRACKING_BYPASS_PATH_STOPS=true`이고 현재 작업의 저장 회전 명령이 있으면 연속 실패 1–4회만 유지. **5회째부터 정지**. 저장 명령이 없으면 첫 실패부터 정지 |
-| `path_low_confidence` | 신뢰도가 NaN/Inf이거나 활성 임계값 0.49 미만 | Adaptive는 NaN/Inf를 항상 정지. Legacy는 전체 Path 우회가 켜지면 검사 생략. 개별 `LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=false` 또는 unrestricted 모드는 유한한 저신뢰도만 허용하며 NaN/Inf는 계속 정지 |
-| `path_lateral_target_large` | Legacy에서 전방 4 m 기준 목표점의 좌우 좌표 절댓값이 0.75 m 초과 | 전체 Path 우회 또는 `LINE_TRACKING_STOP_ON_LATERAL_TARGET=false`로 생략. 회전 속도 제한 ±0.18 rad/s는 유지 |
+| `path_unavailable` | 선택한 클래스의 Path가 없거나 유한한 x/y 목표점을 만들 수 없음 | 기본은 즉시 정지. `LINE_TRACKING_BYPASS_PATH_STOPS=true`이고 현재 작업의 저장 회전 명령이 있으면 연속 실패 1–4회만 유지. **5회째부터 정지**. 저장 명령이 없으면 첫 실패부터 정지 |
+| `path_low_confidence` | 신뢰도가 NaN/Inf이거나 활성 임계값 0.49 미만 | 전체 Path 우회가 켜지면 검사 생략. 개별 `LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=false` 또는 unrestricted 모드는 유한한 저신뢰도만 허용하며 NaN/Inf는 계속 정지 |
+| `path_lateral_target_large` | 목표각 절댓값이 허용각 60° 초과(설정 가능). 기본 전방 4m 기준 약 ±6.93m | 전체 Path 우회 또는 `LINE_TRACKING_STOP_ON_LATERAL_TARGET=false`로 생략. 목표각 감속과 회전 속도 제한 ±0.18 rad/s는 유지 |
 | `apriltag_verifying` | AprilTag 후보 검출 후 확인 중 | `LINE_TRACKING_STOP_ON_APRILTAG=true`일 때 `StopMove`와 0 속도 전송. Path 우회와 무관. 기본 1초 확인 창에서 같은 ID가 서로 다른 프레임 3개에 검출되면 정상 완료 |
-
-Adaptive 모드에는 다음 사유도 추가된다:
-
-| 사유 | 동작 |
-|---|---|
-| `tracking_slow_curve` / `tracking_slow_age` | 굽음 또는 원본 정보 나이에 따른 감속 추종 |
-| `turn_braking` / `turn_waiting_frame` | 정지 대기 또는 정지 이후 촬영된 서로 다른 프레임 확인 |
-| `turn_aligning` | 전진 0, 제한된 시간 동안 방향 정렬 |
-| `turn_reacquired` | 정렬 완료, 0 명령을 거쳐 점진적으로 전진 재개 |
-| `perception_delay_stop` | 원본 정보가 설정된 정지 나이 이상. 즉시 0 속도 요청 |
-| `turn_timeout` | 정렬 제한 시간 초과. 0 속도를 유지하고 기존 startup/unsafe 중단 정책 적용 |
-| `control_inactive` | 활성 작업 또는 시작 대기 종료 조건이 아직 충족되지 않아 제어 준비 상태 초기화 |
 
 ### 정지가 작업 중단으로 이어지는 조건
 
 | `/task_state.reason` | 조건과 결과 |
 |---|---|
-| `startup:<사유>` | 시작 후 2초 대기가 끝났는데 추종·허용된 legacy 회전 유지·adaptive 정렬 중 어느 것도 시작되지 못한 경우 `TASK_ABORTED` |
+| `startup:<사유>` | 시작 후 2초 대기가 끝났는데 추종 또는 허용된 회전 유지가 한 번도 시작되지 못한 경우 `TASK_ABORTED` |
 | `unsafe:<사유>` | 추종을 시작한 뒤 허용되지 않는 상태가 연속 `LINE_TRACKING_UNSAFE_TIMEOUT_SEC`(기본 2초) 지속되면 `TASK_ABORTED`. 이유가 바뀌어도 그 사이 정상 추종/허용된 회전 유지가 없으면 타이머는 계속 진행 |
 | `tracking_unavailable:<사유>` | 작업 제한 시간에 도달했지만 정상 완료 조건(이전에 추종했고 현재도 추종/허용된 회전 유지 중)을 만족하지 못하면 `TASK_ABORTED`. 앞의 startup/unsafe 조건이 먼저 충족되면 그 사유가 우선 |
 | `task_aborted_by_server` | 현재 task ID에 대한 서버의 `TASK_ABORTED` 이벤트 수신. 즉시 정지 요청 후 작업 중단 |
@@ -411,7 +379,7 @@ Adaptive 모드에는 다음 사유도 추가된다:
 | `sigterm` | SIGTERM 수신 시 활성 작업을 중단하고 정지 요청 후 종료 |
 | `shutdown` | Ctrl+C 또는 ROS 실행 종료의 정리 단계에서 아직 활성인 작업을 중단하고 정지 요청 |
 
-Legacy의 Path 우회를 켠 경우에는 Path 실패가 5회가 되는 순간 먼저 정지하고, 그 후에도 복구되지 않은
+따라서 Path 실패가 5회가 되는 순간에는 먼저 정지하고, 그 후에도 복구되지 않은
 상태가 기본 2초 유지될 때 `unsafe:path_unavailable`로 중단된다. 중단 전에
 유효 Path가 돌아오면 연속 실패 횟수와 unsafe 타이머가 초기화된다. 중단이 이미
 완료된 작업은 Path가 돌아와도 자동 재시작하지 않는다. AprilTag 확인 중에는

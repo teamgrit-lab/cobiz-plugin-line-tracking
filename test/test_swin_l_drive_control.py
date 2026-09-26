@@ -56,22 +56,6 @@ def test_task_drive_forward_speed_comes_from_environment(monkeypatch):
     assert command.vx == pytest.approx(0.35)
 
 
-def test_adaptive_controller_defaults_and_environment_are_validated(monkeypatch):
-    args = debug.parse_args(["task-drive"])
-    assert debug._adaptive_config_from_args(args).enabled is True
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_SLOW_AGE_SEC", "0.6")
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_TURN_ENTER_DEG", "20")
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_TURN_CONFIRM_FRAMES", "3")
-    config = debug._adaptive_config_from_args(debug.parse_args(["task-drive"]))
-    assert config.slow_age_sec == 0.6
-    assert config.turn_enter_deg == 20
-    assert config.turn_confirm_frames == 3
-    assert debug._adaptive_config_from_args(debug.parse_args(["task-drive", "--no-adaptive-control"])).enabled is False
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_AGE_SEC", "0.5")
-    with pytest.raises(ValueError, match="slow_age_sec"):
-        debug._adaptive_config_from_args(debug.parse_args(["task-drive"]))
-
-
 def test_forward_speed_hard_limit_is_one_meter_per_second():
     command = _decide(config=DriveConfig(max_forward_mps=1.00))
     assert command.vx == pytest.approx(1.00)
@@ -113,12 +97,12 @@ def test_path_quality_stop_switches_come_from_env(monkeypatch, enabled):
     config = debug._drive_config_from_args(debug.parse_args(["task-drive"]))
 
     low_confidence = _decide(_path(confidence=0.1), config=config)
-    far_target = _decide(_path(lateral=2.0), config=config)
+    far_target = _decide(_path(lateral=8.0), config=config)
 
     assert low_confidence.reason == ("path_low_confidence" if enabled else "tracking")
-    assert far_target.reason == ("path_lateral_target_large" if enabled else "tracking")
+    assert far_target.reason == ("path_lateral_target_large" if enabled else "tracking_slow_turn")
     if not enabled:
-        assert far_target.vx == pytest.approx(config.max_forward_mps)
+        assert 0.0 < far_target.vx < config.max_forward_mps
         assert far_target.yaw_rate == pytest.approx(config.max_yaw_rps)
 
 
@@ -157,7 +141,7 @@ def test_disabling_quality_stops_still_requires_usable_path(path):
         ({"camera_age_sec": 5.1}, "camera_stale"),
         ({"inference_age_sec": 5.1}, "inference_stale"),
         ({"path": _path(confidence=0.48)}, "path_low_confidence"),
-        ({"path": _path(lateral=1.0)}, "path_lateral_target_large"),
+        ({"path": _path(lateral=8.0)}, "path_lateral_target_large"),
     ],
 )
 def test_unsafe_inputs_return_zero_velocity(override, reason):
@@ -179,14 +163,14 @@ def test_missing_path_stops():
 
 
 @pytest.mark.parametrize("confidence", [0.1, float("nan"), float("inf")])
-@pytest.mark.parametrize("lateral", [-2.0, 2.0])
+@pytest.mark.parametrize("lateral", [-8.0, 8.0])
 def test_master_bypass_overrides_all_confidence_and_lateral_checks(confidence, lateral):
     command = _decide(
         _path(confidence=confidence, lateral=lateral),
         config=DriveConfig(bypass_path_stops=True),
     )
-    assert command.reason == "tracking"
-    assert command.vx == 0.5
+    assert command.reason == "tracking_slow_turn"
+    assert 0.0 < command.vx < 0.5
     assert command.yaw_rate == pytest.approx(math.copysign(0.18, lateral))
 
 
@@ -299,7 +283,7 @@ def test_path_without_numeric_xy_points_is_unavailable(points):
 
 
 def test_endpoint_fallback_still_obeys_lateral_target_limit():
-    path = replace(_path(), points_xy=np.asarray([[3.0, 0.8]], dtype=np.float64))
+    path = replace(_path(), points_xy=np.asarray([[3.0, 8.0]], dtype=np.float64))
 
     command = _decide(path)
 
@@ -422,3 +406,90 @@ def test_drive_watchdog_uses_original_sensor_age_after_inference():
         debug._effective_source_age_sec(None, 99_000_000_000, 10, 100_000_000_000)
         is None
     )
+
+
+@pytest.mark.parametrize("sign", [-1, 1])
+def test_sharper_heading_slows_immediately_while_preserving_turn_direction(sign):
+    commands = []
+    for angle in (0, 5, 10, 15, 30, 45, 60):
+        lateral = 4.0 * math.tan(math.radians(sign * angle))
+        path = replace(_path(), points_xy=np.asarray([[3.0, lateral], [8.0, lateral]]))
+        command = _decide(path)
+        commands.append(command)
+        assert command.vx > 0.0  # No stop-and-align state or confirmation wait.
+        assert command.vy == 0.0
+        assert abs(command.yaw_rate) <= 0.18
+        if angle:
+            assert math.copysign(1, command.yaw_rate) == sign
+        if angle >= 15:
+            assert command.reason == "tracking_slow_turn"
+            # Saturation must preserve the requested yaw/forward-speed ratio.
+            assert command.yaw_rate / command.vx == pytest.approx(math.radians(sign * angle) / 0.5)
+    speeds = [command.vx for command in commands]
+    assert speeds[:3] == [0.5, 0.5, 0.5]
+    assert all(a > b for a, b in zip(speeds[2:], speeds[3:]))
+    assert speeds[4] == pytest.approx(0.1718873385)
+    assert speeds[-1] == pytest.approx(0.0859436693)
+
+
+@pytest.mark.parametrize("limit", [30.0, 60.0])
+@pytest.mark.parametrize("lookahead", [2.0, 4.0, 6.0])
+@pytest.mark.parametrize("sign", [-1, 1])
+def test_heading_limit_includes_boundary_and_stops_just_beyond(limit, lookahead, sign):
+    config = DriveConfig(max_target_heading_deg=limit, lookahead_m=lookahead)
+    for angle, stopped in ((limit, False), (limit + 0.001, True)):
+        lateral = lookahead * math.tan(math.radians(sign * angle))
+        path = replace(_path(), points_xy=np.asarray([[lookahead, lateral]]))
+        command = _decide(path, config=config)
+        assert command.reason == ("path_lateral_target_large" if stopped else "tracking_slow_turn")
+        assert (command.vx == command.yaw_rate == 0.0) == stopped
+
+
+@pytest.mark.parametrize("age", [0.5, 1.2, 1.3, 4.9, 5.0])
+def test_turn_speed_has_no_age_slowdown_before_existing_sensor_watchdog(age):
+    path = _path(lateral=2.0, age=age)
+    command = _decide(path, camera_age_sec=age, inference_age_sec=age)
+    assert command == _decide(path)
+    assert command.reason == "tracking_slow_turn"
+
+
+def test_heading_limit_environment_and_cli_override(monkeypatch):
+    monkeypatch.delitem(debug.ENV, "LINE_TRACKING_MAX_TARGET_HEADING_DEG", raising=False)
+    assert debug._drive_config_from_args(debug.parse_args(["task-drive"])).max_target_heading_deg == 60.0
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_MAX_TARGET_HEADING_DEG", "45")
+    assert debug._drive_config_from_args(debug.parse_args(["task-drive"])).max_target_heading_deg == 45.0
+    args = debug.parse_args(["task-drive", "--max-target-heading-deg", "60"])
+    assert debug._drive_config_from_args(args).max_target_heading_deg == 60.0
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_MAX_TARGET_HEADING_DEG", "90")
+    with pytest.raises(ValueError):
+        debug._drive_config_from_args(debug.parse_args(["task-drive"]))
+
+
+@pytest.mark.parametrize("value", [0, -1, 90, 100, float("nan"), float("inf")])
+def test_invalid_heading_limit_is_rejected(value):
+    with pytest.raises(ValueError):
+        DriveConfig(max_target_heading_deg=value).validate()
+
+
+def test_path_loss_hold_keeps_reduced_forward_speed():
+    config = DriveConfig(bypass_path_stops=True)
+    previous = _decide(_path(lateral=3.0), config=config)
+    held = decide_drive(
+        None, camera_age_sec=0.1, inference_age_sec=0.1, config=config,
+        last_valid_yaw_rate=previous.yaw_rate, last_valid_forward_mps=previous.vx,
+        path_unavailable_inferences=1,
+    )
+    assert held.reason == "tracking_path_hold"
+    assert held.vx == previous.vx < 0.5
+    assert held.yaw_rate == previous.yaw_rate
+
+
+@pytest.mark.parametrize("speed", [-1.0, float("nan"), float("inf")])
+def test_path_loss_cannot_reuse_invalid_saved_speed(speed):
+    command = decide_drive(
+        None, camera_age_sec=0.1, inference_age_sec=0.1,
+        config=DriveConfig(bypass_path_stops=True),
+        last_valid_yaw_rate=0.18, last_valid_forward_mps=speed,
+    )
+    assert command.reason == "path_unavailable"
+    assert command.vx == command.yaw_rate == 0.0

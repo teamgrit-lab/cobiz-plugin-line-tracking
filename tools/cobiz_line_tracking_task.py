@@ -11,7 +11,14 @@ from typing import Any, Mapping
 
 
 ACTION_NAME = "LINE_TRACKING"
-TRACKING_REASONS = frozenset(("tracking", "tracking_path_hold"))
+TRACKING_REASONS = frozenset(
+    ("tracking", "tracking_path_hold", "tracking_slow_curve", "tracking_slow_age")
+)
+# Recovery is bounded by the controller's own deadline. It is permitted at
+# startup but is not forward progress and cannot complete a timed task.
+RECOVERY_REASONS = frozenset(
+    ("turn_braking", "turn_waiting_frame", "turn_aligning", "turn_reacquired")
+)
 _TASK_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _ROUTES = {
     "TASK_STARTED": "start",
@@ -230,11 +237,16 @@ class LineTrackingTasks:
         elapsed = now - active.started_at
         if elapsed < self.policy.startup_hold_sec:
             return None
-        if not self.tracking_seen and drive_reason not in TRACKING_REASONS:
+        if (
+            not self.tracking_seen
+            and drive_reason not in TRACKING_REASONS | RECOVERY_REASONS
+        ):
             return self.finish("TASK_ABORTED", f"startup:{drive_reason}")
         tracked_before_this_tick = self.tracking_seen
         if drive_reason in TRACKING_REASONS:
             self.tracking_seen = True
+            self.unsafe_since = None
+        elif drive_reason in RECOVERY_REASONS:
             self.unsafe_since = None
         elif self.unsafe_since is None:
             self.unsafe_since = now

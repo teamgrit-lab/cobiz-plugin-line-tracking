@@ -42,6 +42,7 @@ from typing import Any, Sequence
 import cv2
 import numpy as np
 import torch
+from adaptive_path_control import AdaptiveControlConfig, AdaptivePathController
 from apriltag_stop import AprilTagDecision, AprilTagPolicy, AprilTagStopMonitor
 from best_so_far_runtime import (
     DEFAULT_EVALUATION_SIZE,
@@ -281,6 +282,17 @@ def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
         stop_on_lateral_target=args.stop_on_lateral_target,
         bypass_path_stops=args.bypass_path_stops,
     )
+    config.validate()
+    return config
+
+
+def _adaptive_config_from_args(args: argparse.Namespace) -> AdaptiveControlConfig:
+    values = {
+        name: getattr(args, "adaptive_" + name)
+        for name in asdict(AdaptiveControlConfig())
+        if name != "enabled"
+    }
+    config = AdaptiveControlConfig(enabled=args.adaptive_control, **values)
     config.validate()
     return config
 
@@ -782,6 +794,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             ) from error
     if task_mode:
         _validate_task_drive_preflight(args)
+        adaptive_config = _adaptive_config_from_args(args)
     local_config = _local_path_config_from_args(args)
     segmenter = BestSoFarSegmenter(_runtime_config(args))
     if task_mode and segmenter.device.type != "cuda":
@@ -836,6 +849,11 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             self.last_ready_reason = "inputs_not_ready"
             self.last_valid_yaw_rate: float | None = None
+            self.adaptive_controller = (
+                AdaptivePathController(self.drive_config, adaptive_config)
+                if task_mode and adaptive_config.enabled
+                else None
+            )
             self.path_unavailable_inferences = 0
             self.stop_until = 0.0
             self.apriltags = (
@@ -950,6 +968,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.publish_drive(DriveDecision.stop(reason))
 
         def publish_hard_stop(self, reason: str) -> bool:
+            if self.adaptive_controller is not None:
+                self.adaptive_controller.reset()
             if self.command_publisher is None:
                 return True
             assert Request is not None
@@ -1035,6 +1055,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 last_inference_at = state["last_inference_at"]
                 last_image_stamp_ns = state["last_image_stamp_ns"]
                 last_inference_stamp_ns = state["last_inference_stamp_ns"]
+                inference_id = int(state["inference_count"])
                 path = smoothers[mask_class].current(now)
                 self.path_unavailable_inferences = state["path_unavailable_inferences"][
                     mask_class
@@ -1046,14 +1067,30 @@ def run_ros2(args: argparse.Namespace) -> int:
             inference_age_sec = _effective_source_age_sec(
                 last_inference_at, last_inference_stamp_ns, now, clock_now_ns
             )
-            decision = decide_drive(
-                path,
-                camera_age_sec=camera_age_sec,
-                inference_age_sec=inference_age_sec,
-                config=self.drive_config,
-                last_valid_yaw_rate=self.last_valid_yaw_rate,
-                path_unavailable_inferences=self.path_unavailable_inferences,
-            )
+            if self.adaptive_controller is not None:
+                active = self.tasks.active
+                motion_allowed = (
+                    active is not None
+                    and now - active.started_at >= self.tasks.policy.startup_hold_sec
+                    and self.apriltags.snapshot(now=now).state != "verifying"
+                )
+                decision = self.adaptive_controller.update(
+                    path,
+                    now=now,
+                    camera_age_sec=camera_age_sec,
+                    inference_age_sec=inference_age_sec,
+                    inference_id=inference_id,
+                    motion_allowed=motion_allowed,
+                )
+            else:
+                decision = decide_drive(
+                    path,
+                    camera_age_sec=camera_age_sec,
+                    inference_age_sec=inference_age_sec,
+                    config=self.drive_config,
+                    last_valid_yaw_rate=self.last_valid_yaw_rate,
+                    path_unavailable_inferences=self.path_unavailable_inferences,
+                )
             if decision.reason in ("camera_stale", "inference_stale"):
                 self.last_valid_yaw_rate = None
             elif self.tasks.active is not None and decision.reason == "tracking":
@@ -1080,6 +1117,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             if body["type"] == "TASK_STARTED":
                 self.last_valid_yaw_rate = None
+                if self.adaptive_controller is not None:
+                    self.adaptive_controller.reset()
                 self.path_unavailable_inferences = 0
                 with state_lock:
                     state["path_unavailable_inferences"] = {
@@ -1152,6 +1191,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                     with state_lock:
                         state["last_image_at"] = None
                     self.last_valid_yaw_rate = None
+                    if self.adaptive_controller is not None:
+                        self.adaptive_controller.reset()
                     self.publish_drive(DriveDecision.stop("camera_timestamp_invalid"))
                     return
                 validate_camera_image(message, self.bridge)
@@ -1177,6 +1218,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 with state_lock:
                     state["last_image_at"] = None
                 self.last_valid_yaw_rate = None
+                if self.adaptive_controller is not None:
+                    self.adaptive_controller.reset()
                 self.publish_drive(DriveDecision.stop("camera_conversion_error"))
             self.get_logger().error(f"camera conversion failed: {error}")
 
@@ -1308,6 +1351,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "window_elapsed_sec": tag_status.window_elapsed_sec,
                 }
             if self.drive_config is not None:
+                adaptive = self.adaptive_controller is not None
+                metrics["adaptive_control"] = (
+                    self.adaptive_controller.metrics() if adaptive else {"enabled": False}
+                )
                 metrics["path_stop_bypass"] = self.drive_config.bypass_path_stops
                 metrics["path_unavailable_inferences"] = self.path_unavailable_inferences
                 metrics["path_unavailable_limit"] = MAX_PATH_UNAVAILABLE_INFERENCES
@@ -1319,7 +1366,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "camera_freshness": True,
                     "inference_freshness": True,
                     "path_available": (
-                        not self.drive_config.bypass_path_stops
+                        adaptive
+                        or not self.drive_config.bypass_path_stops
                         or self.path_unavailable_inferences
                         >= MAX_PATH_UNAVAILABLE_INFERENCES
                     ),
@@ -1329,7 +1377,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                         and self.drive_config.min_confidence > 0.0
                     ),
                     "lateral_target": (
-                        not self.drive_config.bypass_path_stops
+                        not adaptive
+                        and not self.drive_config.bypass_path_stops
                         and self.drive_config.stop_on_lateral_target
                     ),
                     "apriltag": args.stop_on_apriltag,
@@ -1626,6 +1675,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             default=_env("SWIN_L_INPUT_RELIABILITY", "best_effort"),
         )
         if mode == "task-drive":
+            live.add_argument(
+                "--adaptive-control",
+                action=argparse.BooleanOptionalAction,
+                default=_env_bool("LINE_TRACKING_ADAPTIVE_CONTROL", True),
+                help="Regulate speed by curvature/age and align using bounded turn pulses",
+            )
+            for name, default in asdict(AdaptiveControlConfig()).items():
+                if name == "enabled":
+                    continue
+                env_name = "LINE_TRACKING_" + name.upper()
+                value_type = int if name == "turn_confirm_frames" else float
+                env_value = (
+                    _env_int(env_name, default)
+                    if value_type is int
+                    else _env_float(env_name, default)
+                )
+                live.add_argument(
+                    "--adaptive-" + name.replace("_", "-"),
+                    type=value_type,
+                    default=env_value,
+                )
             live.add_argument(
                 "--bypass-path-stops",
                 action=argparse.BooleanOptionalAction,

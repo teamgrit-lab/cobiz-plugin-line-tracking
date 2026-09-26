@@ -224,6 +224,31 @@ def test_held_path_yaw_remains_permitted_motion_until_task_duration_ends():
     assert tasks.tick(now=10.1, drive_reason="tracking_path_hold")["type"] == "TASK_COMPLETED"
 
 
+def test_turn_recovery_is_permitted_but_is_not_task_completion_progress():
+    tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
+    tasks.handle_event(event(), now=0)
+    for now, reason in ((2.1, "turn_braking"), (4, "turn_waiting_frame"), (7, "turn_aligning")):
+        assert tasks.tick(now=now, drive_reason=reason) is None
+        assert not tasks.tracking_seen
+        assert tasks.unsafe_since is None
+    result = tasks.tick(now=10.1, drive_reason="turn_aligning")
+    assert result["type"] == "TASK_ABORTED"
+    assert result["reason"] == "tracking_unavailable:turn_aligning"
+
+
+def test_slow_tracking_can_finish_and_turn_timeout_cannot_be_ignored():
+    tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
+    tasks.handle_event(event(), now=0)
+    assert tasks.tick(now=2.1, drive_reason="tracking_slow_curve") is None
+    assert tasks.tick(now=3, drive_reason="turn_braking") is None
+    assert tasks.tick(now=6, drive_reason="turn_waiting_frame") is None
+    assert tasks.tick(now=7, drive_reason="turn_timeout") is None
+    assert tasks.tick(now=9.1, drive_reason="turn_timeout")["reason"] == "unsafe:turn_timeout"
+    tasks.handle_event(event(task_id=124), now=20)
+    assert tasks.tick(now=22.1, drive_reason="tracking_slow_age") is None
+    assert tasks.tick(now=30.1, drive_reason="tracking_slow_age")["type"] == "TASK_COMPLETED"
+
+
 def test_startup_hold_aborts_at_deadline_when_never_ready():
     tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
     tasks.handle_event(event(), now=0, rejection_reason=None)

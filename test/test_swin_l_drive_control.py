@@ -56,6 +56,22 @@ def test_task_drive_forward_speed_comes_from_environment(monkeypatch):
     assert command.vx == pytest.approx(0.35)
 
 
+def test_adaptive_controller_defaults_and_environment_are_validated(monkeypatch):
+    args = debug.parse_args(["task-drive"])
+    assert debug._adaptive_config_from_args(args).enabled is True
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_SLOW_AGE_SEC", "0.6")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_TURN_ENTER_DEG", "20")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_TURN_CONFIRM_FRAMES", "3")
+    config = debug._adaptive_config_from_args(debug.parse_args(["task-drive"]))
+    assert config.slow_age_sec == 0.6
+    assert config.turn_enter_deg == 20
+    assert config.turn_confirm_frames == 3
+    assert debug._adaptive_config_from_args(debug.parse_args(["task-drive", "--no-adaptive-control"])).enabled is False
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_AGE_SEC", "0.5")
+    with pytest.raises(ValueError, match="slow_age_sec"):
+        debug._adaptive_config_from_args(debug.parse_args(["task-drive"]))
+
+
 def test_forward_speed_hard_limit_is_one_meter_per_second():
     command = _decide(config=DriveConfig(max_forward_mps=1.00))
     assert command.vx == pytest.approx(1.00)

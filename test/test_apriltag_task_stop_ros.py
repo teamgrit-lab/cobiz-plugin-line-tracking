@@ -187,7 +187,12 @@ class RosHarness:
         self.rclpy.spin = spin
         assert (
             debug.run_ros2(
-                debug.parse_args(["task-drive", "--inference-hz", "1000", *args])
+                # Existing lifecycle/bypass regressions exercise the rollback
+                # controller; adaptive integration cases opt in explicitly.
+                debug.parse_args([
+                    "task-drive", "--inference-hz", "1000",
+                    "--no-adaptive-control", *args,
+                ])
             )
             == 0
         )
@@ -263,6 +268,104 @@ class RosHarness:
 @pytest.fixture
 def ros(monkeypatch):
     return RosHarness(monkeypatch)
+
+
+@pytest.mark.parametrize("interruption", ["cancel", "apriltag", "camera"])
+def test_adaptive_turn_publishes_zero_forward_and_resets_on_interrupt(ros, monkeypatch, interruption):
+    angle = [30.0]
+    original = debug.extract_sidewalk_centerline
+
+    def estimate(mask, config):
+        result = original(mask, config)
+        if result is None:
+            return None
+        points = result.points_xy.copy()
+        points[:, 1] = points[:, 0] * np.tan(np.deg2rad(angle[0]))
+        return replace(result, points_xy=points)
+
+    monkeypatch.setattr(debug, "extract_sidewalk_centerline", estimate)
+
+    def refresh(node, now):
+        ros.now = now
+        message = Message()
+        message.header.stamp = ros.stamp()
+        node.on_image(message)
+        deadline = time.perf_counter() + 3
+        while True:
+            current, _ = node.drive_readiness(2, now)
+            if current is not None and current.age_sec == 0:
+                break
+            assert time.perf_counter() < deadline
+            time.sleep(0.001)
+        node.publish_state()
+
+    def scenario(node):
+        ros.start(duration=60)
+        refresh(node, 0.1)
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        refresh(node, 2.1)
+        assert ros.metrics()["drive_reason"] == "turn_braking"
+        assert ros.metrics()["stop_checks"]["lateral_target"] is False
+        refresh(node, 2.8)
+        assert ros.metrics()["drive_reason"] == "turn_waiting_frame"
+        refresh(node, 3.2)
+        assert ros.metrics()["drive_reason"] == "turn_aligning"
+        assert node.tasks.active is not None
+        move = json.loads(ros.published[SPORT][-1].parameter)
+        assert move == {"x": 0.0, "y": 0.0, "z": -0.18}
+        ros.now = 3.3
+        if interruption == "cancel":
+            node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "tag-stop-1"})))
+        elif interruption == "apriltag":
+            ros.detect(tag_id=7)
+        else:
+            bad = Message()
+            bad.header.stamp = ros.stamp()
+            bad.width = 0
+            node.on_image(bad)
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        assert node.adaptive_controller.phase == "tracking"
+        assert node.adaptive_controller.confirmations == 0
+        assert node.adaptive_controller.last_vx == 0
+
+    ros.run(scenario, "--adaptive-control", allow_errors=interruption == "camera")
+
+
+def test_adaptive_age_stop_uses_original_camera_stamp_and_recovers_slowly(ros):
+    def refresh(node, now):
+        ros.now = now
+        message = Message()
+        message.header.stamp = ros.stamp()
+        node.on_image(message)
+        deadline = time.perf_counter() + 3
+        while True:
+            current, _ = node.drive_readiness(2, now)
+            if current is not None and current.age_sec == 0:
+                break
+            assert time.perf_counter() < deadline
+            time.sleep(0.001)
+        node.publish_state()
+
+    def scenario(node):
+        ros.start(duration=60)
+        refresh(node, 2.1)
+        for now in np.arange(2.2, 4.2, 0.1):
+            refresh(node, float(now))
+        assert json.loads(ros.published[SPORT][-1].parameter)["x"] == pytest.approx(0.5)
+        ros.now = 4.95
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "tracking_slow_age"
+        assert 0 < json.loads(ros.published[SPORT][-1].parameter)["x"] < 0.5
+        ros.now = 5.31
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "perception_delay_stop"
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        refresh(node, 5.4)
+        move = json.loads(ros.published[SPORT][-1].parameter)
+        assert 0 <= move["x"] < 0.1
+        assert node.tasks.active is not None
+
+    ros.run(scenario, "--adaptive-control")
 
 
 def test_r50_task_drive_accepts_720p_rgb_and_keeps_camera_stop(ros, monkeypatch):

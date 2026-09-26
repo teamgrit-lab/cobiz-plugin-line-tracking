@@ -93,7 +93,9 @@ def test_task_control_ignores_external_publisher_count(
 
     def spin(node):
         _, decision = node.drive_readiness(1, time.monotonic())
-        assert decision.reason == "camera_stale"
+        # Default adaptive control does not prepare motion before a task.
+        assert node.adaptive_controller is not None
+        assert decision.reason == "control_inactive"
         assert (decision.vx, decision.vy, decision.yaw_rate) == (0.0, 0.0, 0.0)
         camera = Message()
         camera.header.stamp = SimpleNamespace(sec=100, nanosec=0)

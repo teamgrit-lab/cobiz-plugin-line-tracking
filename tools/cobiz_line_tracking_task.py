@@ -12,6 +12,12 @@ from typing import Any, Mapping
 
 ACTION_NAME = "LINE_TRACKING"
 TRACKING_REASONS = frozenset(("tracking", "tracking_slow_turn", "tracking_path_hold"))
+TASK_STOP_CHECKS = (
+    "startup_hold",
+    "startup_unready",
+    "unsafe_timeout",
+    "task_timeout",
+)
 _TASK_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _ROUTES = {
     "TASK_STARTED": "start",
@@ -28,6 +34,10 @@ class TaskPolicy:
     unsafe_timeout_sec: float = 2.0
     startup_hold_sec: float = 2.0
     default_selected_mask: int = 2
+    stop_on_startup_hold: bool = False
+    stop_on_startup_unready: bool = False
+    stop_on_unsafe_timeout: bool = False
+    stop_on_task_timeout: bool = False
 
     def validate(self) -> None:
         values = (
@@ -38,6 +48,11 @@ class TaskPolicy:
         )
         if not all(math.isfinite(value) and value > 0 for value in values):
             raise ValueError("task timing limits must be positive and finite")
+        if any(
+            type(getattr(self, "stop_on_" + name)) is not bool
+            for name in TASK_STOP_CHECKS
+        ):
+            raise ValueError("task stop-check switches must be boolean values")
         if (
             self.default_duration_sec < self.startup_hold_sec + 1.0
             or self.default_duration_sec > self.max_duration_sec
@@ -136,7 +151,7 @@ def task_state(
 
 
 class LineTrackingTasks:
-    """Accept one finite server task; require fresh safe tracking throughout."""
+    """Accept one server task with independently configurable automatic stops."""
 
     def __init__(self, policy: TaskPolicy | None = None) -> None:
         self.policy = policy or TaskPolicy()
@@ -228,19 +243,26 @@ class LineTrackingTasks:
         if active is None:
             return None
         elapsed = now - active.started_at
-        if elapsed < self.policy.startup_hold_sec:
+        if self.policy.stop_on_startup_hold and elapsed < self.policy.startup_hold_sec:
             return None
-        if not self.tracking_seen and drive_reason not in TRACKING_REASONS:
+        if (
+            self.policy.stop_on_startup_unready
+            and elapsed >= self.policy.startup_hold_sec
+            and not self.tracking_seen
+            and drive_reason not in TRACKING_REASONS
+        ):
             return self.finish("TASK_ABORTED", f"startup:{drive_reason}")
         tracked_before_this_tick = self.tracking_seen
         if drive_reason in TRACKING_REASONS:
             self.tracking_seen = True
             self.unsafe_since = None
+        elif not self.policy.stop_on_unsafe_timeout:
+            self.unsafe_since = None
         elif self.unsafe_since is None:
             self.unsafe_since = now
         elif now - self.unsafe_since >= self.policy.unsafe_timeout_sec:
             return self.finish("TASK_ABORTED", f"unsafe:{drive_reason}")
-        if elapsed >= active.duration_sec:
+        if self.policy.stop_on_task_timeout and elapsed >= active.duration_sec:
             if tracked_before_this_tick and drive_reason in TRACKING_REASONS:
                 return self.finish("TASK_COMPLETED")
             return self.finish("TASK_ABORTED", f"tracking_unavailable:{drive_reason}")

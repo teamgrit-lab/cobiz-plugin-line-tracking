@@ -55,6 +55,7 @@ from best_so_far_runtime import (
     resolve_profile,
 )
 from cobiz_line_tracking_task import (
+    TASK_STOP_CHECKS,
     ActiveTask,
     LineTrackingTasks,
     TaskPolicy,
@@ -74,6 +75,7 @@ from local_path import (
     selected_path_region,
 )
 from swin_l_drive_control import (
+    DRIVE_STOP_CHECKS,
     MAX_PATH_UNAVAILABLE_INFERENCES,
     DriveConfig,
     DriveDecision,
@@ -91,6 +93,7 @@ DEFAULT_LOCAL_PATH_TOPIC = "/line_tracking/swin_l/local_path"
 DEFAULT_METRICS_TOPIC = "/line_tracking/swin_l/metrics"
 PERFORMANCE_WARMUP_FRAMES = 10
 PERFORMANCE_SAMPLE_WINDOW = 512
+AUTOMATIC_STOP_CHECKS = (*DRIVE_STOP_CHECKS, "apriltag", *TASK_STOP_CHECKS)
 
 
 def _load_dotenv_values() -> dict[str, str]:
@@ -275,12 +278,10 @@ def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
     config = DriveConfig(
         max_forward_mps=args.max_forward_mps,
         max_target_heading_deg=args.max_target_heading_deg,
-        min_confidence=(
-            0.0 if args.unrestricted_path_mode else DriveConfig.min_confidence
-        ),
-        stop_on_low_confidence=args.stop_on_low_confidence,
-        stop_on_lateral_target=args.stop_on_lateral_target,
-        bypass_path_stops=args.bypass_path_stops,
+        **{
+            "stop_on_" + name: getattr(args, "stop_on_" + name)
+            for name in DRIVE_STOP_CHECKS
+        },
     )
     config.validate()
     return config
@@ -802,6 +803,8 @@ def run_ros2(args: argparse.Namespace) -> int:
         "performance_processing_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_completion_times": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "last_image_at": None,
+        "camera_fault_reason": None,
+        "camera_fault_min_sequence": 0,
         "last_inference_at": None,
         "last_image_stamp_ns": None,
         "last_inference_stamp_ns": None,
@@ -830,6 +833,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                         max_duration_sec=args.max_task_duration_sec,
                         unsafe_timeout_sec=args.unsafe_timeout_sec,
                         default_selected_mask=args.path_mask_class,
+                        **{
+                            "stop_on_" + name: getattr(args, "stop_on_" + name)
+                            for name in TASK_STOP_CHECKS
+                        },
                     )
                 )
                 if task_mode
@@ -932,8 +939,9 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             if args.unrestricted_path_mode:
                 self.get_logger().warning(
-                    "SWIN_L_UNRESTRICTED_PATH_MODE is enabled: path valid-ratio/"
-                    "confidence gates and temporal smoothing are bypassed; "
+                    "SWIN_L_UNRESTRICTED_PATH_MODE is enabled: path valid-ratio "
+                    "and temporal smoothing are bypassed; explicit drive stop checks "
+                    "still apply and "
                     "inference rate limiting remains enabled"
                 )
             if task_mode:
@@ -1036,6 +1044,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         ) -> tuple[SmoothedPath | None, DriveDecision]:
             with state_lock:
                 last_image_at = state["last_image_at"]
+                camera_fault_reason = state["camera_fault_reason"]
                 last_inference_at = state["last_inference_at"]
                 last_image_stamp_ns = state["last_image_stamp_ns"]
                 last_inference_stamp_ns = state["last_inference_stamp_ns"]
@@ -1059,7 +1068,14 @@ def run_ros2(args: argparse.Namespace) -> int:
                 last_valid_forward_mps=self.last_valid_forward_mps,
                 path_unavailable_inferences=self.path_unavailable_inferences,
             )
-            if decision.reason in ("camera_stale", "inference_stale"):
+            if camera_fault_reason is not None and decision.reason not in (
+                "camera_stale", "inference_stale"
+            ):
+                decision = DriveDecision.stop(camera_fault_reason)
+            if decision.reason in (
+                "camera_stale", "inference_stale",
+                "camera_timestamp_invalid", "camera_conversion_error",
+            ):
                 self.last_valid_yaw_rate = None
                 self.last_valid_forward_mps = None
             elif self.tasks.active is not None and decision.reason in (
@@ -1110,12 +1126,20 @@ def run_ros2(args: argparse.Namespace) -> int:
                     if tag_status.stop_now:
                         if not self.publish_hard_stop("apriltag_verifying"):
                             raise RuntimeError("initial hard stop publication failed")
-                    else:
+                    elif self.tasks.policy.stop_on_startup_hold:
                         self.publish_zero_move("startup_hold")
+                    else:
+                        _, ready = self.drive_readiness(
+                            self.tasks.active.selected_mask, now
+                        )
+                        self.publish_drive(ready)
                 except Exception as error:  # noqa: BLE001 - never report start without control.
                     self.get_logger().error(
                         f"failed to acquire direct Sport control: {error}"
                     )
+                    # With startup hold disabled the first command can move.
+                    # A failed publication may still have reached the robot.
+                    self.release_task_control("control_publisher_error")
                     failed = self.tasks.finish(
                         "TASK_REJECTED", "control_publisher_error"
                     )
@@ -1148,7 +1172,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         def on_image(self, message: Any) -> None:
             try:
                 source_stamp_ns = _stamp_ns(message.header) if task_mode else None
-                if task_mode and (
+                if task_mode and self.drive_config.stop_on_camera_timestamp_invalid and (
                     not _live_source_stamp(
                         source_stamp_ns,
                         self.get_clock().now().nanoseconds,
@@ -1161,6 +1185,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 ):
                     with state_lock:
                         state["last_image_at"] = None
+                        state["camera_fault_reason"] = "camera_timestamp_invalid"
+                        state["camera_fault_min_sequence"] = state["sequence"]
                     self.last_valid_yaw_rate = None
                     self.last_valid_forward_mps = None
                     self.publish_drive(DriveDecision.stop("camera_timestamp_invalid"))
@@ -1187,6 +1213,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             if task_mode:
                 with state_lock:
                     state["last_image_at"] = None
+                    state["camera_fault_reason"] = "camera_conversion_error"
+                    state["camera_fault_min_sequence"] = state["sequence"]
                 self.last_valid_yaw_rate = None
                 self.last_valid_forward_mps = None
                 self.publish_drive(DriveDecision.stop("camera_conversion_error"))
@@ -1231,6 +1259,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.last_ready_reason = ready_decision.reason
                 startup_hold = (
                     task_active is not None
+                    and self.tasks.policy.stop_on_startup_hold
                     and now - task_active.started_at
                     < self.tasks.policy.startup_hold_sec
                 )
@@ -1330,7 +1359,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "command_forward_mps": drive_decision.vx,
                     "command_yaw_deg_sec": math.degrees(drive_decision.yaw_rate),
                 }
-                metrics["path_stop_bypass"] = self.drive_config.bypass_path_stops
                 metrics["path_unavailable_inferences"] = self.path_unavailable_inferences
                 metrics["path_unavailable_limit"] = MAX_PATH_UNAVAILABLE_INFERENCES
                 metrics["path_yaw_held"] = (
@@ -1338,24 +1366,22 @@ def run_ros2(args: argparse.Namespace) -> int:
                     and drive_decision.reason == "tracking_path_hold"
                 )
                 metrics["stop_checks"] = {
-                    "camera_freshness": True,
-                    "inference_freshness": True,
-                    "path_available": (
-                        not self.drive_config.bypass_path_stops
-                        or self.path_unavailable_inferences
-                        >= MAX_PATH_UNAVAILABLE_INFERENCES
-                    ),
-                    "low_confidence": (
-                        not self.drive_config.bypass_path_stops
-                        and self.drive_config.stop_on_low_confidence
-                        and self.drive_config.min_confidence > 0.0
-                    ),
-                    "lateral_target": (
-                        not self.drive_config.bypass_path_stops
-                        and self.drive_config.stop_on_lateral_target
-                    ),
-                    "apriltag": args.stop_on_apriltag,
+                    name: getattr(args, "stop_on_" + name)
+                    for name in AUTOMATIC_STOP_CHECKS
                 }
+                metrics["stop_checks"].update({
+                    "camera_freshness": self.drive_config.stop_on_camera_stale,
+                    "inference_freshness": self.drive_config.stop_on_inference_stale,
+                    "path_available": (
+                        self.drive_config.stop_on_path_unavailable
+                        or (
+                            self.drive_config.stop_on_path_loss_limit
+                            and self.path_unavailable_inferences
+                            >= MAX_PATH_UNAVAILABLE_INFERENCES
+                        )
+                    ),
+                })
+                metrics["camera_fault_reason"] = state["camera_fault_reason"]
             self.metrics_publisher.publish(String(data=json.dumps(metrics)))
             if header is None:
                 return
@@ -1412,6 +1438,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                         smoother.update(estimates[mask_class], path_updated_at)
                     inference_finished_at = time.monotonic()
                     if task_mode:
+                        if packet.sequence >= state["camera_fault_min_sequence"]:
+                            state["camera_fault_reason"] = None
                         counts = state["path_unavailable_inferences"]
                         for mask_class, smoother in smoothers.items():
                             available = (
@@ -1587,7 +1615,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         default=_env_bool("SWIN_L_UNRESTRICTED_PATH_MODE", True),
         help=(
-            "bypass path valid-ratio, confidence, and temporal smoothing "
+            "bypass path valid-ratio and temporal smoothing "
             "restrictions; live inference still obeys --inference-hz"
         ),
     )
@@ -1648,18 +1676,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             default=_env("SWIN_L_INPUT_RELIABILITY", "best_effort"),
         )
         if mode == "task-drive":
-            live.add_argument(
-                "--bypass-path-stops",
-                action=argparse.BooleanOptionalAction,
-                default=_env_bool("LINE_TRACKING_BYPASS_PATH_STOPS", False),
-                help="Bypass path-based stops while preserving camera/inference checks",
-            )
-            for check in ("low_confidence", "lateral_target", "apriltag"):
+            for check in AUTOMATIC_STOP_CHECKS:
                 live.add_argument(
                     "--stop-on-" + check.replace("_", "-"),
                     action=argparse.BooleanOptionalAction,
-                    default=_env_bool("LINE_TRACKING_STOP_ON_" + check.upper(), True),
-                    help="Enable or disable this automatic stop check only",
+                    default=_env_bool("LINE_TRACKING_STOP_ON_" + check.upper(), False),
+                    help="Enable this automatic stop check (default: disabled)",
                 )
             live.add_argument(
                 "--apriltag-detections-topic",
@@ -1720,6 +1742,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 default=_env_float("LINE_TRACKING_UNSAFE_TIMEOUT_SEC", 2.0),
             )
     args = parser.parse_args(argv)
+    if args.mode == "task-drive" and "LINE_TRACKING_BYPASS_PATH_STOPS" in ENV:
+        parser.error(
+            "LINE_TRACKING_BYPASS_PATH_STOPS was removed; remove it and use "
+            "LINE_TRACKING_STOP_ON_PATH_UNAVAILABLE / PATH_LOSS_LIMIT / "
+            "LOW_CONFIDENCE / LATERAL_TARGET (true=enabled, false=disabled)"
+        )
     if args.path_mask_class not in PATH_MASK_CLASSES:
         parser.error(
             "SWIN_L_PATH_MASK_CLASS must be 0 (road or sidewalk), "

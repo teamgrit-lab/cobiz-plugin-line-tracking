@@ -73,7 +73,7 @@ def test_task_drive_apriltag_environment_and_cli(monkeypatch):
     assert args.apriltag_confirm_min_hits == 5
 
 
-@pytest.mark.parametrize("check", ["low_confidence", "lateral_target", "apriltag"])
+@pytest.mark.parametrize("check", debug.AUTOMATIC_STOP_CHECKS)
 def test_stop_switch_environment_and_cli_override(monkeypatch, check):
     env_name = "LINE_TRACKING_STOP_ON_" + check.upper()
     monkeypatch.setitem(debug.ENV, env_name, "false")
@@ -83,20 +83,29 @@ def test_stop_switch_environment_and_cli_override(monkeypatch, check):
     args = debug.parse_args(["task-drive", "--stop-on-" + check.replace("_", "-")])
     assert getattr(args, "stop_on_" + check) is True
 
+    monkeypatch.setitem(debug.ENV, env_name, "true")
+    args = debug.parse_args(["task-drive"])
+    assert getattr(args, "stop_on_" + check) is True
+    args = debug.parse_args(["task-drive", "--no-stop-on-" + check.replace("_", "-")])
+    assert getattr(args, "stop_on_" + check) is False
+
     monkeypatch.setitem(debug.ENV, env_name, "invalid")
     with pytest.raises(ValueError, match="must be a boolean"):
         debug.parse_args(["task-drive"])
 
 
-def test_master_path_bypass_environment_and_cli_override(monkeypatch):
+def test_removed_reverse_switch_requires_explicit_migration(monkeypatch):
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BYPASS_PATH_STOPS", "true")
-    config = debug._drive_config_from_args(debug.parse_args(["task-drive"]))
-    assert config.bypass_path_stops is True
-    args = debug.parse_args(["task-drive", "--no-bypass-path-stops"])
-    assert debug._drive_config_from_args(args).bypass_path_stops is False
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BYPASS_PATH_STOPS", "invalid")
-    with pytest.raises(ValueError, match="must be a boolean"):
+    with pytest.raises(SystemExit):
         debug.parse_args(["task-drive"])
+
+
+def test_all_automatic_stop_defaults_are_false(monkeypatch):
+    for name in list(debug.ENV):
+        if name.startswith("LINE_TRACKING_STOP_ON_") or name == "LINE_TRACKING_BYPASS_PATH_STOPS":
+            monkeypatch.delitem(debug.ENV, name)
+    args = debug.parse_args(["task-drive"])
+    assert all(getattr(args, "stop_on_" + name) is False for name in debug.AUTOMATIC_STOP_CHECKS)
 
 
 @pytest.mark.parametrize("unrestricted", [True, False])

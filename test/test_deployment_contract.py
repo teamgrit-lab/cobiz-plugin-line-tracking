@@ -55,7 +55,13 @@ def test_live_swin_l_services_forward_configured_path_mask_class():
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("debugging-swin-l", "actual-activate"):
         assert services[name]["environment"]["SWIN_L_PATH_MASK_CLASS"].endswith(":-2}")
-    assert "SWIN_L_PATH_MASK_CLASS=2" in (ROOT / ".env.example").read_text()
+    example = dict(
+        line.split("=", 1)
+        for line in (ROOT / ".env.example").read_text().splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    # The example can select any supported surface; Compose's fallback is 2.
+    assert example["SWIN_L_PATH_MASK_CLASS"] in ("0", "1", "2")
 
 
 def test_default_compose_is_cobiz_task_listener():
@@ -117,21 +123,22 @@ def test_active_deployment_has_no_manual_arm_or_lidar_contract():
         assert forbidden not in active
 
 
-def test_optional_stop_switches_are_forwarded_and_default_enabled():
+def test_automatic_stop_switches_are_forwarded_and_default_disabled():
     import yaml
+    import sys
+    sys.path.insert(0, str(ROOT / "tools"))
+    from swin_l_local_path_debug import AUTOMATIC_STOP_CHECKS
 
     environment = yaml.safe_load((ROOT / "docker-compose.yml").read_text())[
         "services"
     ]["actual-activate"]["environment"]
     example = (ROOT / ".env.example").read_text()
-    for check in ("LOW_CONFIDENCE", "LATERAL_TARGET", "APRILTAG"):
-        name = "LINE_TRACKING_STOP_ON_" + check
-        assert environment[name] == "${" + name + ":-true}"
-        assert name + "=true" in example
-    assert environment["LINE_TRACKING_BYPASS_PATH_STOPS"] == (
-        "${LINE_TRACKING_BYPASS_PATH_STOPS:-false}"
-    )
-    assert "LINE_TRACKING_BYPASS_PATH_STOPS=false" in example
+    for check in AUTOMATIC_STOP_CHECKS:
+        name = "LINE_TRACKING_STOP_ON_" + check.upper()
+        assert environment[name] == "${" + name + ":-false}"
+        assert name + "=false" in example
+    assert "LINE_TRACKING_BYPASS_PATH_STOPS" not in environment
+    assert "LINE_TRACKING_BYPASS_PATH_STOPS=" not in example
 
 
 def test_jetson_swin_l_base_build_contract():

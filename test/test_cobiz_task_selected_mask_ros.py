@@ -24,6 +24,8 @@ from swin_l_drive_control import DriveDecision  # noqa: E402
 def test_task_control_ignores_external_publisher_count(
     monkeypatch, preexisting_control_publishers
 ):
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "true")
     published: dict[str, list] = {}
     publisher_qos = {}
     publisher_count_queries = []

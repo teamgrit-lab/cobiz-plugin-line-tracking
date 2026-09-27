@@ -7,7 +7,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from cobiz_line_tracking_task import LineTrackingTasks, TaskPolicy  # noqa: E402
+from cobiz_line_tracking_task import LineTrackingTasks, TaskPolicy, TASK_STOP_CHECKS  # noqa: E402
+
+
+def _enabled_policy(**overrides):
+    flags = {"stop_on_" + name: True for name in TASK_STOP_CHECKS}
+    flags.update(overrides)
+    return TaskPolicy(**flags)
 
 
 def event(task_id=123, **extra):
@@ -98,7 +104,7 @@ def test_static_control_conflict_rejects_without_activation():
 
 
 def test_start_requires_tracking_then_completes_finite_task():
-    tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=5, max_duration_sec=10))
+    tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=5, max_duration_sec=10))
     started = tasks.handle_event(
         event(payload={"duration_sec": 4}), now=10, rejection_reason=None
     )
@@ -115,7 +121,7 @@ def test_start_requires_tracking_then_completes_finite_task():
 @pytest.mark.parametrize("selected_mask", [0, 1, 2])
 @pytest.mark.parametrize("as_json", [False, True])
 def test_task_selects_surface_from_object_or_json_payload(selected_mask, as_json):
-    tasks = LineTrackingTasks(TaskPolicy(default_selected_mask=2))
+    tasks = LineTrackingTasks(_enabled_policy(default_selected_mask=2))
     payload = {"selected_mask": selected_mask}
     if as_json:
         payload = json.dumps(payload)
@@ -130,7 +136,7 @@ def test_task_selects_surface_from_object_or_json_payload(selected_mask, as_json
 
 @pytest.mark.parametrize("selected_mask", [0, 1, 2])
 def test_task_uses_configured_mask_when_payload_omits_it(selected_mask):
-    tasks = LineTrackingTasks(TaskPolicy(default_selected_mask=selected_mask))
+    tasks = LineTrackingTasks(_enabled_policy(default_selected_mask=selected_mask))
 
     started = tasks.handle_event(
         event(payload={"duration_sec": 30}), now=0, rejection_reason=None
@@ -204,7 +210,7 @@ def test_invalid_duration_rejected(duration):
 
 
 def test_sustained_unsafe_state_aborts_but_short_blockage_pauses():
-    tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
+    tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=10, max_duration_sec=10))
     tasks.handle_event(event(), now=0, rejection_reason=None)
     assert tasks.tick(now=2.1, drive_reason="tracking") is None
     assert tasks.tick(now=3, drive_reason="path_unavailable") is None
@@ -217,7 +223,7 @@ def test_sustained_unsafe_state_aborts_but_short_blockage_pauses():
 
 @pytest.mark.parametrize("reason", ["tracking_path_hold", "tracking_slow_turn"])
 def test_held_or_slow_turn_remains_permitted_motion_until_task_duration_ends(reason):
-    tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
+    tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=10, max_duration_sec=10))
     tasks.handle_event(event(), now=0)
     assert tasks.tick(now=2.1, drive_reason="tracking") is None
     for now in (3., 5., 8.):
@@ -226,7 +232,7 @@ def test_held_or_slow_turn_remains_permitted_motion_until_task_duration_ends(rea
 
 
 def test_slow_turn_can_start_tracking_after_startup_hold():
-    tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
+    tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=10, max_duration_sec=10))
     tasks.handle_event(event(), now=0)
     assert tasks.tick(now=2.1, drive_reason="tracking_slow_turn") is None
     assert tasks.tracking_seen is True
@@ -236,7 +242,7 @@ def test_slow_turn_can_start_tracking_after_startup_hold():
 
 
 def test_startup_hold_aborts_at_deadline_when_never_ready():
-    tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=10, max_duration_sec=10))
+    tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=10, max_duration_sec=10))
     tasks.handle_event(event(), now=0, rejection_reason=None)
     assert tasks.tick(now=1.99, drive_reason="path_unavailable") is None
     stopped = tasks.tick(now=2.0, drive_reason="path_unavailable")
@@ -246,7 +252,7 @@ def test_startup_hold_aborts_at_deadline_when_never_ready():
 
 def test_never_tracked_cannot_report_completed():
     tasks = LineTrackingTasks(
-        TaskPolicy(default_duration_sec=3, max_duration_sec=10, unsafe_timeout_sec=5)
+        _enabled_policy(default_duration_sec=3, max_duration_sec=10, unsafe_timeout_sec=5)
     )
     tasks.handle_event(event(), now=0, rejection_reason=None)
     result = tasks.tick(now=3.1, drive_reason="path_unavailable")
@@ -254,7 +260,7 @@ def test_never_tracked_cannot_report_completed():
 
 
 def test_first_tracking_tick_at_deadline_is_not_false_completion():
-    tasks = LineTrackingTasks(TaskPolicy(default_duration_sec=3, max_duration_sec=10))
+    tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=3, max_duration_sec=10))
     tasks.handle_event(event(), now=0, rejection_reason=None)
     result = tasks.tick(now=3, drive_reason="tracking")
     assert result["type"] == "TASK_ABORTED"
@@ -272,4 +278,57 @@ def test_string_task_id_is_normalized_before_core_report():
 
 def test_policy_rejects_subsecond_default_duration():
     with pytest.raises(ValueError, match="default duration"):
-        LineTrackingTasks(TaskPolicy(default_duration_sec=0.5))
+        LineTrackingTasks(_enabled_policy(default_duration_sec=0.5))
+
+
+def test_default_policy_never_automatically_aborts_or_expires():
+    tasks = LineTrackingTasks()
+    assert all(getattr(tasks.policy, 'stop_on_' + name) is False for name in TASK_STOP_CHECKS)
+    tasks.handle_event(event(payload={'duration_sec': 3}), now=0)
+    for now in (0.1, 2.1, 4, 10001):
+        assert tasks.tick(now=now, drive_reason='waiting_for_path') is None
+        assert tasks.active is not None
+        assert tasks.unsafe_since is None
+    assert tasks.tick(now=10002, drive_reason='tracking') is None
+    assert tasks.tracking_seen is True
+    result = tasks.handle_event({**event(), 'type': 'TASK_ABORTED'}, now=10003)
+    assert result['reason'] == 'task_aborted_by_server'
+    assert tasks.active is None
+
+
+@pytest.mark.parametrize('hold', [False, True])
+def test_startup_hold_is_independent_of_readiness_and_timeouts(hold):
+    tasks = LineTrackingTasks(TaskPolicy(stop_on_startup_hold=hold))
+    tasks.handle_event(event(), now=0)
+    assert tasks.tick(now=0.1, drive_reason='tracking') is None
+    assert tasks.tracking_seen is (not hold)
+    assert tasks.tick(now=2.1, drive_reason='tracking') is None
+    assert tasks.tracking_seen
+
+
+@pytest.mark.parametrize(('check', 'reason'), [
+    ('startup_unready', 'startup:waiting_for_path'),
+    ('unsafe_timeout', 'unsafe:waiting_for_path'),
+    ('task_timeout', 'tracking_unavailable:waiting_for_path'),
+])
+def test_lifecycle_guards_can_be_reenabled_independently(check, reason):
+    tasks = LineTrackingTasks(TaskPolicy(**{'stop_on_' + check: True}))
+    tasks.handle_event(event(payload={'duration_sec': 3}), now=0)
+    assert tasks.tick(now=0, drive_reason='waiting_for_path') is None
+    result = tasks.tick(now=3, drive_reason='waiting_for_path')
+    assert result['type'] == 'TASK_ABORTED'
+    assert result['reason'] == reason
+    assert tasks.active is None
+
+
+def test_task_timeout_alone_completes_tracking_task():
+    tasks = LineTrackingTasks(TaskPolicy(stop_on_task_timeout=True))
+    tasks.handle_event(event(payload={'duration_sec': 3}), now=0)
+    assert tasks.tick(now=0, drive_reason='tracking') is None
+    assert tasks.tick(now=3, drive_reason='tracking')['type'] == 'TASK_COMPLETED'
+
+
+@pytest.mark.parametrize('check', TASK_STOP_CHECKS)
+def test_task_stop_flags_require_boolean_values(check):
+    with pytest.raises(ValueError, match='boolean'):
+        TaskPolicy(**{'stop_on_' + check: 'false'}).validate()

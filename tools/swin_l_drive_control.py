@@ -16,6 +16,15 @@ from local_path import SmoothedPath
 
 MAX_FORWARD_MPS_HARD_LIMIT = 1.00
 MAX_PATH_UNAVAILABLE_INFERENCES = 5
+DRIVE_STOP_CHECKS = (
+    "camera_stale",
+    "inference_stale",
+    "camera_timestamp_invalid",
+    "path_unavailable",
+    "path_loss_limit",
+    "low_confidence",
+    "lateral_target",
+)
 
 
 @dataclass(frozen=True)
@@ -28,9 +37,13 @@ class DriveConfig:
     max_target_heading_deg: float = 60.0
     max_camera_age_sec: float = 5.00
     max_inference_age_sec: float = 5.00
-    stop_on_low_confidence: bool = True
-    stop_on_lateral_target: bool = True
-    bypass_path_stops: bool = False
+    stop_on_camera_stale: bool = False
+    stop_on_inference_stale: bool = False
+    stop_on_camera_timestamp_invalid: bool = False
+    stop_on_path_unavailable: bool = False
+    stop_on_path_loss_limit: bool = False
+    stop_on_low_confidence: bool = False
+    stop_on_lateral_target: bool = False
 
     def validate(self) -> None:
         positive = (
@@ -51,12 +64,8 @@ class DriveConfig:
         if not 0.0 <= self.min_confidence <= 1.0:
             raise ValueError("min_confidence must be in [0, 1]")
         if any(
-            type(enabled) is not bool
-            for enabled in (
-                self.stop_on_low_confidence,
-                self.stop_on_lateral_target,
-                self.bypass_path_stops,
-            )
+            type(getattr(self, "stop_on_" + name)) is not bool
+            for name in DRIVE_STOP_CHECKS
         ):
             raise ValueError("stop-check switches must be boolean values")
 
@@ -103,24 +112,29 @@ def decide_drive(
         ("camera", camera_age_sec, config.max_camera_age_sec),
         ("inference", inference_age_sec, config.max_inference_age_sec),
     ):
-        if age is None or not math.isfinite(age) or age < 0.0 or age > maximum:
+        if getattr(config, "stop_on_" + name + "_stale") and (
+            age is None or not math.isfinite(age) or age < 0.0 or age > maximum
+        ):
             return DriveDecision.stop(f"{name}_stale")
-    if path is not None and not config.bypass_path_stops and (
+    if path is not None and config.stop_on_low_confidence and (
         not math.isfinite(path.confidence)
-        or (config.stop_on_low_confidence and path.confidence < config.min_confidence)
+        or path.confidence < config.min_confidence
     ):
         return DriveDecision.stop("path_low_confidence")
     lateral = path_target_lateral(path, config.lookahead_m)
     if lateral is None:
+        if config.stop_on_path_unavailable or (
+            config.stop_on_path_loss_limit
+            and path_unavailable_inferences >= MAX_PATH_UNAVAILABLE_INFERENCES
+        ):
+            return DriveDecision.stop("path_unavailable")
         held_speed = (
             config.max_forward_mps
             if last_valid_forward_mps is None
             else last_valid_forward_mps
         )
         if (
-            config.bypass_path_stops
-            and path_unavailable_inferences < MAX_PATH_UNAVAILABLE_INFERENCES
-            and last_valid_yaw_rate is not None
+            last_valid_yaw_rate is not None
             and math.isfinite(last_valid_yaw_rate)
             and math.isfinite(held_speed)
             and held_speed >= 0.0
@@ -131,10 +145,11 @@ def decide_drive(
                 float(np.clip(last_valid_yaw_rate, -config.max_yaw_rps, config.max_yaw_rps)),
                 "tracking_path_hold",
             )
-        return DriveDecision.stop("path_unavailable")
+        # With no previous usable command there is nothing to hold. Disabling
+        # automatic stops must not invent an initial heading or forward speed.
+        return DriveDecision.stop("waiting_for_path")
     if (
-        not config.bypass_path_stops
-        and config.stop_on_lateral_target
+        config.stop_on_lateral_target
         and abs(lateral) > config.max_lateral_target_m
     ):
         return DriveDecision.stop("path_lateral_target_large")

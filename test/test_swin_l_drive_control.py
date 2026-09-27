@@ -12,9 +12,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import swin_l_local_path_debug as debug  # noqa: E402
 from local_path import SmoothedPath  # noqa: E402
 from swin_l_drive_control import (  # noqa: E402
+    DRIVE_STOP_CHECKS,
     DriveConfig,
     decide_drive,
 )
+
+
+def _enabled_config(**overrides):
+    """Existing guard tests explicitly opt into the former enabled policy."""
+    flags = {"stop_on_" + name: True for name in DRIVE_STOP_CHECKS}
+    flags.update(overrides)
+    return DriveConfig(**flags)
 
 
 def _path(*, lateral: float = 0.2, confidence: float = 0.9, age: float = 0.1):
@@ -32,7 +40,7 @@ def _decide(path=None, **overrides):
     arguments = dict(
         camera_age_sec=0.1,
         inference_age_sec=0.1,
-        config=DriveConfig(),
+        config=_enabled_config(),
     )
     arguments.update(overrides)
     return decide_drive(path or _path(), **arguments)
@@ -57,11 +65,11 @@ def test_task_drive_forward_speed_comes_from_environment(monkeypatch):
 
 
 def test_forward_speed_hard_limit_is_one_meter_per_second():
-    command = _decide(config=DriveConfig(max_forward_mps=1.00))
+    command = _decide(config=_enabled_config(max_forward_mps=1.00))
     assert command.vx == pytest.approx(1.00)
 
     with pytest.raises(ValueError, match="1.0"):
-        DriveConfig(max_forward_mps=1.0001).validate()
+        _enabled_config(max_forward_mps=1.0001).validate()
 
 
 def test_right_path_turns_right_without_lateral_velocity():
@@ -71,14 +79,15 @@ def test_right_path_turns_right_without_lateral_velocity():
     assert -0.18 <= command.yaw_rate < 0.0
 
 
-def test_unrestricted_path_mode_disables_confidence_gate(monkeypatch):
+def test_unrestricted_mode_does_not_override_enabled_confidence_stop(monkeypatch):
     monkeypatch.setitem(debug.ENV, "SWIN_L_UNRESTRICTED_PATH_MODE", "true")
     args = debug.parse_args(["task-drive"])
+    args.stop_on_low_confidence = True
     config = debug._drive_config_from_args(args)
 
     assert args.unrestricted_path_mode is True
-    assert config.min_confidence == 0.0
-    assert _decide(_path(confidence=0.01), config=config).reason == "tracking"
+    assert config.min_confidence == 0.49
+    assert _decide(_path(confidence=0.01), config=config).reason == "path_low_confidence"
 
 
 def test_unrestricted_path_mode_is_enabled_by_default(monkeypatch):
@@ -108,8 +117,8 @@ def test_path_quality_stop_switches_come_from_env(monkeypatch, enabled):
 
 @pytest.mark.parametrize("source", ["camera", "inference"])
 @pytest.mark.parametrize("age", [None, 5.1, float("nan"), -1.0])
-def test_disabling_quality_stops_cannot_bypass_input_freshness(source, age):
-    config = DriveConfig(stop_on_low_confidence=False, stop_on_lateral_target=False)
+def test_disabled_quality_stops_preserve_enabled_input_freshness(source, age):
+    config = _enabled_config(stop_on_low_confidence=False, stop_on_lateral_target=False)
 
     command = _decide(
         _path(confidence=0.1, lateral=2.0),
@@ -121,13 +130,13 @@ def test_disabling_quality_stops_cannot_bypass_input_freshness(source, age):
     assert (command.vx, command.vy, command.yaw_rate) == (0.0, 0.0, 0.0)
 
 
-@pytest.mark.parametrize("path", [None, _path(confidence=float("nan"))])
+@pytest.mark.parametrize("path", [None])
 def test_disabling_quality_stops_still_requires_usable_path(path):
     command = decide_drive(
         path,
         camera_age_sec=0.1,
         inference_age_sec=0.1,
-        config=DriveConfig(stop_on_low_confidence=False, stop_on_lateral_target=False),
+        config=_enabled_config(stop_on_low_confidence=False, stop_on_lateral_target=False),
     )
 
     assert command.reason in ("path_unavailable", "path_low_confidence")
@@ -156,7 +165,7 @@ def test_missing_path_stops():
             None,
             camera_age_sec=0.1,
             inference_age_sec=0.1,
-            config=DriveConfig(),
+            config=_enabled_config(),
         ).reason
         == "path_unavailable"
     )
@@ -164,10 +173,10 @@ def test_missing_path_stops():
 
 @pytest.mark.parametrize("confidence", [0.1, float("nan"), float("inf")])
 @pytest.mark.parametrize("lateral", [-8.0, 8.0])
-def test_master_bypass_overrides_all_confidence_and_lateral_checks(confidence, lateral):
+def test_disabled_confidence_and_lateral_checks_accept_all_quality_values(confidence, lateral):
     command = _decide(
         _path(confidence=confidence, lateral=lateral),
-        config=DriveConfig(bypass_path_stops=True),
+        config=_enabled_config(stop_on_path_unavailable=False, stop_on_low_confidence=False, stop_on_lateral_target=False),
     )
     assert command.reason == "tracking_slow_turn"
     assert 0.0 < command.vx < 0.5
@@ -175,36 +184,36 @@ def test_master_bypass_overrides_all_confidence_and_lateral_checks(confidence, l
 
 
 @pytest.mark.parametrize("points", [None, [], [["bad", 0.2]], [[3., float("nan")]]])
-@pytest.mark.parametrize("bypass", [False, True])
+@pytest.mark.parametrize("hold", [False, True])
 @pytest.mark.parametrize("yaw", [-0.9, -0.12, 0., 0.12, 0.9])
-def test_missing_or_unusable_target_holds_yaw_only_with_master_bypass(points, bypass, yaw):
+def test_missing_target_hold_depends_on_immediate_stop_setting(points, hold, yaw):
     path = None if points is None else replace(_path(), points_xy=np.asarray(points))
     command = decide_drive(
         path, camera_age_sec=0.1, inference_age_sec=0.1,
-        config=DriveConfig(bypass_path_stops=bypass), last_valid_yaw_rate=yaw,
+        config=_enabled_config(stop_on_path_unavailable=not hold, stop_on_low_confidence=False, stop_on_lateral_target=False), last_valid_yaw_rate=yaw,
     )
-    assert command.reason == ("tracking_path_hold" if bypass else "path_unavailable")
-    assert command.vx == (0.5 if bypass else 0.0)
-    assert command.yaw_rate == (max(-0.18, min(0.18, yaw)) if bypass else 0.0)
+    assert command.reason == ("tracking_path_hold" if hold else "path_unavailable")
+    assert command.vx == (0.5 if hold else 0.0)
+    assert command.yaw_rate == (max(-0.18, min(0.18, yaw)) if hold else 0.0)
 
 
 @pytest.mark.parametrize("yaw", [None, float("nan"), float("inf")])
-def test_master_bypass_requires_a_finite_previous_yaw_for_missing_paths(yaw):
+def test_path_hold_requires_a_finite_previous_yaw_for_missing_paths(yaw):
     command = decide_drive(
         None, camera_age_sec=0.1, inference_age_sec=0.1,
-        config=DriveConfig(bypass_path_stops=True), last_valid_yaw_rate=yaw,
+        config=_enabled_config(stop_on_path_unavailable=False, stop_on_low_confidence=False, stop_on_lateral_target=False), last_valid_yaw_rate=yaw,
     )
-    assert command.reason == "path_unavailable"
+    assert command.reason == "waiting_for_path"
     assert command.vx == command.yaw_rate == 0.0
 
 
 @pytest.mark.parametrize("points", [None, [], [["bad", 0.2]], [[3., float("nan")]]])
 @pytest.mark.parametrize("count", [1, 4, 5, 6, 100])
-def test_path_loss_bypass_expires_on_the_fifth_inference(points, count):
+def test_enabled_path_loss_limit_stops_on_fifth_inference(points, count):
     path = None if points is None else replace(_path(), points_xy=np.asarray(points))
     command = decide_drive(
         path, camera_age_sec=0.1, inference_age_sec=0.1,
-        config=DriveConfig(bypass_path_stops=True), last_valid_yaw_rate=0.12,
+        config=_enabled_config(stop_on_path_unavailable=False, stop_on_low_confidence=False, stop_on_lateral_target=False), last_valid_yaw_rate=0.12,
         path_unavailable_inferences=count,
     )
     assert command.reason == ("tracking_path_hold" if count < 5 else "path_unavailable")
@@ -214,11 +223,11 @@ def test_path_loss_bypass_expires_on_the_fifth_inference(points, count):
 
 @pytest.mark.parametrize("source", ["camera", "inference"])
 @pytest.mark.parametrize("age", [None, -1., 5.01, float("nan"), float("inf")])
-def test_master_bypass_never_overrides_sensor_freshness(source, age):
+def test_disabled_path_stop_preserves_enabled_sensor_freshness(source, age):
     ages = {"camera_age_sec": 0.1, "inference_age_sec": 0.1}
     ages[f"{source}_age_sec"] = age
     command = decide_drive(
-        None, **ages, config=DriveConfig(bypass_path_stops=True),
+        None, **ages, config=_enabled_config(stop_on_path_unavailable=False, stop_on_low_confidence=False, stop_on_lateral_target=False),
         last_valid_yaw_rate=0.12,
     )
     assert command.reason == f"{source}_stale"
@@ -436,7 +445,7 @@ def test_sharper_heading_slows_immediately_while_preserving_turn_direction(sign)
 @pytest.mark.parametrize("lookahead", [2.0, 4.0, 6.0])
 @pytest.mark.parametrize("sign", [-1, 1])
 def test_heading_limit_includes_boundary_and_stops_just_beyond(limit, lookahead, sign):
-    config = DriveConfig(max_target_heading_deg=limit, lookahead_m=lookahead)
+    config = _enabled_config(max_target_heading_deg=limit, lookahead_m=lookahead)
     for angle, stopped in ((limit, False), (limit + 0.001, True)):
         lateral = lookahead * math.tan(math.radians(sign * angle))
         path = replace(_path(), points_xy=np.asarray([[lookahead, lateral]]))
@@ -468,11 +477,11 @@ def test_heading_limit_environment_and_cli_override(monkeypatch):
 @pytest.mark.parametrize("value", [0, -1, 90, 100, float("nan"), float("inf")])
 def test_invalid_heading_limit_is_rejected(value):
     with pytest.raises(ValueError):
-        DriveConfig(max_target_heading_deg=value).validate()
+        _enabled_config(max_target_heading_deg=value).validate()
 
 
 def test_path_loss_hold_keeps_reduced_forward_speed():
-    config = DriveConfig(bypass_path_stops=True)
+    config = _enabled_config(stop_on_path_unavailable=False, stop_on_low_confidence=False, stop_on_lateral_target=False)
     previous = _decide(_path(lateral=3.0), config=config)
     held = decide_drive(
         None, camera_age_sec=0.1, inference_age_sec=0.1, config=config,
@@ -488,8 +497,70 @@ def test_path_loss_hold_keeps_reduced_forward_speed():
 def test_path_loss_cannot_reuse_invalid_saved_speed(speed):
     command = decide_drive(
         None, camera_age_sec=0.1, inference_age_sec=0.1,
-        config=DriveConfig(bypass_path_stops=True),
+        config=_enabled_config(stop_on_path_unavailable=False, stop_on_low_confidence=False, stop_on_lateral_target=False),
         last_valid_yaw_rate=0.18, last_valid_forward_mps=speed,
     )
-    assert command.reason == "path_unavailable"
+    assert command.reason == "waiting_for_path"
     assert command.vx == command.yaw_rate == 0.0
+
+
+def test_disabled_default_guards_accept_stale_low_quality_sharp_target():
+    config = DriveConfig()
+    assert all(getattr(config, 'stop_on_' + name) is False for name in DRIVE_STOP_CHECKS)
+    command = decide_drive(
+        _path(lateral=10.0, confidence=math.nan),
+        camera_age_sec=None, inference_age_sec=100.0, config=config,
+    )
+    assert command.reason == 'tracking_slow_turn'
+    assert 0 < command.vx < config.max_forward_mps
+    assert command.yaw_rate == config.max_yaw_rps
+
+
+@pytest.mark.parametrize(('check', 'inputs', 'reason'), [
+    ('camera_stale', {'camera_age_sec': None}, 'camera_stale'),
+    ('inference_stale', {'inference_age_sec': 100.0}, 'inference_stale'),
+    ('low_confidence', {'path': _path(confidence=math.nan)}, 'path_low_confidence'),
+    ('low_confidence', {'path': _path(confidence=0.1)}, 'path_low_confidence'),
+    ('lateral_target', {'path': _path(lateral=10.0)}, 'path_lateral_target_large'),
+])
+def test_individual_drive_guard_can_be_reenabled(check, inputs, reason):
+    arguments = dict(path=_path(), camera_age_sec=0.1, inference_age_sec=0.1)
+    arguments.update(inputs)
+    assert decide_drive(**arguments, config=DriveConfig()).vx > 0
+    command = decide_drive(**arguments, config=DriveConfig(**{'stop_on_' + check: True}))
+    assert command.reason == reason
+    assert command.vx == command.vy == command.yaw_rate == 0
+
+
+@pytest.mark.parametrize(('immediate', 'limit', 'count', 'reason'), [
+    (False, False, 1000, 'tracking_path_hold'),
+    (False, True, 4, 'tracking_path_hold'),
+    (False, True, 5, 'path_unavailable'),
+    (True, False, 1, 'path_unavailable'),
+    (True, True, 1, 'path_unavailable'),
+])
+def test_immediate_path_stop_and_failure_limit_are_independent(immediate, limit, count, reason):
+    command = decide_drive(
+        None, camera_age_sec=None, inference_age_sec=None,
+        config=DriveConfig(stop_on_path_unavailable=immediate, stop_on_path_loss_limit=limit),
+        last_valid_yaw_rate=-0.15, last_valid_forward_mps=0.08,
+        path_unavailable_inferences=count,
+    )
+    assert command.reason == reason
+    assert command.vx == (0.08 if reason == 'tracking_path_hold' else 0)
+    assert command.yaw_rate == (-0.15 if reason == 'tracking_path_hold' else 0)
+
+
+def test_disabled_path_stops_cannot_invent_first_motion_command():
+    command = decide_drive(
+        None, camera_age_sec=None, inference_age_sec=None, config=DriveConfig(),
+        path_unavailable_inferences=1000,
+    )
+    assert command.reason == 'waiting_for_path'
+    assert command.vx == command.vy == command.yaw_rate == 0
+
+
+@pytest.mark.parametrize('check', DRIVE_STOP_CHECKS)
+def test_drive_stop_flags_require_boolean_values(check):
+    with pytest.raises(ValueError, match='boolean'):
+        DriveConfig(**{'stop_on_' + check: 'false'}).validate()

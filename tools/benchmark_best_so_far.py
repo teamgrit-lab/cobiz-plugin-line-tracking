@@ -47,6 +47,7 @@ import torch
 from best_so_far_runtime import (
     DEFAULT_EVALUATION_SIZE,
     DEFAULT_PROFILE,
+    INFERENCE_BACKENDS,
     PROFILE_NAMES,
     ROAD_ISLAND_ACTIONS,
     BestSoFarConfig,
@@ -867,6 +868,9 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
         default="auto",
         help="auto, cpu, cuda, mps, or another torch device string",
     )
+    parser.add_argument("--backend", choices=INFERENCE_BACKENDS, default="pytorch")
+    parser.add_argument("--tensorrt-engine")
+    parser.add_argument("--tensorrt-manifest")
     parser.add_argument("--warmup-frames", type=int, default=2)
     parser.add_argument("--expected-input-hz", type=float, default=20.0)
     parser.add_argument("--report-interval", type=float, default=2.0)
@@ -983,6 +987,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         minimum_sidewalk_ring_ratio=args.minimum_sidewalk_ring_ratio,
         pedestrian_area_road_expansion=args.pedestrian_area_road_expansion,
         device=args.device,
+        backend=args.backend,
+        tensorrt_engine_path=args.tensorrt_engine,
+        tensorrt_manifest_path=args.tensorrt_manifest,
     )
     print(
         f"MODEL_LOAD_START profile={args.profile} requested_device={args.device}",

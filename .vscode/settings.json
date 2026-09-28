@@ -1,3 +1,4 @@
 {
-    "python.defaultInterpreterPath": "/opt/miniconda3/bin/python3"
+    "python.defaultInterpreterPath": "/opt/miniconda3/bin/python3",
+    "cmake.ignoreCMakeListsMissing": true
 }

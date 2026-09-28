@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import swin_l_local_path_debug as debug
 import swin_l_rosbag_overlay as cli
-from best_so_far_runtime import SWIN_L_ASPECT_PROFILE, resolve_profile
+from best_so_far_runtime import SWIN_L_ASPECT_FP16_PROFILE, resolve_profile
 
 
 @pytest.mark.parametrize("mode,updates", [("sidewalk", 12), ("local-path", 4)])
@@ -40,13 +40,11 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
             return frame
 
         def metadata(self):
-            return {"profile": SWIN_L_ASPECT_PROFILE}
+            return {"profile": SWIN_L_ASPECT_FP16_PROFILE}
 
     def events(path, topics, start_time_ns=0):
         assert path == source
         expected_topics = (cli.DEFAULT_IMAGE_TOPIC,)
-        if mode == "local-path":
-            expected_topics += (cli.DEFAULT_LIDAR_TOPIC,)
         assert topics == expected_topics
         camera = SimpleNamespace(
             encoding="rgb8",
@@ -68,13 +66,15 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
     monkeypatch.setitem(debug.ENV, "SWIN_L_PROFILE", "r50-fp16-640x360")
     monkeypatch.setitem(debug.ENV, "SWIN_L_MODEL_ID", "different/checkpoint")
     monkeypatch.setitem(debug.ENV, "SWIN_L_MODEL_REVISION", "different-revision")
+    # This case verifies rate-limited replay, independently of the deployment
+    # default that intentionally processes every frame in unrestricted mode.
+    monkeypatch.setitem(debug.ENV, "SWIN_L_UNRESTRICTED_PATH_MODE", "false")
     if mode == "sidewalk":
 
         def no_path_config(_):
-            pytest.fail("segmentation-only mode must not initialize path or LiDAR")
+            pytest.fail("segmentation-only mode must not initialize path")
 
         monkeypatch.setattr(debug, "_local_path_config_from_args", no_path_config)
-        monkeypatch.setattr(debug, "_lidar_config_from_args", no_path_config)
 
     assert (
         cli.main(
@@ -90,16 +90,18 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
         )
         == 0
     )
-    profile = resolve_profile(SWIN_L_ASPECT_PROFILE)
+    profile = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
     config = configurations[0]
     assert (config.profile, config.model_id, config.model_revision) == (
-        SWIN_L_ASPECT_PROFILE,
+        SWIN_L_ASPECT_FP16_PROFILE,
         profile.model_id,
         profile.model_revision,
     )
     assert (config.evaluation_height, config.evaluation_width) == (360, 640)
     assert len(calls) == updates
     report = json.loads((output / f"{mode}-report.json").read_text())
+    assert "lidar_topic" not in report
+    assert "lidar_safety" not in report
     assert report["frames_written"] == 12
     assert report["swin_l_updates"] == updates
     assert (report["local_path"] is not None) == (mode == "local-path")
@@ -136,3 +138,41 @@ def test_default_outputs_create_distinct_host_mounted_directories(
     assert first_video.parent.parent == tmp_path / "rosbag-results" / "swin-l-tests"
     assert first_video.parent.is_dir()
     assert second_video.parent.is_dir()
+
+
+def test_replay_arguments_are_camera_only(tmp_path):
+    source = tmp_path / "camera.mcap"
+    source.touch()
+    args = cli.parse_args(["local-path", "--input", str(source)])
+    forwarded = cli.build_debug_arguments(
+        args, tmp_path / "overlay.mp4", tmp_path / "report.json"
+    )
+    assert "--lidar-topic" not in forwarded
+    assert not hasattr(args, "lidar_topic")
+
+
+def test_active_parsers_expose_no_lidar_arguments():
+    for argv in (["ros2"], ["task-drive"]):
+        args = debug.parse_args(argv)
+        assert not any("lidar" in name.lower() for name in vars(args))
+        assert not hasattr(args, "clearance_topic")
+
+
+def test_overlay_renders_optional_status_without_safety_object():
+    frame = np.zeros((360, 640, 3), np.uint8)
+    mask = np.zeros((360, 640), np.uint8)
+    kwargs = {"frame_index": 1, "inference_count": 0, "inference_hz": 0.0}
+    plain = debug.render_local_path_overlay(
+        frame, mask, None, None, debug.LocalPathConfig(), **kwargs
+    )
+    status = debug.render_local_path_overlay(
+        frame,
+        mask,
+        None,
+        None,
+        debug.LocalPathConfig(),
+        status_text="AprilTag detections stale",
+        **kwargs,
+    )
+    assert plain.shape == status.shape == frame.shape
+    assert np.any(plain != status)

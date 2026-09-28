@@ -1,637 +1,590 @@
 # cobiz-plugin-line-tracking
 
-기본 Docker Compose 서비스 `actual-activate`는 Cobiz 서버의 커스텀 액션
-`LINE_TRACKING`을 기다립니다. 작업이 도착하고 현장 보정·카메라·LiDAR 안전
-검사를 통과한 경우에만 Swin-L `swin-l-aspect-224x384`의 선택된 영역 중심 경로로
-Unitree A2용 `sensor_msgs/Joy` 명령을 생성합니다. 작업이 없으면 Joy publisher도
-없습니다. 기본은 인도(`SWIN_L_PATH_MASK_CLASS=2`)이며, `.env`에서 차도(`1`)로
-선택할 수 있습니다. Cobiz 작업의 `payload.selected_mask`가 있으면 그 작업에만
-적용합니다.
+`actual-activate` is a Cobiz `LINE_TRACKING` task listener for the Unitree A2.
+For an accepted task it follows the selected surface-center path, defaulting to
+the pinned Swin-L FP16 TensorRT profile `swin-l-aspect-224x384-fp16`. The existing
+MaskFormer R50 profile `r50-fp16-640x360` is also supported with the PyTorch
+backend. AprilTag-based stopping and completion can be enabled explicitly. With no
+accepted task, it publishes
+no Sport Move request. The default path class is sidewalk
+(`SWIN_L_PATH_MASK_CLASS=2`); a task can request road (`1`) or road/sidewalk
+combined (`0`) with
+`payload.selected_mask`.
 
-## 안전 계약
+## Runtime contract
 
-작업 수신형 Swin-L 서비스는 `/a2_control`에 명령을 보내기 전에 작업 ID·보정
-플래그·센서 freshness·LiDAR 프레임·제어 publisher 단독 소유를 확인합니다.
+All automatic stops default to `false`; each `LINE_TRACKING_STOP_ON_*` setting
+uses `true` to enable its condition and `false` to disable it. Explicit server
+cancellation, image/model/publish errors, and handled shutdown still stop motion.
+No accepted task means no motion command, and speed limits remain enforced.
 
-- 출력 기본 토픽은 `/a2_control`이며 `cobiz-plugin-a2`의 `a2_control_node`가
-  Unitree Sport API 명령으로 변환합니다.
-- `cobiz-plugin-a2`는 Joy를 `Move(vx=-axes[1], vy=-axes[0], yaw=-axes[2])`로
-  해석합니다. 이 플러그인은 `[vy, -vx, yaw_rate]`를 발행해 A2의 좌우 이동과
-  회전축 부호를 보정합니다. 버튼 10개는 항상 0으로 유지합니다.
-- 실제 주행 전 `perspective_source`, 지면 폭/거리와 Joy 축 부호를 현장 카메라
-  장착 상태에 맞춰 보정해야 합니다.
-- `/a2_control`은 로봇으로 직접 이어지므로 다른 gamepad publisher 또는 Navigation
-  제어와 동시에 사용하지 않아야 합니다.
+- There is no startup hold or automatic task timeout by default.
+- With a usable path, motion begins on task acceptance. Without one, the task
+  waits at zero until it obtains a target; no initial command is invented.
+- With path stops disabled, loss of a path holds the current task's last valid
+  forward speed and yaw without a failure-count limit. Camera/inference stalls
+  alone do not stop motion when their checks are disabled.
+- `LINE_TRACKING_STOP_ON_APRILTAG=true` enables the existing stop-and-confirm
+  behavior: a candidate sends a hard stop, and the same ID in three distinct
+  frames across a one-second window completes the task. An unconfirmed candidate
+  can resume after that window, subject to enabled drive checks.
+- `teamgrit-slam` may supply tags on `/detections`. Missing or empty detection
+  streams only affect liveness metrics. With AprilTag stopping disabled, tags
+  never stop or complete the task.
+- This service supplies no obstacle avoidance. Hardware protections and external
+  controllers are outside these application settings.
 
-현재 제공된 원근점은 기능 확인용 초기값입니다. 측량하지 않은 기본값으로 무인
-주행을 시작하면 안 됩니다.
+The direct Sport interface is `/api/sport/request` (`unitree_api/msg/Request`,
+Move API ID `1008`). It bypasses navigation-level command arbitration and does
+not reject or abort a task when other publishers exist. Concurrent publishers
+can therefore issue conflicting commands, and the downstream Unitree interface
+determines which command takes effect. Move serialization preserves the existing
+axis mapping: `x=vx`, `y=-vy`, and `z=-yaw_rate`. The forward speed ceiling defaults to
+`0.50 m/s`, can be adjusted through
+`LINE_TRACKING_MAX_FORWARD_MPS`, and is rejected above the hard `1.00 m/s`
+limit.
 
-## 토픽
+## Topics and settings
 
-| 방향 | 토픽 기본값 | 형식 | 설명 |
+| Direction | Default | Type | Purpose |
 |---|---|---|---|
-| 입력 | `/a2/front_camera/image_raw` | `sensor_msgs/Image` | A2 전방 영상 |
-| 입력 | `/unitree/slam_lidar/points1` | `sensor_msgs/PointCloud2` | A2 LiDAR |
-| 출력 | `/a2_control` | `sensor_msgs/Joy` | 작업 승인 후 A2 속도 제어 명령 |
-| 출력 | `/line_tracking/swin_l/local_path` | `nav_msgs/Path` | `base_link` 기준 중심 경로 |
-| 출력 | `/line_tracking/swin_l/safety_stop` | `std_msgs/Bool` | LiDAR 안전 정지 상태 |
-| 출력 | `/line_tracking/swin_l/metrics` | `std_msgs/String` | 경로·LiDAR·작업 상태 JSON |
+| input | `/a2/front_camera/image_raw` | `sensor_msgs/Image` | A2 front camera |
+| input | `/detections` | `apriltag_msgs/msg/AprilTagDetectionArray` | optional tag detection and liveness metrics |
+| input | `/task_event` | `std_msgs/String` | Cobiz task lifecycle event |
+| output | `/api/sport/request` | `unitree_api/msg/Request` | accepted-task Move requests |
+| output | `/line_tracking/swin_l/local_path` | `nav_msgs/Path` | selected surface-center path in `base_link` |
+| output | `/line_tracking/swin_l/metrics` | `std_msgs/String` | path, task, and AprilTag state JSON |
+| output | `/task_state` | `std_msgs/String` | `TASK_STARTED`, `TASK_COMPLETED`, or abort/reject state |
 
-`debugging-swin-l`은 `/a2_control`을 발행하지 않으며 경로·안전 상태·metrics만
-확인합니다. `actual-activate`는 승인된 `LINE_TRACKING` 작업이 있을 때만 Joy를
-발행합니다.
+The deployment defaults are literal and may be overridden in `.env`:
 
-로봇 좌표는 `x=전방`, `y=왼쪽`, `yaw=반시계 방향 양수`를 사용합니다.
+```dotenv
+SWIN_L_APRILTAG_DETECTIONS_TOPIC=/detections
+SWIN_L_APRILTAG_MAX_AGE_SEC=1.0
+SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC=1.0
+SWIN_L_APRILTAG_CONFIRM_MIN_HITS=3
+LINE_TRACKING_MAX_FORWARD_MPS=0.50
+LINE_TRACKING_MAX_TARGET_HEADING_DEG=60.0
+```
 
-## Cobiz 작업 수신형 실행 (기본)
+## 목표 방향에 따른 전진 감속
 
-`cobiz-core`의 `cobiz_bridge/config/config.yaml`에서 `actions.custom` 항목에
-`LINE_TRACKING`을 등록했습니다. Core를 재빌드·재시작해 서버에 갱신된 액션을
-등록해야 합니다. Core의 `health_check_node`가 서버의 `TASK_REGISTERED`와
-`TASK_ABORTED`를 `/task_event`로 전달하고, 이 플러그인은 `/task_state`에
-`TASK_STARTED/start`, `TASK_COMPLETED/complete`, `TASK_REJECTED/reject`,
-`TASK_ABORTED/abort`를 발행합니다. HTTP 보고는 Core의 `request_manager`가 맡습니다.
+급하게 꺾어야 할수록 전진 속도를 줄인다. 목표 방향은 기존 방식대로
+`heading = atan2(y_at_lookahead, lookahead)`로 계산하며 기본 lookahead는 4m다.
+허용 목표각은 좌우 각각 **60° 이하**로, 이전 횡방향 ±0.75m 제한을 대체한다.
+각도 제한이 켜져 있을 때 60°를 초과하면 `path_lateral_target_large`로 정지한다.
+60°는 Path 목표각이며 회전 속도는 기존 **±0.18rad/s(약 ±10.31°/초)**다.
 
-Jetson에서 먼저 Swin-L용 CUDA 베이스 이미지, DDS 설정 파일, 카메라·LiDAR
-토픽을 준비합니다. `cp .env.example .env` 후 실제 토픽과 카메라-to-`base_link`
-homography, LiDAR-to-`base_link` 변환 및 장애물 범위를 **실측**해야 합니다.
-`.env.example`은 보정값이 아닙니다. 물리 비상정지와 `/a2_control` 단독 소유를
-검증한 뒤에만 `.env`의 `SWIN_L_CALIBRATION_CONFIRMED=true`와
-`SWIN_L_DRIVE_ENABLED=true`를 설정합니다. 두 값이 `false`면 컨테이너는
-대기하지만 작업을 `drive_not_armed`로 거절합니다.
+```text
+requested_yaw = heading_gain × heading_radians
+yaw = clip(requested_yaw, -max_yaw, +max_yaw)
+forward_speed = max_forward × max_yaw / max(max_yaw, abs(requested_yaw))
+```
+
+회전 요구가 상한을 넘으면 전진 속도도 같은 비율로 줄여 명령의 회전/전진 비율을
+유지한다. 기본 gain=1, 전진 상한=0.50m/s, yaw 상한=0.18rad/s일 때:
+
+| 목표각 절댓값 | 전진 속도 | 회전 속도 절댓값 |
+|---|---|---|
+| 0° | 0.500m/s | 0°/초 |
+| 10° | 0.500m/s | 10°/초 |
+| 15° | 0.344m/s | 10.31°/초 |
+| 30° | 0.172m/s | 10.31°/초 |
+| 45° | 0.115m/s | 10.31°/초 |
+| 60° | 0.086m/s | 10.31°/초 |
+
+이전 곡률·영상 나이 기반 감속, 1.2초 `perception_delay_stop`, 정지 후 방향 정렬,
+두 프레임 확인, 회전 펄스, 가속 제한은 제거했다. 추론 결과를 기다리는 추가 단계 없이
+기본 10Hz 제어 주기에서 적용하며 추론 루프는 그대로다. 기존 5초 카메라/추론
+검사, 시작 2초 대기와 AprilTag 정지는 아래 설정으로 켤 수 있다. 명시적 취소와
+오류·프로세스 종료 시 정지는 항상 유지한다.
+
+감속 중 `drive_reason`은 `tracking_slow_turn`이며 정상 추종으로 처리한다.
+metrics의 `turn_speed_control`에서 목표각, 허용각, 전진·회전 명령을 확인할 수 있다.
+60°에서 전방 4m 기준 횡방향 한계는 약 6.93m다. 현재 BEV 반폭 4m와 Path 추출
+범위는 그대로이므로 허용각을 높여도 카메라가 60° 또는 90° 코너의 Path를 추가로
+검출하게 되지는 않는다. 감속은 코너 통과나 도로 경계 안의 주행을 보장하지 않는다.
+
+Jetson 적용 시 사용자가 `.env`의 `LINE_TRACKING_MAX_TARGET_HEADING_DEG=60.0`을
+확인하고 `docker compose up -d --build actual-activate`로 빌드·재생성한다.
+제거된 `LINE_TRACKING_ADAPTIVE_CONTROL`, `LINE_TRACKING_TURN_*` 등 예전 설정은
+사용하지 않는다. 모델/백엔드 설정은 유지한다.
+
+## 자동 정지 설정
+
+모든 자동 정지 조건은 **`true`=사용, `false`=해제**이며 기본값은 전부 `false`다.
+기존 조건과 임계값은 유지하고, 각 조건의 적용 여부만 독립적으로 선택한다.
+
+```dotenv
+LINE_TRACKING_STOP_ON_CAMERA_STALE=false
+LINE_TRACKING_STOP_ON_INFERENCE_STALE=false
+LINE_TRACKING_STOP_ON_CAMERA_TIMESTAMP_INVALID=false
+LINE_TRACKING_STOP_ON_PATH_UNAVAILABLE=false
+LINE_TRACKING_STOP_ON_PATH_LOSS_LIMIT=false
+LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=false
+LINE_TRACKING_STOP_ON_LATERAL_TARGET=false
+LINE_TRACKING_STOP_ON_APRILTAG=false
+LINE_TRACKING_STOP_ON_STARTUP_HOLD=false
+LINE_TRACKING_STOP_ON_STARTUP_UNREADY=false
+LINE_TRACKING_STOP_ON_UNSAFE_TIMEOUT=false
+LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
+```
+
+아래 이름에는 공통 접두사 `LINE_TRACKING_STOP_ON_`을 붙인다.
+
+| 설정 | `true`일 때 적용되는 조건 |
+|---|---|
+| `CAMERA_STALE` | 카메라 수신/원본 시각 기준 5초 초과, 이력 없음 또는 잘못된 나이이면 정지 |
+| `INFERENCE_STALE` | 추론 완료/추론 원본 이미지 시각 기준 5초 초과, 이력 없음 또는 잘못된 나이이면 정지 |
+| `CAMERA_TIMESTAMP_INVALID` | 0 이하, 50ms 초과 미래, 5초 초과 과거, 중복·역순 이미지 시각을 거절하고 정지 |
+| `PATH_UNAVAILABLE` | 유한한 x/y 목표점을 만들 수 없으면 즉시 정지 |
+| `PATH_LOSS_LIMIT` | 선택한 Path가 연속 5회 추론에서 없으면 정지. 즉시 정지를 꺼도 독립 적용 |
+| `LOW_CONFIDENCE` | 신뢰도 0.49 미만 또는 NaN/Inf이면 정지. unrestricted 모드에서도 적용 |
+| `LATERAL_TARGET` | 목표각 절댓값이 설정 허용각(기본 60°)을 초과하면 정지 |
+| `APRILTAG` | 후보 검출 즉시 정지하고, 1초 확인 창에서 같은 ID의 새 프레임 3회 확인 시 작업 완료 |
+| `STARTUP_HOLD` | 작업 시작 후 2초간 0 속도로 대기 |
+| `STARTUP_UNREADY` | 시작 2초 이후에도 추종을 한 번도 시작하지 못했다면 작업 중단 |
+| `UNSAFE_TIMEOUT` | 추종할 수 없는 상태가 연속 2초 지속되면 작업 중단 |
+| `TASK_TIMEOUT` | 요청한 작업 시간 도달 시 정지·종료. 기본 500초, 최대 10000초 |
+
+`PATH_UNAVAILABLE=false`, `PATH_LOSS_LIMIT=true`이면 이전처럼 실패 1–4회는
+마지막 전진·회전 명령을 유지하고 5회째 정지한다. 둘 다 `false`이면 실패 횟수에
+상관없이 그 명령을 유지한다. 급회전 때문에 줄어든 전진 속도도 함께 유지한다.
+현재 작업에서 아직 유효한 명령을 얻지 못했다면 `waiting_for_path`로 0 속도 대기한다.
+작업 시작·종료 시 저장 명령은 초기화하며, 다른 작업의 명령을 재사용하지 않는다.
+실패 횟수는 카메라 수신/10Hz 발행 횟수가 아니라 선택한 클래스의 추론 완료 횟수다.
+유효 Path가 돌아오면 0으로 초기화한다. 제한 모드에서는 smoother가 보존하는 유효
+Path가 만료된 뒤부터 실패로 센다.
+
+`STARTUP_HOLD=false`이면 입력이 준비된 작업은 수락 직후 제어 명령을 보낸다.
+`STARTUP_UNREADY`와 `UNSAFE_TIMEOUT`은 서로 독립적인 중단 조건이다.
+`TASK_TIMEOUT=false`이면 payload의 `duration_sec`에 도달해도 작업은 계속된다.
+명시적 취소, 처리 오류·프로세스 종료, 또는 별도로 켠 자동 종료 조건이 작업을 끝낸다.
+
+명시적 서버 취소, 이미지 변환 오류, 추론·발행 오류, SIGTERM/정상 종료 시 정지는
+해제하지 않는다. 이미지 변환 오류는 오류 이후 수락한 새 프레임의 추론이 성공할
+때까지 정지를 유지한다. 전진 상한 1.0m/s, 회전 상한 ±0.18rad/s, 급회전 시 전진 감속,
+설정·명령 유효성 검사도 유지한다. Path 생성과 속도 제한을 끄는 설정은 아니다.
+
+기존 역방향 설정 `LINE_TRACKING_BYPASS_PATH_STOPS`와 `--bypass-path-stops`는
+제거했다. 기존 `.env`에서 해당 키를 삭제하고 위 설정으로 교체한다. 직접 실행 환경에
+옛 키가 남아 있으면 설정 오류로 안내하며, Compose는 그 키를 전달하지 않는다.
+기존 `.env`에 명시한 `STOP_ON_*=true`는 계속 적용되므로 전부 해제하려면 기존 값도
+`false`로 변경한다. 코드를 반영한 이미지를 빌드하고 서비스를 재생성해야 적용된다.
+CLI는 `--stop-on-camera-stale`처럼 켜고 `--no-stop-on-camera-stale`처럼 끈다.
+
+metrics의 `stop_checks`에 12개 설정을 표시한다. `path_yaw_held`,
+`path_unavailable_inferences`, `path_unavailable_limit`(`5`)로 명령 유지와 실패 횟수를
+확인한다. `tracking_path_hold`이면 Path 메시지가 비어 있어도 저장 명령으로 움직일
+수 있다. 호환 진단 키 `stop_checks.path_available`은 즉시 정지가 켜졌거나,
+연속 실패 제한이 켜지고 5회에 도달했을 때만 `true`다.
+`apriltag.stop_enabled`는 AprilTag 정지 설정을 나타낸다.
+
+`debugging-swin-l`은 Sport 요청을 발행하지 않는 디버그 프로필이다.
+
+## Start the task listener
+
+`cobiz-core` must register `LINE_TRACKING` in `actions.custom`, and its task
+lifecycle bridge must publish `/task_event`. On the Jetson, prepare the DDS
+directory and configure the camera and path geometry. Start `teamgrit-slam` if
+AprilTag-based completion is required.
 
 ```bash
-cp .env.example .env                  # 최초 1회, Jetson 값으로 보정
-docker compose up -d --build           # 최초 빌드: actual-activate 하나만 시작
-# 이후에는 docker compose up -d 또는 docker compose up -d actual-activate
+cp .env.example .env
+mkdir -p .cache/huggingface models/swin-l-checkpoint models
+docker compose --profile engine build
+docker compose run --rm prepare-swin-l-checkpoint
+docker compose run --rm build-swin-l-engine
+docker compose config --quiet
+docker compose up -d actual-activate
 docker compose logs -f actual-activate
+
+ros2 topic echo /detections
 ros2 topic echo /line_tracking/swin_l/metrics
 ros2 topic echo /task_state
 ```
 
-기본 작업 시간은 60초, 최대 300초입니다. 서버 작업 `payload`에
-`{"duration_sec": 30, "selected_mask": 1}`을 넣으면 30초 동안 차도(`1`)를
-추종합니다. 인도는 `2`이며, `selected_mask`를 생략하면 `.env`의
-`SWIN_L_PATH_MASK_CLASS`를 사용합니다. `0`·그 밖의 값은 `invalid_selected_mask`로
-거절합니다. 작업 종료 후에는 `.env` 기본값으로 돌아갑니다. 센서·모델 경로가 준비되지
-않았거나 다른 `/a2_control` publisher가 있으면 작업을 거절합니다. 수락 시
-2초간 0 명령을 보낸 뒤 추종하고, 서버 취소·시간 만료·안전 조건 위반 2초 지속 시
-0 명령 후 종료 상태를 보고합니다. 무한 주행 작업은 지원하지 않습니다.
-정상 종료와 `SIGTERM`에도 0 명령을 시도하지만 전원 차단·`SIGKILL` 시에는
-발행할 수 없습니다. 현재 A2 제어 노드의 Joy 미수신 watchdog은 경고 로그만
-남기므로, 무인 실주행 전 독립적인 하위 제어 정지 장치/물리 비상정지를 확인해야
-합니다.
+Example task payload (`duration_sec` ends the task only when `TASK_TIMEOUT=true`):
 
-## MCAP 카메라 토픽을 MP4로 변환
-
-ROS 2 설치 없이 MCAP rosbag의 `sensor_msgs/msg/Image` 또는
-`sensor_msgs/msg/CompressedImage` 카메라 토픽을 MP4로 변환할 수 있습니다.
-입력 bag은 read-only로 열며, FPS를 생략하면 메시지 timestamp의 중앙값 간격으로
-자동 계산합니다. FFmpeg와 Python 패키지 `mcap`, `mcap-ros2-support`가 필요합니다.
-
-```bash
-uv run --with mcap --with mcap-ros2-support \
-  python tools/rosbag_mcap_to_mp4.py \
-    --input "$HOME/Downloads/20260827_063215_teamgrit_rosbag" \
-    --topic /a2/front_camera/res_360p/image_raw \
-    --output rosbag-results/20260827_063215_camera.mp4
+```json
+{"duration_sec": 30, "selected_mask": 2}
 ```
 
-`--input`에는 rosbag 디렉터리 또는 단일 `.mcap` 파일을 줄 수 있습니다. 긴 bag의
-일부만 확인하려면 `--max-frames 100`, 용량과 처리 시간을 줄이려면
-`--frame-step 2`를 사용합니다. 기존 출력 파일을 교체하려면 `--overwrite`를
-명시해야 합니다.
+`selected_mask` accepts `0` (road or sidewalk), `1` (road only), or `2`
+(sidewalk only). With `0`, both surface labels from the same inference form
+one combined region for path generation and tracking. Either surface alone
+can produce a path, and adjacent road/sidewalk regions can form one wider
+region. Semantic background pixels (label `0`) are still excluded. This mode
+does not prefer sidewalk over road or run the model a second time.
 
-## 보정과 튜닝
+To use this mode when a task omits `selected_mask`, set
+`SWIN_L_PATH_MASK_CLASS=0` in `.env` and recreate the service with an updated
+image. An explicit task value overrides the environment default. Metrics
+report `path_mask_class: 0` and `path_surface: "ROAD_OR_SIDEWALK"`. Existing
+stop checks still apply; no road/sidewalk region means no path.
 
-운영 설정은 `.env`의 `SWIN_L_*` 변수이며, 값 변경 후 해당 Compose 서비스를
-재생성해야 반영됩니다.
+The default duration is 500 seconds. Requests above 10000 seconds are capped at
+10000 seconds. Existing deployments with `LINE_TRACKING_MAX_DURATION_SEC=1000`
+in `.env` must change it to `10000` and recreate the service to apply the new limit.
+The listener
+reports task state on `/task_state`; core owns any corresponding HTTP report.
+It always sends stop commands on server cancellation, handled shutdown, and
+processing/publish errors. Automatic stops apply only when their flags are enabled.
+Detection-stream loss is reported in metrics but does not abort or block the task.
+No process can publish a final command after power loss or `SIGKILL`.
 
-1. 정지 상태에서 local path overlay를 보며 `SWIN_L_ROI_POLYGON`을 실제 영역에
-   맞춥니다.
-2. 지면의 알려진 네 점을 이용해 `SWIN_L_NEAR_DISTANCE_M`,
-   `SWIN_L_FAR_DISTANCE_M`, `SWIN_L_GROUND_HALF_WIDTH_M`을 보정합니다.
-3. `SWIN_L_PATH_MASK_CLASS`를 `1`(차도) 또는 `2`(인도)로 선택합니다.
-4. 카메라·LiDAR의 `base_link` 정렬과 `SWIN_L_*` 안전 거리·timeout을 현장
-   데이터로 검증합니다.
-5. 마지막에 속도 제한과 confidence threshold를 올립니다.
+## Camera and path calibration
 
-## 로컬 테스트
+`.env.example` is not a calibrated deployment file. Before operation, validate
+the camera-to-`base_link` geometry and Swin-L path against the installed A2.
 
-NumPy, pytest, PyTorch/Transformers가 설치된 환경에서:
+Road and sidewalk share the same ROI. Its default bottom width is 84% of the
+image, top width is 24%, and height is 55% (top at image y=45%):
 
-```bash
-python3 -m pytest test
-docker compose config --quiet
+```dotenv
+SWIN_L_ROI_POLYGON=0.08,1.00,0.92,1.00,0.62,0.45,0.38,0.45
 ```
 
-## Mapillary segmentation profile 전환과 Swin-L 복구
+An existing deployment `.env` overrides this default. Update its value and
+recreate the service to apply it. The ROI also defines the camera-to-ground
+homography: moving its top changes which pixels map to the configured 8 m far
+distance. Check known ground points after changing it; this setting does not
+measure the distance from the camera.
 
-선택된 Mapillary 기본 profile은 **`swin-l-aspect-224x384`**입니다. 같은
-checkpoint의 기존 정사각형 `swin-l-best-so-far`와 R50은 비교·복구용으로
-남겨 두었습니다. 이 기본값은 benchmark/전체 영상/Swin-L 디버그·MCAP 도구와
-`actual-activate` 작업 주행에 적용됩니다.
+1. In the debug profile, adjust `SWIN_L_ROI_POLYGON` while inspecting the
+   `nav_msgs/Path` local path in RViz; use the offline overlay workflow for a
+   rendered camera view.
+2. Measure known ground points to tune `SWIN_L_NEAR_DISTANCE_M`,
+   `SWIN_L_FAR_DISTANCE_M`, and `SWIN_L_GROUND_HALF_WIDTH_M`.
+3. Select `SWIN_L_PATH_MASK_CLASS=1` for road or `2` for sidewalk.
+4. Verify the camera timestamp, inference freshness, coordinate axes, speed limits,
+   and behavior with any concurrently active Sport publishers before a live task.
 
-```bash
-# 과거 384x384 결과 재현
-uv run tools/benchmark_best_so_far.py mcap \
-  --profile swin-l-best-so-far \
-  --input /path/to/input.mcap \
-  --output-report rosbag-results/benchmarks/swin-l-restored.json
-```
-
-선택된 `swin-l-aspect-224x384`의 고정 계약은 다음과 같습니다.
-
-- model: `facebook/mask2former-swin-large-mapillary-vistas-semantic`
-- revision: `4772b6bf101d91f2534c106dc524d906aeb3c68a`
-- model input: `224x384`, score map: `640x360`, precision: FP32
-- temporal alpha `0.62`, hysteresis margin `0.07`
-- Road/Bike Lane/Crosswalk/Parking/Service Lane/Lane Marking을 Road로 통합
-- Sidewalk/Pedestrian Area/Curb Cut을 Sidewalk로 통합
-
-2026-09-16 전방 카메라 `test-one` 검증에서 16:9에 가까운 입력 크기를 쓰는
-`swin-l-aspect-224x384`는 16:9 카메라에 가까운 모델 입력을 사용하며,
-위 결과를 재현하기 위해 기본값으로 고정했습니다. 구형 384×384 프로필은
-명시적으로 선택할 때만 사용합니다. 두 참조 overlay는
-ADE20K B5 모델 출력이므로 정확한 수동 라벨이 아니며, 실제로 27초와 57~58초
-그늘진 타일을 Road로 잘못 칠하는 구간이 있습니다. 표본 비교와 재현 명령은
-`rosbag-results/test-one-swin-validation-20260916/INITIAL_REPORT.md`에 있습니다.
-
-화질 우선 실험 프로필 `swin-l-aspect-448x768`도 선택할 수 있습니다. 두 영상의
-표본 비교에서 224×384보다 참조 일치도가 높았고, 두 번째 영상의 69~70초
-보도→도로 오분류를 줄였습니다. 대신 이 장비의 연속 80프레임 실험에서
-처리 시간이 프레임당 약 0.18초에서 0.51초로 늘었습니다. 현장 정확도를
-보증하는 기본값은 아니므로 주행 프로필로 선택하지 않았습니다.
-
-## MCAP overlay 테스트를 명령 한 줄로 실행
-
-Mac/일반 PC에서는 저장소 루트에서 `uv`로 실행한다. Jetson은 아래의
-[MCAP 테스트 컨테이너](#jetson에서-mcap-overlay-테스트)를 사용한다.
-두 명령 모두 위의 `swin-l-aspect-224x384`
-모델·revision·FP32·224×384 입력·temporal 설정을 고정한다. `.env`의
-다른 모델 선택은 적용하지 않으며, Local Path 기하 설정은 기존 `.env`를 사용한다.
-
-```bash
-# 1. 인도 검출 overlay: 원본 카메라의 모든 프레임을 추론
-uv run tools/swin_l_rosbag_overlay.py sidewalk --input /path/to/input.mcap --open
-
-# 2. Local Planning overlay: 인도 중심 경로·평활·LiDAR 상태
-uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/input.mcap --open
-```
-
-기본은 처음 200프레임(현재 20Hz bag에서 약 10초)이다. 전체를 처리하려면
-`--max-frames 0`, 문제 구간부터 보려면 `--start-offset 90`을 추가한다.
-입력은 단일 `.mcap`이며 기본 토픽은 카메라
-`/a2/front_camera/res_360p/image_raw`, LiDAR `/unitree/slam_lidar/points2`다.
-다른 bag은 `--image-topic`, `--lidar-topic`, `--output-fps`로 맞춘다.
-
-완료하면 영상이 자동으로 열리고, 터미널에 MP4와 JSON의 절대경로가 나온다.
-매 실행마다 `rosbag-results/swin-l-tests/` 아래 새 폴더를 만든다. 영상만
-생성하려면 `--open`을 생략한다. 첫 실행에는 모델과 의존성을 내려받는다.
-
-- `sidewalk`: 초록=도로, 마젠타=인도. 경로와 LiDAR를 계산하지 않는다.
-- `local-path`: 초록=차도, 마젠타=인도, 주황=추정 경로, 흰색=평활 경로. 경로 대상은
-  `SWIN_L_PATH_MASK_CLASS`로 선택한다. 기존 4Hz 목표 추론과 hold를 재사용하므로
-  `TRACKED`라도 이전 경로일 수 있다. 장애물 우회 planner는 아니다.
-
-## Swin-L 선택 영역 중심 local path 디버그
-
-`tools/swin_l_local_path_debug.py`는 Swin-L profile에서 선택한 인도 또는 차도
-mask를 카메라 전방 3~8m의 metric bird's-eye grid로 옮긴 뒤, 각 거리에서 영역의 중심을
-추출해 `base_link` 기준 `nav_msgs/Path`로 만든다. 매 프레임마다 경로를
-갈아끼우지 않고 최신 카메라 프레임만 유지하는 depth-1 큐, Swin-L 기본 추론
-4Hz, 0.8초 EMA, 0.9초 경로 hold를 사용한다. 따라서 출력 타이머는 기본 10Hz여도
-실제 Swin-L 추론이 4Hz보다 느리면 유효한 경로 갱신은 더 느려질 수 있다.
-
-유효한 결과는 `local_path.poses`가 2개 이상이고 metrics에서
-`path_tracked=true`, `path_confidence>0`인 상태다. `ros2 topic hz`가 약 10Hz라는
-것만으로 경로가 갱신되는 것은 아니다. `poses=[]`, `path_tracked=false`,
-`reason=path_unavailable`이면 영상은 들어오지만 선택된 영역의 중심선을 추출하지
-못한 상태다. LiDAR가 연결되어 있어도 mask/ROI/
-homography가 맞지 않으면 이 상태가 된다.
-
-LiDAR가 오래되었거나 path corridor 안에 3m 이내의 점이 3개 이상 있으면
-`safety_stop` 디버그 토픽이 `true`가 된다. 이 프로세스는 `/a2_control`을 발행하지
-않으므로 기존 제어 노드와 분리된 검사 전용이다.
-
-### 토픽과 주요 설정
-
-영상과 LiDAR 토픽은 `.env`에서 정의한다. 첨부 rosbag의 640x360 스트림은
-`res_360p` 토픽을 사용하지만, 현재 Jetson의 1280x720 카메라 스트림은 보통
-`/a2/front_camera/image_raw`를 사용한다. LiDAR도 장치에 따라 `points1` 또는
-`points2`가 될 수 있으므로 실제 토픽 목록과 컨테이너 로그를 확인한다.
-
-| 방향 | `.env` 변수 | 예시 |
-|---|---|---|
-| 입력 영상 | `SWIN_L_IMAGE_TOPIC` | `/a2/front_camera/image_raw` |
-| 입력 LiDAR | `SWIN_L_LIDAR_TOPIC` | `/unitree/slam_lidar/points1` |
-| 경로 대상 클래스 | `SWIN_L_PATH_MASK_CLASS` | `2`=인도(기본), `1`=차도 |
-| 출력 overlay (actual-activate only) | `SWIN_L_OVERLAY_TOPIC` | `/line_tracking/swin_l/overlay` |
-| 출력 경로 | `SWIN_L_LOCAL_PATH_TOPIC` | `/line_tracking/swin_l/local_path` |
-| 안전 상태 | `SWIN_L_SAFETY_STOP_TOPIC` | `/line_tracking/swin_l/safety_stop` |
-| 여유 거리 (actual-activate only) | `SWIN_L_CLEARANCE_TOPIC` | `/line_tracking/swin_l/clearance_m` |
-| 진단 metrics | `SWIN_L_METRICS_TOPIC` | `/line_tracking/swin_l/metrics` |
-
-`debugging-swin-l`에서는 경로·안전 상태·metrics만 발행한다. LiDAR 여유 거리의
-상세값은 별도 토픽 대신 `metrics.lidar.clearance_m`에서 확인할 수 있다.
-`metrics.path_mask_class`와 `metrics.path_surface`에서 현재 선택을 확인할 수 있다.
-`0`(배경)과 그 밖의 `.env` 값은 시작 시 거부한다. `.env`를 바꾼 뒤에는 해당 컨테이너를
-재생성해야 적용된다. Cobiz `LINE_TRACKING` 작업의 `payload.selected_mask`로는
-`1` 또는 `2`를 지정할 수 있으며, 수락된 작업에만 적용된다. 모델이 분할한 두
-영역의 경로를 각각 유지해 요청한 영역의 경로·LiDAR 판정으로 작업을 수락한다.
-인도→차도 자동 대체는 하지 않는다.
-차도 추종을 실제 주행에 적용하기 전에는 카메라 원근 보정, 경로 폭·중심선과
-LiDAR 안전 구간을 차도 장면에서 별도로 검증해야 한다.
-
-카메라 입력 해상도와 모델 평가 해상도는 별개다. 예를 들어 카메라가 1280x720이어도
-`SWIN_L_EVALUATION_WIDTH=640`, `SWIN_L_EVALUATION_HEIGHT=360`으로 두면 모델은
-640x360으로 평가한다. 이는 Swin-L 계산량을 줄이기 위한 설정이며 원본 토픽의
-해상도를 변경하지 않는다.
-
-`SWIN_L_ROI_POLYGON`과 `SWIN_L_GROUND_HALF_WIDTH_M`은 카메라 pitch와 장착 위치에
-따라 반드시 현장에서 보정해야 한다. Rosbag에는 `CameraInfo`는 있지만
-camera-to-base extrinsic/TF가 없으므로 기본 homography는 초기 디버그값이다.
-LiDAR는 x=전방, y=왼쪽으로 `base_link`에 정렬되어 있다고 가정한다. 실차에서는
-extrinsic을 확인한 뒤 `SWIN_L_LIDAR_Z_*`, corridor 폭과 stop 거리를 조정한다.
-
-### Rosbag을 동영상으로 먼저 확인
-
-ROS 2 없이 같은 rosbag을 동영상 overlay로 확인할 수 있다. camera 20Hz 출력
-프레임은 유지하면서 Swin-L update만 기본 4Hz로 실행하고 LiDAR 상태와 raw/
-평활 경로를 overlay한다.
-
-```bash
-uv run tools/swin_l_local_path_debug.py mcap \
-  --input /Users/kangminwoo/Downloads/20260827_062352_teamgrit_rosbag_0.mcap \
-  --output rosbag-results/swin-l-local-path.mp4 \
-  --report rosbag-results/swin-l-local-path.json \
-  --max-frames 400
-```
-
-Overlay에서 초록은 Swin-L 차도, 마젠타는 인도 mask이며, 주황색은 최신 raw 중심선,
-흰색은 평활된 local path다. 기본 `ros2` 모드는 디버깅 전용이며, 실제 작업 주행 전에 homography,
-LiDAR frame 정렬, 장애물 z 범위를 검증해야 한다.
-
-## Swin-L 실제 주행 모드 (보정 확인 전에는 비활성)
-
-`actual-activate`는 Cobiz 작업 수신형이며, 승인된 `LINE_TRACKING` 작업이 있는
-동안에만 Swin-L 경로와 LiDAR gate를 이용해 `/a2_control` Joy를 **최대
-0.10m/s, 0.18rad/s**로 발행한다.
-카메라/추론/경로가 오래되거나 경로 신뢰도가 낮거나 LiDAR가 없거나 장애물이
-가깝거나 다른 control publisher가 보이면 10Hz로 영속적인 0 명령을 보낸다.
-시작 후 2초 동안도 0 명령만 보내고, LiDAR PointCloud2의 `frame_id`가
-`base_link`가 아니면 변환 없이 사용하는 대신 즉시 정지한다.
-카메라와 LiDAR의 ROS timestamp가 현재 시스템 시각과 맞지 않거나 `/clock`
-시뮬레이션 시간이 활성화되어 있어도 주행하지 않는다.
-`debugging-swin-l`에는 Joy publisher가 없다.
-
-현재 `.env.example`의 카메라 homography 및 LiDAR `base_link` 정렬은 현장
-실측값이 아니므로 **이 저장소에서는 주행 플래그를 켜지 않는다.** Jetson에서
-좌표계·거리·토픽·CUDA 처리 지연을 검증하고 물리 비상정지 수단을 준비한
-후에만 `.env`의 `SWIN_L_CALIBRATION_CONFIRMED=true`와
-`SWIN_L_DRIVE_ENABLED=true`를 직접 설정한다. 코드/컨테이너의 기본값은
-둘 다 `false`다.
-
-```bash
-# 보정과 비상정지 검증 후 Jetson에서만 실행. 이 명령은 실제 움직임을 유발한다.
-docker compose stop debugging-swin-l
-docker compose up -d --build actual-activate
-docker compose logs -f actual-activate
-# 중지
-docker compose stop actual-activate
-```
-
-ROS metrics의 `drive_reason`이 `tracking`일 때만 비영(非零) Joy가 발행된다.
-앱의 실주행 검증을 실행했다는 뜻은 아니며, 현장 보정·비상정지·속도 검증이
-끝나기 전에는 두 플래그를 활성화하지 말아야 한다.
-
-## Docker debug 컨테이너
-
-아래 구성은 Jetson에서 `debugging-swin-l`만 실행해 local path와 metrics를 확인하고
-로봇을 주행시키지 않는 절차다. `debugging-swin-l`은 `/a2_control`을 발행하지
-않으므로 작업 주행용 `actual-activate`와 분리해서 사용할 수 있다.
-
-`jetson-containers`는 이 저장소 안에 있을 필요가 없다. Jetson 호스트의 별도
-디렉터리(예: `~/tools/jetson-containers`)에 clone해도 되며, 이미지 build가 끝난
-뒤 계속 실행 중일 필요도 없다.
-
-```bash
-cd ~/dev/dangjin-a2/cobiz-plugin-line-tracking
-test -f .env || cp .env.example .env
-```
-
-현재 Jetson 카메라가 1280x720이라면 `.env`에서 입력 토픽만 실제 장치에 맞추고,
-모델 평가 해상도는 640x360으로 유지한다.
+For a 1280x720 Jetson camera, retain the 640x360 evaluation size and set only
+the actual image topic as needed:
 
 ```dotenv
 SWIN_L_IMAGE_TOPIC=/a2/front_camera/image_raw
-SWIN_L_LIDAR_TOPIC=/unitree/slam_lidar/points1
 SWIN_L_EVALUATION_WIDTH=640
 SWIN_L_EVALUATION_HEIGHT=360
-SWIN_L_BASE_IMAGE=cobiz:jetson-swin-l-l4t-r36.5.0
 ```
 
-첨부 rosbag처럼 640x360 stream을 재생할 때는
-`/a2/front_camera/res_360p/image_raw`를 사용한다. LiDAR도 장치에 따라 `points1`
-또는 `points2`가 될 수 있으므로 `ros2 topic list`와 컨테이너 로그의
-`image=... lidar=...`를 기준으로 `.env`를 맞춘다.
+## Path generation and motion gates
+
+The road (`1`), sidewalk (`2`), or combined (`0`) region is projected into a 280-by-160
+ground grid spanning the configured 3-8 m forward range and +/-3.5 m sideways.
+A 5-by-5 morphological closing fills small mask gaps. Each forward-distance
+row selects a contiguous region at least 0.12 m wide, favoring width and
+continuity with the preceding row. Its center contributes to a quadratic fit,
+which is sampled into 20 path points and clipped to +/-3.5 m laterally.
+
+With the deployed default `SWIN_L_UNRESTRICTED_PATH_MODE=true`, at least two
+usable rows are sufficient. No path is produced when fewer than two rows have
+a qualifying region, including when the selected class is absent from the
+ROI. An invalid new estimate clears the previous path. Valid-ratio filtering,
+temporal smoothing, and the smoother's hold expiry are bypassed in this mode.
+The independent `STOP_ON_LOW_CONFIDENCE=true` drive check still applies at 0.49.
+Sparse observations can therefore be extrapolated over
+the full forward range; neither fitting nor gap filling establishes obstacle
+clearance. With unrestricted mode disabled, the default valid-row requirement
+is 35% (56 of 160 rows), and the smoother can retain a previous valid path for
+up to 0.90 seconds.
+
+A visible path does not imply an active task. Motion requires an accepted task,
+a usable target or a command retained from that task, no active processing fault,
+and satisfaction of any enabled automatic checks listed above. The controller
+has no separate path-age cutoff and does not require a path to span x=4 m or
+arrive in increasing x order. It discards non-finite points, sorts by forward
+distance, and uses the first finite point at each duplicate distance. A single
+finite point is sufficient. Outside the path range, the nearest endpoint supplies
+the lateral target. Holding a saved command never creates an invented Path message.
+
+Path age is measured from inference-result availability. Camera and inference
+freshness metrics also account for the original sensor timestamp; repeating a
+path at 10 Hz never resets them. Their stop flags determine whether stale values
+block motion. The heading calculation uses the 4 m lookahead; when enabled,
+the default 60° target-angle limit corresponds to about ±6.93 m laterally.
+Tracking sends heading-regulated forward speed (default ceiling 0.50 m/s),
+zero lateral velocity, and yaw capped at ±0.18 rad/s. Disabling angle stopping
+does not repair an inaccurate path or guarantee a sharp bend can be followed.
+
+## 정지·작업 중단·시작 거절 사유
+
+아래는 `actual-activate`의 Python `task-drive` 코드 기준이다. 주행 판단의
+`drive_reason`과 `ready_reason`은 `/line_tracking/swin_l/metrics`에서,
+작업 결과의 `type`과 `reason`은 `/task_state`에서 확인한다.
+`drive_reason`은 시작 대기·AprilTag 확인 등까지 반영한 출력 판단이고,
+`ready_reason`은 카메라·추론·Path 검사 결과다. 정지 명령 전송과 작업 중단은
+별개이며, 아래의 "즉시 정지"는 다음 제어 주기(기본 10 Hz)에 0 속도를 보내는
+동작이다. 카메라 콜백의 오류와 AprilTag 검출은 콜백에서 바로 정지를 요청한다.
+
+### 주행 중 정지 조건
+
+각 자동 조건은 위 표의 해당 `STOP_ON_*` 값이 `true`일 때만 적용한다.
+
+| 사유 | 발생 조건/동작 |
+|---|---|
+| `camera_stale` | 카메라 나이 검사 실패. 저장한 전진·회전 명령 삭제 |
+| `inference_stale` | 추론 나이 검사 실패. 저장한 전진·회전 명령 삭제 |
+| `camera_timestamp_invalid` | 이미지 시각 검사 실패. 콜백에서 0 속도 전송 및 저장 명령 삭제. 이후 새 유효 프레임의 추론 성공까지 정지하며, 카메라 검사도 켜져 있으면 보통 `camera_stale`로 표시 |
+| `camera_conversion_error` | 메타데이터 검사 또는 선택 프레임 변환 예외. 모든 자동 조건이 꺼져도 정지 및 저장 명령 삭제. 새 유효 프레임의 추론 성공까지 유지하며 `camera_fault_reason`으로 확인 |
+| `path_unavailable` | 즉시 Path 정지 또는 5회 실패 제한이 활성화되어 정지 |
+| `waiting_for_path` | Path 정지는 꺼져 있지만 현재 작업에 저장된 유효 명령도 없어 0 속도 대기 |
+| `path_low_confidence` | 신뢰도 0.49 미만 또는 NaN/Inf |
+| `path_lateral_target_large` | 목표각 절댓값이 허용각(기본 60°) 초과 |
+| `apriltag_verifying` | 후보 확인 중. `StopMove`와 0 속도로 정지 |
+
+### 정지가 작업 중단으로 이어지는 조건
+
+| `/task_state.reason` | 조건과 결과 |
+|---|---|
+| `startup:<사유>` | `STOP_ON_STARTUP_UNREADY=true`이고 시작 후 2초가 지났는데 추종 또는 허용된 명령 유지가 한 번도 시작되지 못한 경우 `TASK_ABORTED`. 시작 대기 설정과 독립적으로 적용 |
+| `unsafe:<사유>` | `STOP_ON_UNSAFE_TIMEOUT=true`이고 추종할 수 없는 상태가 연속 `LINE_TRACKING_UNSAFE_TIMEOUT_SEC`(기본 2초) 지속되면 `TASK_ABORTED`. 이유가 바뀌어도 그 사이 정상 추종/허용된 회전 유지가 없으면 타이머는 계속 진행 |
+| `tracking_unavailable:<사유>` | `STOP_ON_TASK_TIMEOUT=true`이고 작업 제한 시간에 도달했지만 정상 완료 조건(이전에 추종했고 현재도 추종/허용된 회전 유지 중)을 만족하지 못하면 `TASK_ABORTED`. 앞의 startup/unsafe 조건이 먼저 충족되면 그 사유가 우선 |
+| `task_aborted_by_server` | 현재 task ID에 대한 서버의 `TASK_ABORTED` 이벤트 수신. 즉시 정지 요청 후 작업 중단 |
+| `inference_error` | 모델 추론 또는 Path 처리 워커에서 예외. 정지 요청, 작업 중단 후 ROS 종료. 예외로 전달된 CUDA OOM도 여기에 포함 |
+| `publish_error` | 제어 타이머에서 명령·Path·metrics 발행 등을 처리하다 예외. 정지 재시도 후 작업 중단 |
+| `stop_publish_error` | AprilTag 확인/완료 중 `StopMove` 또는 0 속도 발행 실패. 정지 재시도 후 작업 중단 |
+| `sigterm` | SIGTERM 수신 시 활성 작업을 중단하고 정지 요청 후 종료 |
+| `shutdown` | Ctrl+C 또는 ROS 실행 종료의 정리 단계에서 아직 활성인 작업을 중단하고 정지 요청 |
+
+예를 들어 즉시 Path 정지는 끄고 `PATH_LOSS_LIMIT`과 `UNSAFE_TIMEOUT`을 켜면,
+5회째 Path 실패에서 정지하고 그 상태가 2초 지속될 때 `unsafe:path_unavailable`로
+중단된다. 중단 전에 유효 Path가 돌아오면 실패 횟수와 unsafe 타이머가 초기화된다.
+중단된 작업은 Path가 돌아와도 자동 재시작하지 않는다. 두 설정 모두 `false`이면
+이 실패 횟수나 타이머로 정지·중단하지 않는다. AprilTag 정지를 켠 경우에는
+확인 창을 먼저 처리하므로 일반 작업 타이머의 판정 시점이 늦춰질 수 있다.
+
+### 오류가 아닌 정지·정상 완료
+
+| 상태/사유 | 동작 |
+|---|---|
+| `startup_hold` | `STOP_ON_STARTUP_HOLD=true`일 때 작업 시작 후 2초 동안 0 속도 유지 |
+| `task_idle` | 활성 작업 없음. 종료 직후 약 1초 동안 0 속도를 반복한 뒤 Sport publisher 해제 |
+| `task_complete` / `TASK_COMPLETED` | `STOP_ON_TASK_TIMEOUT=true`일 때 정상 추종/허용된 회전 유지 상태로 작업 시간 종료. 기본 500초, 요청 최대 10000초. 정지 후 완료 보고하며 `/task_state`에 reason은 생략될 수 있음 |
+| `apriltag_confirmed:<ID>` / `TASK_COMPLETED` | `STOP_ON_APRILTAG=true`일 때 AprilTag 확인 성공. 정지 후 완료 보고 |
+| `inputs_not_ready` | 최초 판단 전 `ready_reason`의 초기값. 실제 입력 검사는 위 카메라·추론·Path 사유로 구체화 |
+
+### 작업 시작 거절과 실행 전 실패
+
+다음은 `TASK_REJECTED` 사유이며, 다른 작업의 시작 거절이 이미 실행 중인 작업을
+중단시키지는 않는다.
+
+| 사유 | 조건 |
+|---|---|
+| `another_line_tracking_task_active` | 다른 LINE_TRACKING 작업 실행 중 |
+| `control_release_pending` | 이전 작업의 정지 명령 전송·publisher 해제가 아직 끝나지 않음 |
+| `control_publisher_error` | 새 작업의 Sport publisher 생성 또는 최초 제어 명령 처리 실패. publisher가 있으면 정지 명령 재시도 후 해제 |
+| `invalid_payload_json` | 문자열 payload의 JSON 문법 오류 |
+| `invalid_payload` | payload가 JSON 객체가 아님 (`null`/누락은 기본값 사용) |
+| `invalid_selected_mask` | 정수 `0`, `1`, `2` 이외 값. 문자열이나 bool도 거절 |
+| `invalid_duration_sec` | duration이 숫자가 아님. bool도 거절 |
+| `duration_sec_out_of_range` | duration이 NaN/Inf이거나 3초 미만. 최대값 초과는 거절하지 않고 설정 최대값으로 제한 |
+
+잘못된 최상위 이벤트 JSON, 잘못된 task ID/다른 action, 중복 등록 이벤트 등은
+대체로 무시하며 별도 주행 정지 사유가 아니다. 프로세스 실행 전에는 ROS 메시지
+패키지·CUDA·모델/엔진 로딩 실패, TensorRT manifest/체크섬/버전 불일치, 잘못된
+환경변수·ROI·속도/시간 설정, 허용 profile·고정 checkpoint/360×640 출력/`base_link` 조건 위반,
+출력 주기 10 Hz 미만, `use_sim_time=true`, 자동 backend fallback 허용 등이
+시작 자체를 막을 수 있다. 이 경우 아직 작업을 수락하지 않았으므로
+`/task_state` 대신 컨테이너 시작 로그를 확인한다.
+
+1 Hz 미만 추론, Path 나이 0.45초 초과, Path가 전방 4 m에 못 미치는 것,
+AprilTag 검출 스트림 단절만으로는 별도 정지하지 않는다. 추론/카메라 5초 검사는
+해당 설정이 `true`일 때 적용하고 짧은 Path는 가장 가까운 끝점으로 목표를 계산한다.
+전원 상실·SIGKILL·운영체제 OOM kill은 Python 예외 처리 없이 프로세스를 종료할
+수 있어 마지막 정지 명령이나 `TASK_ABORTED` 발행을 보장하지 못한다. OC3 같은
+보드 보호 동작은 이 애플리케이션의 reason 코드와 별개다.
+
+## FP16 TensorRT Swin-L and Jetson image
+
+The default live task profile is `swin-l-aspect-224x384-fp16`:
+
+- model: `facebook/mask2former-swin-large-mapillary-vistas-semantic`
+- revision: `4772b6bf101d91f2534c106dc524d906aeb3c68a`
+- model input: 224x384; score map: 640x360; FP16 on CUDA/MPS
+- CPU falls back to FP32 for compatibility
+
+Build the CUDA base image once on the Jetson host with jetson-containers, then
+use it as the Compose build base:
 
 ```bash
-# Jetson 호스트에서 한 번 수행한다. clone 위치는 프로젝트 폴더와 달라도 된다.
 cd ~/tools/jetson-containers
-jetson-containers --help
-docker image inspect cobiz:jetson >/dev/null
-
-# cobiz:jetson에는 ROS Humble이 이미 있으므로 ROS/OpenCV/FFmpeg stage는
-# 다시 빌드하지 않고 Jetson CUDA 12.6용 PyTorch만 추가한다.
 PYTORCH_VERSION=2.8 CUDA_VERSION=12.6 \
 jetson-containers build \
   --base=cobiz:jetson \
   --name=cobiz:jetson-swin-l \
   --skip-packages=ffmpeg,opencv,ros \
   pytorch:2.8
-```
 
-이 명령은 dependency stage를 여러 개 만들 수 있어 시간이 오래 걸린다.
-`--simulate`는 dependency 해석만 보여주고 Docker image를 만들지 않는다. 실제
-image가 필요한 경우에는 위의 `build` 명령을 실행해야 한다. FFmpeg/OpenCV/ROS
-stage를 포함한 기존 시도에서 각각 `dav1d`, OpenCV package, rosdep default
-source 중복 문제가 발생했기 때문에 `cobiz:jetson`에서는 해당 stage를 건너뛴다.
-
-```bash
-# Jetson-containers가 L4T 태그를 자동으로 붙이는지 확인한다.
-docker images 'cobiz:jetson-swin-l*'
-
-# 최종 alias가 없고 intermediate tag만 있는 경우에는 재빌드하지 않고
-# alias만 추가한다.
-if ! docker image inspect cobiz:jetson-swin-l-l4t-r36.5.0 >/dev/null 2>&1; then
-  docker image inspect cobiz:jetson-swin-l-l4t-r36.5.0-pytorch_2.8 >/dev/null
-  docker tag \
-    cobiz:jetson-swin-l-l4t-r36.5.0-pytorch_2.8 \
-    cobiz:jetson-swin-l-l4t-r36.5.0
-fi
-
-# Compose build 전 CUDA PyTorch와 ROS를 빠르게 검증한다.
-docker run --rm --runtime=nvidia \
-  --entrypoint python3 \
-  cobiz:jetson-swin-l-l4t-r36.5.0 \
-  -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())'
-
-docker run --rm --runtime=nvidia \
-  --entrypoint bash \
-  cobiz:jetson-swin-l-l4t-r36.5.0 \
-  -lc 'source /opt/ros/humble/setup.bash; python3 -c "import rclpy; print(rclpy.__file__)"'
-
-# 위 base image가 제공하는 PyTorch를 사용하고, Compose 빌드에서
-# Transformers, Jetson CUDA 12.6용 torchvision, cv_bridge와 Cyclone DDS를
-# 보강한다. 정상적인 핵심 출력은 `2.8.0 12.6 True`다.
-cd ~/dev/dangjin-a2/cobiz-plugin-line-tracking
-docker compose up -d --build debugging-swin-l
+docker image inspect cobiz:jetson-swin-l-l4t-r36.5.0
+cd /path/to/cobiz-plugin-line-tracking
+mkdir -p .cache/huggingface models/swin-l-checkpoint models
+docker compose --profile engine build
+docker compose run --rm prepare-swin-l-checkpoint
+docker compose run --rm build-swin-l-engine
+docker compose --profile debug up -d --build debugging-swin-l
 docker compose logs -f debugging-swin-l
 ```
 
-Compose profile을 명시하고 싶다면 같은 작업을 다음처럼 실행할 수 있다.
+The image build installs the vendored `unitree_api` and `apriltag_msgs`
+interfaces. Checkpoint preparation explicitly loads the pinned Hub
+`model.safetensors`, records any checkpoint-initialized values, and saves one
+complete local safetensors file. The engine build then compiles a static
+`1x3x224x384` FP16 input into a `65x360x640` semantic-score output and writes a
+SHA-256-protected manifest next to the plan. TensorRT plans must be generated on
+the target Jetson class and rebuilt after a TensorRT/CUDA/GPU change.
+
+The listener validates the plan checksum, model revision, binding shapes,
+TensorRT version, and GPU compute capability before accepting inference. It
+never falls back automatically in `task-drive` mode. Set
+`SWIN_L_BACKEND=pytorch` explicitly to use the retained FP16 PyTorch rollback;
+`SWIN_L_ALLOW_BACKEND_FALLBACK=true` is allowed only for debug/offline use.
+
+## MaskFormer R50 on Jetson
+
+Both `actual-activate` and `debugging-swin-l` read `SWIN_L_PROFILE` from `.env`.
+To select the existing R50 runtime, set both the profile and backend:
+
+```dotenv
+SWIN_L_PROFILE=r50-fp16-640x360
+SWIN_L_BACKEND=pytorch
+SWIN_L_DEVICE=cuda
+SWIN_L_TRT_AUTO_BUILD=false
+SWIN_L_ALLOW_BACKEND_FALLBACK=false
+```
+
+R50 uses `facebook/maskformer-resnet50-vistas` at revision
+`ae4b8c2590c0a090fc32d5c217d78738a2dd4b19`. Its PyTorch weights are loaded through
+the existing Hugging Face cache, then run in FP16 on CUDA. The image already
+includes its dependencies; no ONNX conversion or TensorRT engine build is needed.
+An R50/TensorRT combination fails before any startup engine build.
+
+The 720p camera topic can stay unchanged: the processor resizes each selected
+frame to 640x360 before model-specific padding, and the output score map remains
+640x360 for BEV and Path calculation. Latest-frame selection, RGB handling,
+BEV caching, task-selected masks 0/1/2, and Sport control use the shared pipeline.
+CUDA, checkpoint pinning, camera freshness, task lifecycle, and control checks
+still apply. The live inference target remains `SWIN_L_INFERENCE_HZ` (default 4).
+
+R50 retains its existing label aggregation and cleanup: Bike Lane and Manhole
+join the sidewalk group, while Parking and Service Lane are excluded from the
+road group. Its temporal hysteresis margin defaults to zero. This can change
+the resulting Path, including the union selected by mask 0; changing models
+does not establish equivalent segmentation quality or a Jetson speedup.
+
+After updating `.env`, rebuild/recreate the selected service on the Jetson:
 
 ```bash
-docker compose --profile debug up -d --build debugging-swin-l
+docker compose up -d --build actual-activate
+docker compose logs -f actual-activate
 ```
 
-컨테이너는 다음 토픽만 디버깅용으로 발행한다.
+For inspection without Sport commands, use `debugging-swin-l` instead of
+`actual-activate`. Avoid running both while comparing inference speed because
+they share the GPU. Check the metrics `profile`, `inference_count`,
+and `performance` together with the generated Path. The Swin-L-specific
+`swin_l_rosbag_overlay.py` wrapper remains pinned to Swin-L; use
+`swin_l_local_path_debug.py mcap --profile r50-fp16-640x360 --backend pytorch`
+with the input/output arguments for offline R50 Path inspection.
 
-```text
-/line_tracking/swin_l/local_path
-/line_tracking/swin_l/safety_stop
-/line_tracking/swin_l/metrics
-```
+To restore the default runtime, set `SWIN_L_PROFILE=swin-l-aspect-224x384-fp16`
+and `SWIN_L_BACKEND=tensorrt`, then recreate the service with its matching
+Swin-L engine and manifest.
 
-오버레이 이미지 복사·렌더링과 별도 `clearance_m` 토픽 발행은 디버그 모드에서
-실행하지 않는다. LiDAR 여유 거리와 원인 코드는 `metrics`의 `lidar` 항목에 남는다.
+## Jetson inference stability
 
-호스트에서 결과를 확인한다.
+Live inference always obeys `SWIN_L_INFERENCE_HZ`, including when
+`SWIN_L_UNRESTRICTED_PATH_MODE=true`. The latest-frame queue holds one frame;
+it replaces pending frames while waiting for the next inference start. A late
+inference does not trigger a burst of catch-up jobs. Rate limiting reduces
+average load, but cannot guarantee latency or cap instantaneous GPU power.
+
+The camera callback validates timestamps, encoding, dimensions, row stride and
+buffer length, then queues the original ROS image message. Only the selected
+message is decoded by the worker. Native `rgb8` images reach the model as RGB
+without a BGR round trip; packed rows share the retained message buffer, while
+padded rows are made contiguous after selection. Other encodings are converted
+directly to RGB by `cv_bridge`. Camera conversion failures still stop motion.
+Offline BGR image/overlay callers keep the existing default input convention.
+The worker's processing latency now also includes selected-message decoding;
+previously callback decoding was outside that measurement. TensorRT transfers
+only `pixel_values`, leaving the unused processor `pixel_mask` on the CPU.
+
+BEV projection maps, metric axes and the closing kernel are cached by image
+dimensions and the frozen local-path configuration (up to eight entries).
+Road, sidewalk and union paths share this immutable geometry, but each current
+mask is remapped and each path/smoother is updated independently. ROI,
+calibration, image size, BEV size or kernel changes select a new cache entry.
+
+The hybrid backend and the complete segmentation/temporal pipeline run in
+`torch.inference_mode()` in the calling worker thread. This prevents the
+PyTorch decoder's autograd graph from being retained across frames by the
+temporal score average. `model.eval()` alone does not disable autograd.
+See the [PyTorch autograd documentation](https://docs.pytorch.org/docs/stable/notes/autograd).
+
+Compose defaults the OpenMP, MKL, and OpenBLAS thread pools to two threads.
+Engine auto-build is disabled by default (`SWIN_L_TRT_AUTO_BUILD=false`);
+prepare artifacts with the engine services during maintenance, with live
+inference stopped. Existing `.env` values still override these defaults.
+Run only one live Swin-L model at a time on the Jetson.
+
+For an **inference-only** 1 Hz acceptance run, use debug mode with
+`SWIN_L_INFERENCE_HZ=1.25` to leave scheduling margin. Warm up first, then
+measure for at least five minutes under the normal camera and service load:
+
+- `/line_tracking/swin_l/metrics`: `performance.completion_fps >= 1.0`,
+  `completion_gap_max_ms <= 1000`, and processing p95/p99 latency. These are
+  rolling-window metrics; record the entire run to detect intermittent stalls.
+- `tegrastats`: total RAM, swap activity, GPU load, temperature, and `VDD_IN`.
+  `cuda_memory` in the metrics covers only the PyTorch allocator, not all
+  TensorRT allocations or host memory. Memory should plateau after warm-up.
+- Kernel OOM logs, container restart count, and `oc*_event_cnt`: no increases
+  during the run. A five-minute pass is a smoke test, not a long-term guarantee.
+
+The task-driving controller reuses the available path between inference results
+without a separate 0.45-second path timeout. A 1-1.5 Hz update rate alone no
+longer inserts zero commands between valid results. The live inference target
+remains 4 Hz. Missing paths and stale camera/inference inputs stop motion only
+when the corresponding automatic flags are enabled. In restricted
+path mode, the smoother's separate 0.90-second hold expiry can still make the
+path unavailable.
+
+If an over-current warning appears, inspect the board's actual power modes
+with `nvpmodel -q` and `/etc/nvpmodel.conf`, then validate a supported power
+budget with the carrier board and supply. Do not disable hardware throttling
+or assume that a lower inference frequency alone prevents current spikes.
+See [NVIDIA's power and throttling documentation](https://docs.nvidia.com/jetson/archives/r36.5/DeveloperGuide/SD/PlatformPowerAndPerformance/JetsonOrinNanoSeriesJetsonOrinNxSeriesAndJetsonAgxOrinSeries.html).
+
+## Offline camera overlay
+
+Convert an MCAP camera topic to MP4 without ROS 2:
 
 ```bash
-ros2 topic echo /line_tracking/swin_l/local_path
-ros2 topic echo /line_tracking/swin_l/safety_stop
-ros2 topic echo /line_tracking/swin_l/metrics
-rviz2  # Fixed Frame=base_link, Path topic=/line_tracking/swin_l/local_path
-```
-
-출력 타이머 기본값은 10Hz이고 Swin-L 목표 추론률은 4Hz다. 따라서 10Hz가
-측정되어도 이전 경로를 재발행하는 중일 수 있다. 다음을 함께 판단한다.
-
-```text
-정상: poses >= 2, path_tracked=true, path_confidence > 0
-비정상: poses == [], path_tracked=false, reason=path_unavailable
-```
-
-2026-09-03의 이전 구성에서 기록한 MCAP에서는 다섯 output topic이 약 10Hz였지만
-20.5초 동안
-`local_path.poses`가 계속 비어 있고 `path_unavailable`이었다. overlay 자체는
-갱신됐으므로 이 경우는 publisher 고장이 아니라 인도 mask/ROI/homography가
-유효한 중심선을 만들지 못한 상황이다. 실내 영상, 인도가 보이지 않는 장면,
-카메라 pitch가 기본값과 다른 경우를 먼저 확인하고 ROI와 homography를 보정한다.
-LiDAR가 `lidar_available=true`인데도 Path가 비어 있다면 LiDAR보다 영상 경로
-추출을 먼저 점검한다.
-
-### MCAP으로 재현 결과 저장
-
-결과만 짧게 기록하면 카메라 원본을 다시 저장하는 것보다 디스크를 크게 아낄 수
-있다. Jetson host에서 실행하고 Ctrl-C로 중지한다.
-
-```bash
-source /opt/ros/humble/setup.bash
-mkdir -p ~/rosbags/swin_l
-ros2 bag record -s mcap \
-  -o ~/rosbags/swin_l/debug_result_$(date +%Y%m%d_%H%M%S) \
-  /line_tracking/swin_l/local_path \
-  /line_tracking/swin_l/safety_stop \
-  /line_tracking/swin_l/metrics
-```
-
-원인 분석을 위해 입력까지 기록할 때만 카메라와 LiDAR 토픽을 추가한다.
-1280x720 RGB 영상은 약 20Hz에서 분당 수 GB가 될 수 있고 LiDAR도 수십 MB/s가
-될 수 있으므로 짧게 기록한다.
-
-```bash
-ros2 bag info ~/rosbags/swin_l/debug_result_YYYYMMDD_HHMMSS
-mcap info ~/rosbags/swin_l/debug_result_YYYYMMDD_HHMMSS/*.mcap
-```
-
-### Jetson 부하와 통신 확인
-
-`network_mode: host`이므로 `docker stats`의 Net I/O가 0으로 보여도 실제 ROS
-트래픽이 없다는 뜻은 아니다. 다음 명령으로 host 인터페이스와 컨테이너 부하를
-확인한다.
-
-```bash
-docker stats cobiz-plugin-line-tracking-debugging-swin-l
-tegrastats
-ip -s link show enP8p1s0
-ros2 topic bw /a2/front_camera/image_raw
-ros2 topic bw /unitree/slam_lidar/points1
-```
-
-`ros2 topic bw`는 측정 subscriber가 수신한 payload 기준이므로 실제 wire
-utilization과 완전히 같지 않으며, 측정을 위해 임시 subscriber 트래픽도 만든다.
-Jetson의 `enP8p1s0`↔A2 `eth0` 링크는 1Gbps full-duplex이고, 직접 TCP 측정은
-약 905~913Mbps였다. debug 컨테이너가 실행 중일 때 관측한 payload는 카메라
-40~47MB/s, LiDAR 약 30MB/s 수준까지 나와 합계 약 560~616Mbps가 될 수 있다.
-`/livox/lidar`를 A2로 전달하는 경우에는 약 0.52MB@10Hz, 즉 42Mbps 정도를
-추가로 예상한다. Swin-L 추론이 Jetson CPU/GPU를 크게 사용할 수 있으므로 녹화
-시간과 model input 해상도를 제한한다.
-
-### 종료와 주행 안전
-
-일반 `docker compose up -d`는 `actual-activate` 작업 수신기를 시작하지만
-보정 플래그가 꺼져 있거나 수락된 작업이 없으면 Joy publisher는 없다. 현장
-보정 완료 후 서버의 `LINE_TRACKING` 작업을 받으면 실제 움직임을 유발할 수
-있다. local path만 확인할 때는 debug 서비스를 명시한다.
-
-```bash
-docker compose stop actual-activate
-docker compose stop debugging-swin-l
-docker compose rm -f debugging-swin-l
-```
-
-모델은 `${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}`에 캐시되어 다음
-컨테이너 재생성 때 재사용된다. 처음 실행 시 Swin-L checkpoint 다운로드와
-Docker image build 때문에 시간이 오래 걸릴 수 있으며, Jetson의 여유 디스크도
-미리 확인한다.
-
-### Jetson에서 MCAP overlay 테스트
-
-`test-swin-l`은 위 실시간 `debugging-swin-l`과 같은 Dockerfile·CUDA 이미지를
-사용한다. 녹화된 MCAP을 직접 읽으므로 `ros2 bag play`, ROS/DDS source와
-실시간 토픽 연결은 필요 없다. 컨테이너의 `/opt/venv/bin/python`으로 실행해
-Jetson용 PyTorch 2.8/CUDA 12.6을 유지한다. 여기서는 `uv run`을 사용하지 않는다.
-
-**최초 준비 — Jetson 호스트의 저장소 루트에서:** 기존 실시간 디버깅 이미지가
-있어도 새 테스트 스크립트를 포함하도록 Compose 이미지를 다시 빌드한다.
-`SWIN_L_BASE_IMAGE`가 아직 없다면 위 Docker debug 절차의 base 이미지 빌드를
-먼저 마친다. 아래 rosbag 디렉터리는 실제 `.mcap` 파일이 있는 폴더로 바꾼다.
-
-```bash
-cd ~/dev/dangjin-a2/cobiz-plugin-line-tracking
-test -f .env || cp .env.example .env
-export SWIN_L_ROSBAG_DIR="$HOME/rosbags"
-export SWIN_L_TEST_UID="$(id -u)" SWIN_L_TEST_GID="$(id -g)"
-export SWIN_L_TEST_RESULTS_DIR="$PWD/rosbag-results/swin-l-tests"
-export SWIN_L_TEST_CACHE_DIR="$PWD/.cache/huggingface-tests"
-test -f "$SWIN_L_ROSBAG_DIR/20260827_062352_teamgrit_rosbag_0.mcap"
-mkdir -p "$SWIN_L_TEST_RESULTS_DIR" "$SWIN_L_TEST_CACHE_DIR"
-docker compose build test-swin-l
-docker compose run --rm --no-deps --entrypoint /opt/venv/bin/python test-swin-l -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available()); assert torch.cuda.is_available(), "Jetson CUDA unavailable"'
-```
-
-CUDA 확인 출력은 `2.8.0 12.6 True` 계열이어야 한다. 각 `export`는 새 터미널에서
-다시 실행하거나 `.env`에 실제 절대경로·UID·GID 값으로 저장한다. 테스트 캐시는
-호스트 사용자 권한으로 쓰기 위해 실시간 디버깅 캐시와 별도로 둔다. 최초 실행은
-Swin-L 모델 다운로드가 필요하고 다음 실행부터 같은 캐시를 재사용한다.
-
-**테스트 — 같은 터미널에서 각각 한 줄:**
-
-```bash
-# 1. 인도 검출 overlay
-docker compose run --rm --no-deps test-swin-l sidewalk --input /bags/20260827_062352_teamgrit_rosbag_0.mcap --device cuda
-
-# 2. Local Planning overlay
-docker compose run --rm --no-deps test-swin-l local-path --input /bags/20260827_062352_teamgrit_rosbag_0.mcap --device cuda
-```
-
-`/bags`는 `SWIN_L_ROSBAG_DIR`의 읽기 전용 mount다. 두 명령은 동일한 최고 성능
-선택된 Swin-L 224×384 모델·revision·FP32 설정을 고정하고 기본 200프레임을 처리한다.
-전체는 `--max-frames 0`, 90초 이후는 `--start-offset 90`을 추가한다. 카메라·LiDAR
-기본 토픽은 앞의 MCAP 테스트와 같고, `.env`의 실시간 토픽보다 CLI 기본값이
-우선한다. 다른 토픽은 `--image-topic`, `--lidar-topic`으로 명시한다.
-
-**결과 확인:** 터미널의 `VIDEO=`·`REPORT=`에서 `/workspace/`를 호스트의 저장소
-경로로 바꾸면 된다(위 기본 결과 경로 기준). 실행마다 새 폴더에
-`sidewalk-overlay.mp4`·`sidewalk-report.json` 또는
-`local-path-overlay.mp4`·`local-path-report.json`이 생성된다.
-컨테이너가 종료되어도 호스트의 `rosbag-results/swin-l-tests/`에 남는다.
-Jetson 데스크톱에서 MP4를 열거나 SSH 작업 시 PC로 복사해 재생한다.
-`--open`은 컨테이너 안에서 사용하지 않는다.
-
-```bash
-# Jetson 데스크톱: VIDEO=에서 확인한 호스트 경로를 넣는다.
-xdg-open /absolute/path/to/sidewalk-overlay.mp4
-```
-
-이 테스트의 Local Path 4Hz 설정은 bag 시간에 따른 추론 간격이다. 처리 속도가
-실시간 4Hz라는 뜻은 아니며, 실제 Jetson 속도는 별도 벤치마크로 확인한다.
-
-비교용 `r50-fp16-640x360`은 별도로 선택할 수 있으며
-다음 실행 계약을 사용합니다.
-
-- model: `facebook/maskformer-resnet50-vistas`
-- revision: `ae4b8c2590c0a090fc32d5c217d78738a2dd4b19`
-- native `640x360` input, FP16 on MPS/CUDA, `640x360` score map
-- CPU에서는 호환성을 위해 FP32로 자동 fallback
-
-두 profile의 같은 프레임 결과와 속도를 직접 비교하려면:
-
-```bash
-uv run tools/compare_segmentation_profiles.py \
-  --input /path/to/camera.mp4 \
-  --start-frame 0 \
-  --max-frames 200 \
-  --output-dir rosbag-results/profile-comparisons
-```
-
-## best-so-far 실시간 Hz 벤치마크
-
-첨부 rosbag에서 확인한 카메라 계약은
-`/a2/front_camera/res_360p/image_raw`, `sensor_msgs/msg/Image`, RGB8,
-640x360, 약 20 Hz입니다. ROS 2 없이 MCAP에서 바로 실시간 조건을 모사하려면:
-
-```bash
-uv run tools/benchmark_best_so_far.py mcap \
-  --profile r50-fp16-640x360 \
-  --input /Users/kangminwoo/Downloads/20260827_062352_teamgrit_rosbag_0-001.mcap \
+uv run --with mcap --with mcap-ros2-support \
+  python tools/rosbag_mcap_to_mp4.py \
+  --input /path/to/input.mcap \
   --topic /a2/front_camera/res_360p/image_raw \
-  --playback-mode realtime \
-  --max-frames 200 \
-  --snapshot-dir rosbag-results/benchmarks/snapshots \
-  --output-report rosbag-results/benchmarks/best-so-far-realtime.json
+  --output rosbag-results/camera.mp4
 ```
 
-`realtime`은 bag timestamp에 맞춰 입력을 재생하고 depth-1 최신 프레임 큐를
-사용합니다. 따라서 모델이 20 Hz보다 느리면 오래된 프레임을 쌓지 않고 교체하며,
-report의 `overwritten_frames`, `drop_ratio`, `effective_output`이 라이브 동작에
-가까운 값을 보여줍니다. 순수 최대 처리 성능은 `--playback-mode throughput`으로
-측정합니다. 모델 다운로드/로딩 시간은 `model_load_seconds`로 따로 기록되고 Hz
-계산에서는 제외됩니다.
-
-여러 MCAP을 한 번에 각각 측정할 수도 있습니다. `--max-frames`는 파일마다
-적용되고 temporal history는 파일 경계에서 초기화됩니다.
+Run the Swin-L overlays locally, or use the `test-swin-l` Compose profile on a
+Jetson:
 
 ```bash
-uv run tools/benchmark_best_so_far.py mcap \
-  --profile r50-fp16-640x360 \
-  --input \
-    /path/to/first.mcap \
-    /path/to/second.mcap \
-  --playback-mode throughput \
-  --max-frames 50 \
-  --output-report rosbag-results/benchmarks/best-so-far-throughput.json
+uv run tools/swin_l_rosbag_overlay.py sidewalk --input /path/to/input.mcap --open
+uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/input.mcap --open
+
+docker compose run --rm --no-deps test-swin-l local-path \
+  --input /bags/input.mcap --device cuda
 ```
 
-라이브 ROS 2 토픽은 ROS 환경의 `rclpy`와 `cv_bridge`를 사용해야 하므로 ROS를
-source한 Python 환경에서 실행합니다. 그 환경에는 위 스크립트 상단에 명시된
-PyTorch/Transformers 의존성도 설치되어 있어야 합니다.
+These overlays validate segmentation and path geometry; they do not validate a
+live robot operation.
+
+## Verification
 
 ```bash
-source /opt/ros/humble/setup.bash
-python3 tools/benchmark_best_so_far.py ros2 \
-  --topic /a2/front_camera/res_360p/image_raw \
-  --duration 30 \
-  --expected-input-hz 20 \
-  --output-report rosbag-results/benchmarks/best-so-far-live.json
+python -m pytest -q test/
+docker compose config --quiet
 ```
-
-라이브 overlay는 `/best_so_far/benchmark/overlay`, 진행 metrics JSON은
-`/best_so_far/benchmark/metrics`에 발행됩니다. overlay 발행 비용까지 피한 순수
-추론 측정은 `--overlay-topic ''`을 사용합니다. `rates_hz.segmentation_compute`는
-segmentation 자체의 지속 가능 Hz, `rates_hz.effective_output`은 큐 대기와 실제
-출력 간격을 반영한 Hz, `verdict.can_keep_up`은 입력 약 20 Hz를 따라갈 수 있는지
-나타냅니다.

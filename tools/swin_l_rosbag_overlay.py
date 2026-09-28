@@ -13,10 +13,10 @@
 #   "transformers==5.16.1",
 # ]
 # ///
-"""One-command MCAP overlay tests with the selected Swin-L 224x384 profile.
+"""One-command MCAP overlay tests with the selected FP16 Swin-L profile.
 
 sidewalk: infer every camera frame and overlay Road/Sidewalk segmentation.
-local-path: reuse the existing path smoothing and LiDAR debug pipeline.
+local-path: reuse the existing path smoothing debug pipeline.
 Both modes write an MP4 and a JSON report, optionally opening the video.
 """
 
@@ -32,7 +32,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
-DEFAULT_LIDAR_TOPIC = "/unitree/slam_lidar/points2"
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -47,7 +46,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="default: a new folder in rosbag-results/swin-l-tests",
     )
     parser.add_argument("--image-topic", default=DEFAULT_IMAGE_TOPIC)
-    parser.add_argument("--lidar-topic", default=DEFAULT_LIDAR_TOPIC)
     parser.add_argument("--device", default="auto", help="auto, mps, cuda or cpu")
     parser.add_argument(
         "--start-offset", type=float, default=0.0, help="seconds from bag start"
@@ -107,9 +105,9 @@ def prepare_outputs(args: argparse.Namespace) -> tuple[Path, Path]:
 def build_debug_arguments(
     args: argparse.Namespace, video: Path, report: Path
 ) -> list[str]:
-    from best_so_far_runtime import SWIN_L_ASPECT_PROFILE, resolve_profile
+    from best_so_far_runtime import SWIN_L_ASPECT_FP16_PROFILE, resolve_profile
 
-    profile = resolve_profile(SWIN_L_ASPECT_PROFILE)
+    profile = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
     # Pin the model even when a local .env selects R50 or another checkpoint.
     # Geometry settings continue to use the existing local-path configuration.
     return [
@@ -123,7 +121,7 @@ def build_debug_arguments(
         "--overlay-mode",
         args.mode,
         "--profile",
-        SWIN_L_ASPECT_PROFILE,
+        SWIN_L_ASPECT_FP16_PROFILE,
         "--model-id",
         profile.model_id,
         "--model-revision",
@@ -135,8 +133,6 @@ def build_debug_arguments(
         args.device,
         "--image-topic",
         args.image_topic,
-        "--lidar-topic",
-        args.lidar_topic,
         "--start-offset",
         str(args.start_offset),
         "--max-frames",

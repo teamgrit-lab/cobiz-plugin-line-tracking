@@ -34,7 +34,7 @@ import numpy as np
 from best_so_far_runtime import (
     BestSoFarConfig,
     BestSoFarSegmenter,
-    SWIN_L_ASPECT_PROFILE,
+    DEFAULT_PROFILE,
 )
 from local_path import (
     LocalPathConfig,
@@ -47,7 +47,7 @@ from local_path import (
     pixel_to_ground_homography,
 )
 from segment_sidewalk_road import atomic_write_json, utc_now
-from swin_l_drive_control import DriveConfig
+from swin_l_drive_control import DriveConfig, decide_drive
 
 
 def choose_surface(
@@ -86,21 +86,13 @@ def choose_surface(
 def preview_yaw(path: SmoothedPath | None, config: DriveConfig) -> float | None:
     """Return logical steering only; this is not a motion authorization."""
 
-    if path is None or path.confidence < config.min_confidence:
-        return None
-    if path.age_sec > config.max_path_age_sec:
-        return None
-    lateral = float(
-        np.interp(config.lookahead_m, path.points_xy[:, 0], path.points_xy[:, 1])
+    # Offline annotation assumes fresh inputs; this never publishes a command.
+    decision = decide_drive(
+        path, camera_age_sec=0.0, inference_age_sec=0.0, config=config
     )
-    if not math.isfinite(lateral) or abs(lateral) > config.max_lateral_target_m:
-        return None
-    return float(
-        np.clip(
-            config.heading_gain * math.atan2(lateral, config.lookahead_m),
-            -config.max_yaw_rps,
-            config.max_yaw_rps,
-        )
+    return (
+        decision.yaw_rate
+        if decision.reason in ("tracking", "tracking_slow_turn") else None
     )
 
 
@@ -239,7 +231,7 @@ def main() -> int:
     path_config.validate()
     drive_config.validate()
     segmenter = BestSoFarSegmenter(
-        BestSoFarConfig(profile=SWIN_L_ASPECT_PROFILE, device=args.device)
+        BestSoFarConfig(profile=DEFAULT_PROFILE, device=args.device)
     )
     smoother = LocalPathSmoother(path_config)
     capture = cv2.VideoCapture(str(source))
@@ -396,7 +388,7 @@ def main() -> int:
         "elapsed_seconds": time.perf_counter() - started,
         "limitations": [
             "No LiDAR, odometry, or camera extrinsic calibration in the MP4.",
-            "Steering is a hypothetical image-based preview; no ROS Joy is published.",
+            "Steering is a hypothetical image-based preview; no robot command is published.",
             "Source variable timestamps are approximated using average frame rate.",
         ],
     }

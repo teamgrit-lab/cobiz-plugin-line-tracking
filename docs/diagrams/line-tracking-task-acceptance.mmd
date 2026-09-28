@@ -1,0 +1,69 @@
+sequenceDiagram
+    title Line tracking — 현재 구현의 작업 수락
+    participant Cam as 전방 카메라
+    participant Tag as AprilTag 검출기
+    participant V as Swin-L / R50 추론 스레드
+    participant N as actual-activate
+    participant R as A2 Sport API
+    participant C as cobiz-core
+    participant S as Cobiz 서버
+
+    Note over V,N: 영상 추론은 작업 유무와 독립 실행<br/>추론 시작 주기 상한은 SWIN_L_INFERENCE_HZ, 기본 4Hz<br/>실제 완료 주기는 처리 시간에 따라 달라짐
+    loop 새 영상 처리
+        Cam->>N: sensor_msgs/Image
+        N->>N: 영상 메타데이터 검사·깊이 1 큐 갱신<br/>대기 중인 이전 메시지는 최신 메시지로 교체
+        V->>N: 추론 가능 시각에 최신 원본 메시지 가져오기
+        N-->>V: 선택된 원본 메시지 1개
+        V->>V: 선택 프레임만 RGB 변환·전처리<br/>rgb8 입력은 불필요한 색상 왕복 변환 생략
+        V->>V: FP16 분할·GPU 점수 평활화·클래스 집계<br/>CPU 마스크 정리·중심 경로 계산
+        V-->>N: 공유 상태 갱신<br/>합집합(0)·차도(1)·인도(2) 경로와 실패 횟수·추론 시각
+    end
+    Note over V,N: Swin-L은 선택한 PyTorch / TensorRT 사용<br/>R50 task-drive는 PyTorch 사용
+
+    opt AprilTag 메시지 수신
+        Tag-->>N: /detections
+        N->>N: 최신 검출 ID·프레임 정보 저장
+    end
+    Note over Tag,N: 검출기 발행자 유무는 작업 수락 조건이 아님<br/>AprilTag 정지 정책은 STOP_ON_APRILTAG=true일 때 적용
+
+    S->>C: TASK_REGISTERED + payload
+    C->>N: /task_event JSON
+    N->>N: JSON 파싱·이벤트 종류·action_name·task_id 확인
+    alt JSON 오류·유효하지 않은 ID·대상 외 이벤트·중복 ID
+        N->>N: 요청 무시 — /task_state 발행 없음
+    else 신규 LINE_TRACKING 작업 등록 요청
+        N->>N: handle_event — 활성 작업·payload 검증<br/>selected_mask·duration_sec·제어권 해제 대기 확인
+        Note over N: selected_mask 생략 시 설정된 SWIN_L_PATH_MASK_CLASS 사용<br/>0은 차도와 인도의 합집합이며 배경은 제외
+        alt 다른 작업 활성·payload 오류·control_release_pending
+            N-->>C: /task_state TASK_REJECTED + reason
+            C-->>S: HTTP reject 보고
+        else 요청 검증 통과
+            N->>N: 활성 작업 등록·작업 시작 시각 기록<br/>저장 전진/회전 명령·경로 실패 횟수·작업 상태 초기화
+            Note over N: ready_reason은 작업 수락의 선행 조건이 아님<br/>LINE_TRACKING_STOP_ON_*은 기본 false
+            N->>N: Sport 발행자 생성·AprilTag 작업 상태 초기화
+            opt 발행자 생성·상태 초기화 성공
+                alt 활성 AprilTag 정책의 확인 대기
+                    N->>R: /api/sport/request — StopMove + 0 속도 Move
+                else STOP_ON_STARTUP_HOLD=true
+                    N->>R: /api/sport/request — 0 속도 Move
+                else 시작 대기 없음
+                    N->>N: 요청 mask로 drive_readiness 계산<br/>현재 Path·처리 오류·활성 정지 정책 반영
+                    N->>R: /api/sport/request — 판단된 Move
+                    Note over N,R: 정상 Path이면 즉시 주행 가능<br/>Path와 저장 명령이 없으면 0 속도 대기
+                end
+            end
+            alt 발행자 생성·상태 초기화·초기 명령 발행 오류
+                opt Sport 발행자가 존재
+                    N->>R: StopMove + 0 속도 Move 발행 시도
+                end
+                N->>N: 작업 등록 해제·Sport 발행자 제거
+                N-->>C: /task_state TASK_REJECTED<br/>reason=control_publisher_error
+                C-->>S: HTTP reject 보고
+            else 초기 명령 발행 성공
+                N-->>C: /task_state TASK_STARTED
+                C-->>S: HTTP start 보고
+                Note over N,R: TASK_STARTED는 초기 명령의 ROS 발행 성공을 의미<br/>로봇 수신 확인이나 실제 이동 시작 확인은 아님<br/>이후 별도 제어 타이머가 기본 10Hz로 판단·명령 갱신
+            end
+        end
+    end
+    Note over N: duration_sec은 항상 검증·저장<br/>시간 만료 종료는 STOP_ON_TASK_TIMEOUT=true일 때만 적용

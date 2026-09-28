@@ -1,11 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
+# Reject an incompatible R50 backend before ROS setup or Swin-L engine builds.
+if [[ "${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}" == "r50-fp16-640x360" \
+  && "${SWIN_L_BACKEND:-pytorch}" != "pytorch" ]]; then
+  echo "[line-tracking] R50 requires SWIN_L_BACKEND=pytorch" >&2
+  exit 1
+fi
+
 : "${ROS_DISTRO:?ROS_DISTRO must be set}"
 # ROS/colcon setup scripts read several optional variables without defaults.
 # Source them with nounset disabled, then restore the strict shell for the node.
 set +u
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
+source "/unitree_ws/install/setup.bash"
 
 TEAMGRIT_DDS_ENV="/opt/ros/teamgrit/dds/teamgrit_dds_env.sh"
 if [[ ! -f "${TEAMGRIT_DDS_ENV}" ]]; then
@@ -32,6 +40,18 @@ except ImportError as error:
     )
     raise SystemExit(1)
 
+if os.environ.get("SWIN_L_BACKEND", "pytorch").lower() == "tensorrt":
+    try:
+        import tensorrt
+        import torch_tensorrt
+    except ImportError as error:
+        print(
+            "[swin-l-debug] TensorRT hybrid backend requested but unavailable: "
+            f"{error}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
 print(
     f"[swin-l-debug] torch={torch.__version__} "
     f"torchvision={torchvision.__version__} "
@@ -56,4 +76,49 @@ case "${mode}" in
     exit 1
     ;;
 esac
+
+if [[ "${SWIN_L_BACKEND:-pytorch}" == "tensorrt" \
+  && "${SWIN_L_TRT_AUTO_BUILD:-false}" == "true" ]]; then
+  engine_path="${SWIN_L_TRT_ENGINE:?SWIN_L_TRT_ENGINE must be set}"
+  manifest_path="${SWIN_L_TRT_MANIFEST:-${engine_path}.json}"
+  checkpoint_path="${SWIN_L_TRT_CHECKPOINT:-/models/checkpoint}"
+  engine_ready=false
+
+  if [[ -s "${engine_path}" && -s "${manifest_path}" ]]; then
+    echo "[swin-l-debug] validating existing TensorRT hybrid artifact: ${engine_path}"
+    if python3 /workspace/tools/validate_swin_l_tensorrt.py \
+      --engine "${engine_path}" \
+      --manifest "${manifest_path}"; then
+      engine_ready=true
+    else
+      echo "[swin-l-debug] existing TensorRT artifact is invalid; rebuilding" >&2
+    fi
+  fi
+
+  if [[ "${engine_ready}" != "true" ]]; then
+    echo "[swin-l-debug] preparing TensorRT artifact before startup"
+    mkdir -p \
+      "$(dirname "${engine_path}")" \
+      "$(dirname "${manifest_path}")" \
+      "${checkpoint_path}"
+
+    if [[ ! -s "${checkpoint_path}/model.safetensors" \
+      || ! -s "${checkpoint_path}/checkpoint-manifest.json" ]]; then
+      echo "[swin-l-debug] preparing Swin-L safetensors checkpoint at ${checkpoint_path}"
+      python3 /workspace/tools/prepare_swin_l_checkpoint.py \
+        --output-dir "${checkpoint_path}" \
+        --allow-initialized-weights
+    fi
+
+    echo "[swin-l-debug] building PyTorch/TensorRT hybrid artifact at ${engine_path}"
+    python3 /workspace/tools/build_swin_l_tensorrt.py \
+      --checkpoint "${checkpoint_path}" \
+      --output "${engine_path}" \
+      --manifest-output "${manifest_path}"
+    python3 /workspace/tools/validate_swin_l_tensorrt.py \
+      --engine "${engine_path}" \
+      --manifest "${manifest_path}"
+  fi
+fi
+
 exec python3 /workspace/tools/swin_l_local_path_debug.py "${mode}"

@@ -6,8 +6,11 @@ Named profiles are intentionally kept here:
   restores the exact model revision, 384x384 model input, 640x360 score map,
   temporal alpha 0.62, and hysteresis margin 0.07 used by the retained
   full-video results.
-* ``swin-l-aspect-224x384`` is the selected default. It keeps the same
-  checkpoint and temporal settings but preserves the wide camera aspect ratio.
+* ``swin-l-aspect-224x384`` is the FP32 rollback profile. It keeps the same
+  checkpoint and temporal settings while preserving the wide camera aspect
+  ratio.
+* ``swin-l-aspect-224x384-fp16`` is the CUDA/MPS deployment default. It changes
+  only model/input precision and preserves the FP32 profile as a rollback.
 * ``swin-l-aspect-448x768`` is a slower, quality-first experimental profile
   validated on the two test-one videos; it retains the same Swin-L contract.
 * ``r50-fp16-640x360`` is the previous realtime candidate. It uses MaskFormer R50 at
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -36,6 +40,7 @@ from evaluate_mapillary_label_aggregation import (
 from evaluate_mapillary_temporal import aggregated_selected_mask, upscale_mask
 from evaluate_sidewalk_road_temporal import remove_small_components
 from segment_sidewalk_road import choose_device, render_overlay
+from tensorrt_backend import TensorRTSemanticBackend
 from transformers import (
     AutoImageProcessor,
     Mask2FormerForUniversalSegmentation,
@@ -44,9 +49,10 @@ from transformers import (
 
 SWIN_L_PROFILE = "swin-l-best-so-far"
 SWIN_L_ASPECT_PROFILE = "swin-l-aspect-224x384"
+SWIN_L_ASPECT_FP16_PROFILE = "swin-l-aspect-224x384-fp16"
 SWIN_L_ASPECT_QUALITY_PROFILE = "swin-l-aspect-448x768"
 R50_PROFILE = "r50-fp16-640x360"
-DEFAULT_PROFILE = SWIN_L_ASPECT_PROFILE
+DEFAULT_PROFILE = SWIN_L_ASPECT_FP16_PROFILE
 DEFAULT_EVALUATION_SIZE = (360, 640)
 R50_ROAD_LABELS = tuple(
     label
@@ -57,6 +63,7 @@ R50_SIDEWALK_LABELS = SIDEWALK_LABELS + ("Bike Lane", "Manhole")
 R50_MAXIMUM_ROAD_ISLAND_AREA = 2560
 R50_MINIMUM_SIDEWALK_RING_RATIO = 0.10
 ROAD_ISLAND_ACTIONS = ("drop", "reassign-sidewalk")
+INFERENCE_BACKENDS = ("pytorch", "tensorrt")
 
 
 @dataclass(frozen=True)
@@ -94,6 +101,17 @@ PROFILE_SPECS = {
         input_height=224,
         input_width=384,
         precision="fp32",
+        temporal_alpha=0.62,
+        temporal_hysteresis_margin=0.07,
+    ),
+    SWIN_L_ASPECT_FP16_PROFILE: ProfileSpec(
+        name=SWIN_L_ASPECT_FP16_PROFILE,
+        model_family="mask2former",
+        model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
+        model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
+        input_height=224,
+        input_width=384,
+        precision="fp16",
         temporal_alpha=0.62,
         temporal_hysteresis_margin=0.07,
     ),
@@ -159,6 +177,10 @@ class BestSoFarConfig:
     minimum_sidewalk_ring_ratio: float | None = None
     pedestrian_area_road_expansion: int = 0
     device: str = "auto"
+    backend: str = "pytorch"
+    tensorrt_engine_path: str | None = None
+    tensorrt_manifest_path: str | None = None
+    allow_backend_fallback: bool = False
 
     def validate(self) -> None:
         resolve_profile(
@@ -193,6 +215,20 @@ class BestSoFarConfig:
             raise ValueError("minimum_sidewalk_ring_ratio must be in [0, 1]")
         if self.pedestrian_area_road_expansion < 0:
             raise ValueError("pedestrian_area_road_expansion must be non-negative")
+        if self.backend not in INFERENCE_BACKENDS:
+            raise ValueError(f"backend must be one of {', '.join(INFERENCE_BACKENDS)}")
+        if self.backend == "tensorrt":
+            profile = resolve_profile(
+                self.profile,
+                model_id=self.model_id,
+                model_revision=self.model_revision,
+            )
+            if profile.model_family != "mask2former" or profile.precision != "fp16":
+                raise ValueError(
+                    "TensorRT backend requires an FP16 Mask2Former profile"
+                )
+            if not self.tensorrt_engine_path or not self.tensorrt_manifest_path:
+                raise ValueError("TensorRT backend requires engine and manifest paths")
 
 
 @dataclass(frozen=True)
@@ -265,22 +301,49 @@ class BestSoFarSegmenter:
             "height": self.profile.input_height,
             "width": self.profile.input_width,
         }
-        if self.profile.model_family == "mask2former":
-            self.model = Mask2FormerForUniversalSegmentation.from_pretrained(
-                self.profile.model_id,
-                revision=self.profile.model_revision,
-            )
-        elif self.profile.model_family == "maskformer":
-            self.model = MaskFormerForInstanceSegmentation.from_pretrained(
-                self.profile.model_id,
-                revision=self.profile.model_revision,
-            )
-        else:  # pragma: no cover - protected by the pinned profile table
-            raise ValueError(f"unsupported model family: {self.profile.model_family}")
-        self.model = self.model.to(self.device)
-        if self.use_fp16:
-            self.model = self.model.half()
-        self.model.eval()
+        self.backend = config.backend
+        self.backend_fallback_reason: str | None = None
+        self.tensorrt_backend: TensorRTSemanticBackend | None = None
+        self.model: Any | None = None
+        id2label: dict[int, str]
+        if self.backend == "tensorrt":
+            try:
+                self.tensorrt_backend = TensorRTSemanticBackend(
+                    Path(config.tensorrt_engine_path or ""),
+                    Path(config.tensorrt_manifest_path or ""),
+                    profile=self.profile.name,
+                    model_revision=self.profile.model_revision,
+                    input_shape=(
+                        1,
+                        3,
+                        self.profile.input_height,
+                        self.profile.input_width,
+                    ),
+                    output_shape=(
+                        65,
+                        config.evaluation_height,
+                        config.evaluation_width,
+                    ),
+                    device=self.device,
+                )
+                raw_id2label = self.tensorrt_backend.manifest["model"].get("id2label")
+                if not isinstance(raw_id2label, dict):
+                    raise RuntimeError("TensorRT manifest does not contain id2label")
+                id2label = {int(key): str(value) for key, value in raw_id2label.items()}
+            except Exception as error:
+                if not config.allow_backend_fallback:
+                    raise
+                self.backend = "pytorch"
+                self.backend_fallback_reason = str(error)
+                self.tensorrt_backend = None
+                self.model = self._load_pytorch_model()
+                id2label = self.model.config.id2label
+        else:
+            self.model = self._load_pytorch_model()
+            id2label = self.model.config.id2label
+        if self.backend == "tensorrt":
+            assert self.tensorrt_backend is not None
+            assert self.model is None
         if self.profile.name == R50_PROFILE:
             self.road_labels = R50_ROAD_LABELS
             self.sidewalk_labels = R50_SIDEWALK_LABELS
@@ -295,16 +358,32 @@ class BestSoFarSegmenter:
             self.sidewalk_labels = SIDEWALK_LABELS
             self.maximum_road_island_area = 0
             self.minimum_sidewalk_ring_ratio = 0.0
-        self.road_ids = resolve_ids(self.model.config.id2label, self.road_labels)
-        self.sidewalk_ids = resolve_ids(
-            self.model.config.id2label, self.sidewalk_labels
-        )
-        self.pedestrian_area_id = resolve_ids(
-            self.model.config.id2label, ("Pedestrian Area",)
-        )[0]
+        self.road_ids = resolve_ids(id2label, self.road_labels)
+        self.sidewalk_ids = resolve_ids(id2label, self.sidewalk_labels)
+        self.pedestrian_area_id = resolve_ids(id2label, ("Pedestrian Area",))[0]
         self.model_load_seconds = time.perf_counter() - load_started
         self._previous_scores: torch.Tensor | None = None
         self._previous_selected: np.ndarray | None = None
+        self._surface_lookup: torch.Tensor | None = None
+
+    def _load_pytorch_model(self) -> Any:
+        if self.profile.model_family == "mask2former":
+            model = Mask2FormerForUniversalSegmentation.from_pretrained(
+                self.profile.model_id,
+                revision=self.profile.model_revision,
+                use_safetensors=True,
+            )
+        elif self.profile.model_family == "maskformer":
+            model = MaskFormerForInstanceSegmentation.from_pretrained(
+                self.profile.model_id,
+                revision=self.profile.model_revision,
+            )
+        else:  # pragma: no cover - protected by the pinned profile table
+            raise ValueError(f"unsupported model family: {self.profile.model_family}")
+        model = model.to(self.device)
+        if self.use_fp16:
+            model = model.half()
+        return model.eval()
 
     @property
     def evaluation_size(self) -> tuple[int, int]:
@@ -315,6 +394,7 @@ class BestSoFarSegmenter:
 
         self._previous_scores = None
         self._previous_selected = None
+        self._surface_lookup = None
 
     def _move_inputs(self, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         moved: dict[str, torch.Tensor] = {}
@@ -325,11 +405,22 @@ class BestSoFarSegmenter:
                 moved[name] = value.to(self.device)
         return moved
 
-    def _semantic_scores(self, frame_bgr: np.ndarray) -> torch.Tensor:
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    def _semantic_scores(
+        self, frame: np.ndarray, *, color_order: str = "bgr"
+    ) -> torch.Tensor:
+        frame_rgb = (
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if color_order == "bgr" else frame
+        )
         inputs = self.processor(images=frame_rgb, return_tensors="pt")
+        if getattr(self, "backend", "pytorch") == "tensorrt":
+            assert self.tensorrt_backend is not None
+            # The fixed-shape TensorRT adapter consumes only pixel_values.
+            # Avoid transferring the processor's unused pixel_mask to CUDA.
+            inputs = self._move_inputs({"pixel_values": inputs["pixel_values"]})
+            return self.tensorrt_backend.semantic_scores(inputs["pixel_values"])
         inputs = self._move_inputs(inputs)
         with torch.inference_mode():
+            assert self.model is not None
             outputs = self.model(**inputs)
             if self.profile.model_family == "mask2former":
                 processed = self.processor.post_process_semantic_segmentation(
@@ -337,8 +428,14 @@ class BestSoFarSegmenter:
                     target_sizes=[self.evaluation_size],
                     return_segmentation_scores=True,
                 )[0]
-                # Preserve the exact retained Swin-L CPU smoothing path.
-                return processed["segmentation_scores"].detach().float().cpu()
+                scores = processed["segmentation_scores"].detach()
+                if self.use_fp16:
+                    # Keep deployment scores on the accelerator in their native
+                    # FP16 dtype. Temporal smoothing and argmax then run without
+                    # copying the full class-score tensor to CPU every frame.
+                    return scores.to(device=self.device, dtype=torch.float16)
+                # Preserve the exact retained FP32 rollback behavior.
+                return scores.float().cpu()
 
             class_probabilities = outputs.class_queries_logits.softmax(dim=-1)[..., :-1]
             mask_probabilities = outputs.masks_queries_logits.sigmoid()
@@ -418,48 +515,121 @@ class BestSoFarSegmenter:
         expanded[(class_map == self.pedestrian_area_id) & road_neighborhood] = 1
         return expanded
 
-    def segment(self, frame_bgr: np.ndarray) -> BestSoFarResult:
-        if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
-            raise ValueError("frame_bgr must be an HxWx3 BGR image")
-
-        total_started = time.perf_counter()
-        scores = self._semantic_scores(frame_bgr)
-        self._synchronize()
-        inference_finished = time.perf_counter()
-
-        if self._previous_scores is None:
-            smooth_scores = scores
-        else:
-            smooth_scores = (
-                self.temporal_alpha * scores
-                + (1.0 - self.temporal_alpha) * self._previous_scores
-            )
-        self._previous_scores = smooth_scores
+    def _cpu_selected_mask(self, smooth_scores: torch.Tensor) -> tuple[np.ndarray, float]:
+        """Retain the CPU aggregation and changed-pixel hysteresis path."""
 
         smooth_map = smooth_scores.argmax(dim=0).detach().cpu().numpy()
-        minimum_area = max(48, int(smooth_map.size * 0.00035))
         selected = aggregated_selected_mask(
-            smooth_map,
-            road_ids=self.road_ids,
-            sidewalk_ids=self.sidewalk_ids,
+            smooth_map, road_ids=self.road_ids, sidewalk_ids=self.sidewalk_ids
         )
         selected = self._expand_road_into_pedestrian_area(selected, smooth_map)
-
         hold_ratio = 0.0
-        if (
-            self._previous_selected is not None
-            and self.temporal_hysteresis_margin > 0.0
-        ):
+        if self._previous_selected is not None and self.temporal_hysteresis_margin > 0.0:
             hold_mask = _changed_pixel_hysteresis_hold_mask(
                 smooth_scores,
                 selected,
                 self._previous_selected,
                 self.temporal_hysteresis_margin,
             )
-            if np.any(hold_mask):
-                selected = selected.copy()
-                selected[hold_mask] = self._previous_selected[hold_mask]
-                hold_ratio = float(np.mean(hold_mask))
+            selected[hold_mask] = self._previous_selected[hold_mask]
+            hold_ratio = float(np.mean(hold_mask))
+        return selected, hold_ratio
+
+    def _accelerator_selected_mask(
+        self, smooth_scores: torch.Tensor
+    ) -> tuple[np.ndarray, float]:
+        """Aggregate and apply hysteresis before one compact download to CPU."""
+
+        use_hysteresis = (
+            self._previous_selected is not None and self.temporal_hysteresis_margin > 0.0
+        )
+        if use_hysteresis:
+            # Upload the final CPU morphology result from the previous frame
+            # before running this frame's class reduction and hysteresis.
+            previous = torch.from_numpy(self._previous_selected).to(
+                smooth_scores.device, non_blocking=True
+            )
+            # max, like argmax, chooses the first class on ties. topk indices
+            # do not guarantee that ordering and can change the surface label.
+            best_scores, class_map = smooth_scores.max(dim=0)
+        else:
+            class_map = smooth_scores.argmax(dim=0)
+        if (
+            self._surface_lookup is None
+            or self._surface_lookup.device != smooth_scores.device
+            or self._surface_lookup.numel() != smooth_scores.shape[0]
+        ):
+            lookup = torch.zeros(smooth_scores.shape[0], dtype=torch.uint8)
+            lookup[self.road_ids] = 1
+            lookup[self.sidewalk_ids] = 2
+            self._surface_lookup = lookup.to(smooth_scores.device)
+        selected = self._surface_lookup[class_map]
+
+        radius = self.pedestrian_area_road_expansion
+        if radius > 0:
+            road_neighborhood = functional.max_pool2d(
+                (selected == 1).float()[None, None],
+                kernel_size=radius * 2 + 1,
+                stride=1,
+                padding=radius,
+            )[0, 0].bool()
+            selected = selected.masked_fill(
+                (class_map == self.pedestrian_area_id) & road_neighborhood, 1
+            )
+
+        if not use_hysteresis:
+            return selected.cpu().numpy(), 0.0
+
+        # A second reduction is much cheaper on Jetson than strided full-frame
+        # topk. scatter is out-of-place: never mutate the scores used by the EMA.
+        second_scores = smooth_scores.scatter(
+            0, class_map.unsqueeze(0), float("-inf")
+        ).amax(dim=0)
+        # Subtract in the original dtype, then compare in FP32, matching the
+        # existing NumPy threshold even at FP16 rounding boundaries.
+        score_margin = (best_scores - second_scores).float()
+        hold = (selected != previous) & (score_margin < self.temporal_hysteresis_margin)
+        selected = torch.where(hold, previous, selected)
+        # Download two uint8 planes together (labels + hold statistics), rather
+        # than an int64 class map followed by another confidence download.
+        downloaded = torch.stack((selected, hold.to(torch.uint8))).cpu().numpy()
+        return downloaded[0], float(np.mean(downloaded[1]))
+
+    @torch.inference_mode()
+    def segment(
+        self, frame: np.ndarray, *, color_order: str = "bgr"
+    ) -> BestSoFarResult:
+        """Segment a BGR image, or native RGB from the live camera worker."""
+
+        # This guard must run in the calling worker thread. eval() alone does
+        # not disable autograd in the hybrid model's PyTorch decoders, and the
+        # temporal EMA would otherwise retain every previous frame's graph.
+        if color_order not in ("bgr", "rgb"):
+            raise ValueError("color_order must be 'bgr' or 'rgb'")
+        if frame.ndim != 3 or frame.shape[2] != 3:
+            raise ValueError("frame must be an HxWx3 image")
+
+        total_started = time.perf_counter()
+        scores = self._semantic_scores(frame, color_order=color_order)
+        self._synchronize()
+        inference_finished = time.perf_counter()
+
+        if self._previous_scores is None:
+            # TensorRT owns and reuses its output allocation. Keep temporal
+            # state in a separate buffer so the next enqueue cannot overwrite it.
+            smooth_scores = scores.clone() if self.backend == "tensorrt" else scores
+        else:
+            smooth_scores = (
+                self.temporal_alpha * scores
+                + (1.0 - self.temporal_alpha) * self._previous_scores
+            )
+        self._previous_scores = smooth_scores.detach()
+
+        if smooth_scores.device.type == "cpu":
+            selected, hold_ratio = self._cpu_selected_mask(smooth_scores)
+        else:
+            selected, hold_ratio = self._accelerator_selected_mask(smooth_scores)
+        minimum_area = max(48, int(selected.size * 0.00035))
         retained_sidewalk = remove_small_components(selected == 2, minimum_area)
         retained_road, retained_sidewalk = self._refine_road_components(
             selected == 1,
@@ -500,7 +670,7 @@ class BestSoFarSegmenter:
         )
 
     def metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "profile": self.profile.name,
             "model": {
                 "family": self.profile.model_family,
@@ -509,6 +679,8 @@ class BestSoFarSegmenter:
             },
             "device": str(self.device),
             "precision": "fp16" if self.use_fp16 else "fp32",
+            "backend": self.backend,
+            "backend_fallback_reason": self.backend_fallback_reason,
             "model_load_seconds": self.model_load_seconds,
             "settings": {
                 "surface_aggregate": True,
@@ -530,3 +702,6 @@ class BestSoFarSegmenter:
                 "pedestrian_area_road_expansion": (self.pedestrian_area_road_expansion),
             },
         }
+        if self.tensorrt_backend is not None:
+            metadata["tensorrt"] = self.tensorrt_backend.metadata()
+        return metadata

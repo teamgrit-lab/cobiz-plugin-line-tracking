@@ -7,21 +7,47 @@ import sys
 import time
 from types import ModuleType, SimpleNamespace
 
+import pytest
+import numpy as np
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import swin_l_local_path_debug as debug  # noqa: E402
-from local_path import LidarSafetyResult  # noqa: E402
 from swin_l_drive_control import DriveDecision  # noqa: E402
 
 
-def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
+@pytest.mark.parametrize(
+    "preexisting_control_publishers",
+    [0, 1, 5],
+)
+def test_task_control_ignores_external_publisher_count(
+    monkeypatch, preexisting_control_publishers
+):
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "true")
     published: dict[str, list] = {}
+    publisher_qos = {}
+    publisher_count_queries = []
+
+    reliable = object()
+
+    class FakeQoS:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
 
     class Message:
         def __init__(self, data=None):
-            self.data = data
+            self.data = bytes(12) if data is None else data
+            self.encoding = "rgb8"
+            self.height, self.width, self.step = 2, 2, 6
             self.header = SimpleNamespace()
+
+    class Request:
+        def __init__(self):
+            self.header = SimpleNamespace(identity=SimpleNamespace(api_id=0))
+            self.parameter = ""
+            self.binary = []
 
     class FakeNode:
         def __init__(self, _name):
@@ -35,7 +61,13 @@ def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
 
         def create_publisher(self, _type, topic, _qos):
             messages = published.setdefault(topic, [])
+            publisher_qos[topic] = _qos
             return SimpleNamespace(publish=messages.append)
+
+        def count_publishers(self, topic):
+            assert topic == "/api/sport/request"
+            publisher_count_queries.append(topic)
+            return preexisting_control_publishers
 
         def create_timer(self, *_args):
             return object()
@@ -45,7 +77,9 @@ def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
 
         def get_clock(self):
             return SimpleNamespace(
-                now=lambda: SimpleNamespace(to_msg=lambda: SimpleNamespace())
+                now=lambda: SimpleNamespace(
+                    nanoseconds=100_000_000_000, to_msg=lambda: SimpleNamespace()
+                )
             )
 
         def destroy_publisher(self, _publisher):
@@ -60,7 +94,21 @@ def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
     rclpy.shutdown = lambda: None
 
     def spin(node):
-        safety = LidarSafetyResult(False, True, False, 0, None, 0.0, "clear")
+        _, decision = node.drive_readiness(1, time.monotonic())
+        assert decision.reason == "camera_stale"
+        assert (decision.vx, decision.vy, decision.yaw_rate) == (0.0, 0.0, 0.0)
+        camera = Message()
+        camera.header.stamp = SimpleNamespace(sec=100, nanosec=0)
+        node.on_image(camera)
+        deadline = time.monotonic() + 2.0
+        while True:
+            node._publish_state()
+            metrics = published.get("/line_tracking/swin_l/metrics", [])
+            if metrics and json.loads(metrics[-1].data)["inference_count"] > 0:
+                break
+            assert time.monotonic() < deadline, "inference did not publish metrics"
+            time.sleep(0.001)
+        assert "/line_tracking/swin_l/overlay" not in published
         checked_classes = []
 
         def readiness(mask_class, _now):
@@ -70,7 +118,7 @@ def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
                 if mask_class == 1
                 else DriveDecision.stop("path_unavailable")
             )
-            return None, safety, decision
+            return None, decision
 
         node.drive_readiness = readiness
         node.on_task_event(
@@ -85,21 +133,39 @@ def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
                 )
             )
         )
-        assert json.loads(published["/task_state"][-1].data)["type"] == "TASK_STARTED"
+        state = json.loads(published["/task_state"][-1].data)
+        assert state["type"] == "TASK_STARTED"
         assert node.tasks.active.selected_mask == 1
         node.tasks.active = replace(node.tasks.active, started_at=time.monotonic() - 3)
         node.publish_state()
-        assert json.loads(published["/line_tracking/swin_l/metrics"][-1].data)[
-            "path_mask_class"
-        ] == 1
-        assert published["/a2_control"][-1].axes[1] == -0.1
-        node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "road-1"})))
+        assert (
+            json.loads(published["/line_tracking/swin_l/metrics"][-1].data)[
+                "path_mask_class"
+            ]
+            == 1
+        )
+        move = published["/api/sport/request"][-1]
+        assert move.header.identity.api_id == 1008
+        assert json.loads(move.parameter) == {"x": 0.1, "y": 0.0, "z": 0.0}
+        assert publisher_qos["/api/sport/request"].reliability is reliable
+        assert "/a2_control" not in published
+        node.on_task_event(
+            Message(json.dumps({"type": "TASK_ABORTED", "task_id": "road-1"}))
+        )
         node.publish_state()
-        assert json.loads(published["/line_tracking/swin_l/metrics"][-1].data)[
-            "path_mask_class"
-        ] == 2
-        assert published["/a2_control"][-1].axes == [0.0, -0.0, 0.0]
-        assert checked_classes == [1, 1, 2]
+        assert (
+            json.loads(published["/line_tracking/swin_l/metrics"][-1].data)[
+                "path_mask_class"
+            ]
+            == 2
+        )
+        assert json.loads(published["/api/sport/request"][-1].parameter) == {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+        }
+        assert checked_classes == [1, 2]
+        assert publisher_count_queries == []
 
     rclpy.spin = spin
     modules = {
@@ -107,25 +173,40 @@ def test_task_payload_selects_road_for_preflight_and_control(monkeypatch):
         "rclpy.node": SimpleNamespace(Node=FakeNode),
         "rclpy.qos": SimpleNamespace(
             HistoryPolicy=SimpleNamespace(KEEP_LAST=object()),
-            ReliabilityPolicy=SimpleNamespace(
-                RELIABLE=object(), BEST_EFFORT=object()
-            ),
-            QoSProfile=lambda **_kwargs: object(),
+            ReliabilityPolicy=SimpleNamespace(RELIABLE=reliable, BEST_EFFORT=object()),
+            DurabilityPolicy=SimpleNamespace(VOLATILE=object()),
+            QoSProfile=FakeQoS,
         ),
-        "cv_bridge": SimpleNamespace(CvBridge=object),
-        "sensor_msgs.msg": SimpleNamespace(Image=Message, Joy=Message, PointCloud2=Message),
-        "std_msgs.msg": SimpleNamespace(Bool=Message, Float32=Message, String=Message),
+        "cv_bridge": SimpleNamespace(
+            CvBridge=lambda: SimpleNamespace(
+                encoding_to_dtype_with_channels=lambda _encoding: ("uint8", 3),
+                imgmsg_to_cv2=lambda *_args, **_kwargs: np.zeros(
+                    (360, 640, 3), np.uint8
+                ),
+                cv2_to_imgmsg=lambda frame, **_kwargs: SimpleNamespace(frame=frame),
+            )
+        ),
+        "sensor_msgs.msg": SimpleNamespace(Image=Message),
+        "std_msgs.msg": SimpleNamespace(String=Message),
         "nav_msgs.msg": SimpleNamespace(Path=Message),
+        "unitree_api.msg": SimpleNamespace(Request=Request),
+        "apriltag_msgs.msg": SimpleNamespace(AprilTagDetectionArray=Message),
     }
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(
         debug,
         "BestSoFarSegmenter",
-        lambda _config: SimpleNamespace(device=SimpleNamespace(type="cuda")),
+        lambda _config: SimpleNamespace(
+            device=SimpleNamespace(type="cuda"),
+            reset=lambda: None,
+            segment=lambda _frame, **_kwargs: SimpleNamespace(
+                selected_mask=np.zeros((360, 640), np.uint8),
+                inference_seconds=0.01,
+            ),
+        ),
     )
-    monkeypatch.setitem(debug.ENV, "SWIN_L_DRIVE_ENABLED", "true")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_CALIBRATION_CONFIRMED", "true")
+    monkeypatch.setattr(debug, "_path_message", lambda *_args: Message())
     monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", "2")
 
     assert debug.run_ros2(debug.parse_args(["task-drive"])) == 0

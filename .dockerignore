@@ -2,6 +2,7 @@
 .env
 /.cache/
 /rosbag-results/
+/models/
 /.venv/
 /.ruff_cache/
 /.DS_Store

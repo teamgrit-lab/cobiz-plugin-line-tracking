@@ -11,6 +11,13 @@ from typing import Any, Mapping
 
 
 ACTION_NAME = "LINE_TRACKING"
+TRACKING_REASONS = frozenset(("tracking", "tracking_slow_turn", "tracking_path_hold"))
+TASK_STOP_CHECKS = (
+    "startup_hold",
+    "startup_unready",
+    "unsafe_timeout",
+    "task_timeout",
+)
 _TASK_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _ROUTES = {
     "TASK_STARTED": "start",
@@ -22,11 +29,15 @@ _ROUTES = {
 
 @dataclass(frozen=True)
 class TaskPolicy:
-    default_duration_sec: float = 60.0
-    max_duration_sec: float = 300.0
+    default_duration_sec: float = 500.0
+    max_duration_sec: float = 10000.0
     unsafe_timeout_sec: float = 2.0
     startup_hold_sec: float = 2.0
     default_selected_mask: int = 2
+    stop_on_startup_hold: bool = False
+    stop_on_startup_unready: bool = False
+    stop_on_unsafe_timeout: bool = False
+    stop_on_task_timeout: bool = False
 
     def validate(self) -> None:
         values = (
@@ -37,6 +48,11 @@ class TaskPolicy:
         )
         if not all(math.isfinite(value) and value > 0 for value in values):
             raise ValueError("task timing limits must be positive and finite")
+        if any(
+            type(getattr(self, "stop_on_" + name)) is not bool
+            for name in TASK_STOP_CHECKS
+        ):
+            raise ValueError("task stop-check switches must be boolean values")
         if (
             self.default_duration_sec < self.startup_hold_sec + 1.0
             or self.default_duration_sec > self.max_duration_sec
@@ -44,8 +60,11 @@ class TaskPolicy:
             raise ValueError("default duration must exceed startup hold by 1 second")
         if type(
             self.default_selected_mask
-        ) is not int or self.default_selected_mask not in (1, 2):
-            raise ValueError("default selected_mask must be 1 (road) or 2 (sidewalk)")
+        ) is not int or self.default_selected_mask not in (0, 1, 2):
+            raise ValueError(
+                "default selected_mask must be 0 (road or sidewalk), "
+                "1 (road), or 2 (sidewalk)"
+            )
 
 
 @dataclass(frozen=True)
@@ -91,7 +110,7 @@ def requested_selected_mask(event: Mapping[str, Any], default: int) -> int:
 
 def _selected_mask(payload: Mapping[str, Any], default: int) -> int:
     value = payload.get("selected_mask", default)
-    if type(value) is not int or value not in (1, 2):
+    if type(value) is not int or value not in (0, 1, 2):
         raise ValueError("invalid_selected_mask")
     return value
 
@@ -101,12 +120,9 @@ def _duration(payload: Mapping[str, Any], policy: TaskPolicy) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("invalid_duration_sec")
     duration = float(value)
-    if (
-        not math.isfinite(duration)
-        or not policy.startup_hold_sec + 1.0 <= duration <= policy.max_duration_sec
-    ):
+    if not math.isfinite(duration) or duration < policy.startup_hold_sec + 1.0:
         raise ValueError("duration_sec_out_of_range")
-    return duration
+    return min(duration, policy.max_duration_sec)
 
 
 def task_state(
@@ -135,7 +151,7 @@ def task_state(
 
 
 class LineTrackingTasks:
-    """Accept one finite server task; require fresh safe tracking throughout."""
+    """Accept one server task with independently configurable automatic stops."""
 
     def __init__(self, policy: TaskPolicy | None = None) -> None:
         self.policy = policy or TaskPolicy()
@@ -166,7 +182,7 @@ class LineTrackingTasks:
         event: Any,
         *,
         now: float,
-        ready_reason: str,
+        rejection_reason: str | None = None,
     ) -> dict[str, Any] | None:
         if not isinstance(event, Mapping):
             return None
@@ -213,8 +229,8 @@ class LineTrackingTasks:
             duration = _duration(payload, self.policy)
         except ValueError as error:
             return self._state(candidate, "TASK_REJECTED", str(error))
-        if ready_reason != "tracking":
-            return self._state(candidate, "TASK_REJECTED", ready_reason)
+        if rejection_reason is not None:
+            return self._state(candidate, "TASK_REJECTED", rejection_reason)
         self.active = ActiveTask(
             raw_id, key, device_id, device_name, now, duration, selected_mask
         )
@@ -227,18 +243,27 @@ class LineTrackingTasks:
         if active is None:
             return None
         elapsed = now - active.started_at
-        if elapsed < self.policy.startup_hold_sec:
+        if self.policy.stop_on_startup_hold and elapsed < self.policy.startup_hold_sec:
             return None
+        if (
+            self.policy.stop_on_startup_unready
+            and elapsed >= self.policy.startup_hold_sec
+            and not self.tracking_seen
+            and drive_reason not in TRACKING_REASONS
+        ):
+            return self.finish("TASK_ABORTED", f"startup:{drive_reason}")
         tracked_before_this_tick = self.tracking_seen
-        if drive_reason == "tracking":
+        if drive_reason in TRACKING_REASONS:
             self.tracking_seen = True
+            self.unsafe_since = None
+        elif not self.policy.stop_on_unsafe_timeout:
             self.unsafe_since = None
         elif self.unsafe_since is None:
             self.unsafe_since = now
         elif now - self.unsafe_since >= self.policy.unsafe_timeout_sec:
             return self.finish("TASK_ABORTED", f"unsafe:{drive_reason}")
-        if elapsed >= active.duration_sec:
-            if tracked_before_this_tick and drive_reason == "tracking":
+        if self.policy.stop_on_task_timeout and elapsed >= active.duration_sec:
+            if tracked_before_this_tick and drive_reason in TRACKING_REASONS:
                 return self.finish("TASK_COMPLETED")
             return self.finish("TASK_ABORTED", f"tracking_unavailable:{drive_reason}")
         return None

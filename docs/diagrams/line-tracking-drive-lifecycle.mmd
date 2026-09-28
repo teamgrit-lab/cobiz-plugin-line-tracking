@@ -1,0 +1,31 @@
+sequenceDiagram
+    title Line tracking — 주행과 종료
+    participant N as actual-activate
+    participant P as 선택 경로
+    participant L as LiDAR 안전 검사
+    participant A as A2 제어 플러그인
+    participant C as cobiz-core
+    participant S as Cobiz 서버
+
+    N->>A: Joy 0속도 — 시작 대기 2초
+    loop 활성 작업 중 — 10Hz
+        N->>P: active.selected_mask의 경로 조회
+        N->>L: 해당 경로 주변 장애물 검사
+        N->>N: 경로 신뢰도·입력 나이·제어권 확인
+        alt 모든 조건 통과
+            N->>A: /a2_control Joy — 전진·회전
+            A->>A: Joy 축 변환 후 Move()
+        else 조건 위반
+            N->>A: Joy 0속도
+        end
+        N-->>N: local_path·metrics·safety_stop 발행
+    end
+    alt 지정 시간 만료 + 추종 상태 정상
+        N->>A: Joy 0속도
+        N-->>C: TASK_COMPLETED
+    else 서버 취소 또는 불안전 상태 2초 지속
+        N->>A: Joy 0속도
+        N-->>C: TASK_ABORTED
+    end
+    C-->>S: HTTP 결과 보고
+    Note over N,A: 종료 후 약 1초간 0속도를 더 발행하고 Joy 발행자를 제거

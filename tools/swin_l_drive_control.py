@@ -1,7 +1,7 @@
-"""Fail-closed, low-speed Joy commands from a calibrated Swin-L local path.
+"""Low-speed path tracking with sensor guards and configurable path stops.
 
 This module has no ROS dependency so the control and stop gates can be tested
-without a robot. It does not establish camera or LiDAR extrinsic calibration.
+without a robot. It does not establish camera extrinsic calibration.
 """
 
 from __future__ import annotations
@@ -11,22 +11,39 @@ import math
 
 import numpy as np
 
-from local_path import LidarSafetyResult, SmoothedPath
+from local_path import SmoothedPath
+
+
+MAX_FORWARD_MPS_HARD_LIMIT = 1.00
+MAX_PATH_UNAVAILABLE_INFERENCES = 5
+DRIVE_STOP_CHECKS = (
+    "camera_stale",
+    "inference_stale",
+    "camera_timestamp_invalid",
+    "path_unavailable",
+    "path_loss_limit",
+    "low_confidence",
+    "lateral_target",
+)
 
 
 @dataclass(frozen=True)
 class DriveConfig:
-    max_forward_mps: float = 0.10
+    max_forward_mps: float = 0.50
     max_yaw_rps: float = 0.18
     heading_gain: float = 1.0
     lookahead_m: float = 4.0
-    min_confidence: float = 0.70
-    max_lateral_target_m: float = 0.75
-    max_camera_age_sec: float = 0.50
-    max_inference_age_sec: float = 0.50
-    max_path_age_sec: float = 0.45
-    max_lidar_age_sec: float = 0.35
-    min_clearance_m: float = 3.0
+    min_confidence: float = 0.49
+    max_target_heading_deg: float = 60.0
+    max_camera_age_sec: float = 5.00
+    max_inference_age_sec: float = 5.00
+    stop_on_camera_stale: bool = False
+    stop_on_inference_stale: bool = False
+    stop_on_camera_timestamp_invalid: bool = False
+    stop_on_path_unavailable: bool = False
+    stop_on_path_loss_limit: bool = False
+    stop_on_low_confidence: bool = False
+    stop_on_lateral_target: bool = False
 
     def validate(self) -> None:
         positive = (
@@ -34,17 +51,29 @@ class DriveConfig:
             self.max_yaw_rps,
             self.heading_gain,
             self.lookahead_m,
-            self.max_lateral_target_m,
+            self.max_target_heading_deg,
             self.max_camera_age_sec,
             self.max_inference_age_sec,
-            self.max_path_age_sec,
-            self.max_lidar_age_sec,
-            self.min_clearance_m,
         )
         if not all(math.isfinite(value) and value > 0.0 for value in positive):
             raise ValueError("drive limits must be finite and positive")
-        if not 0.0 < self.min_confidence <= 1.0:
-            raise ValueError("min_confidence must be in (0, 1]")
+        if self.max_forward_mps > MAX_FORWARD_MPS_HARD_LIMIT:
+            raise ValueError("max_forward_mps must be at most 1.0 m/s")
+        if self.max_target_heading_deg >= 90.0:
+            raise ValueError("max_target_heading_deg must be in (0, 90)")
+        if not 0.0 <= self.min_confidence <= 1.0:
+            raise ValueError("min_confidence must be in [0, 1]")
+        if any(
+            type(getattr(self, "stop_on_" + name)) is not bool
+            for name in DRIVE_STOP_CHECKS
+        ):
+            raise ValueError("stop-check switches must be boolean values")
+
+    @property
+    def max_lateral_target_m(self) -> float:
+        """Equivalent lateral limit at the configured lookahead distance."""
+
+        return self.lookahead_m * math.tan(math.radians(self.max_target_heading_deg))
 
 
 @dataclass(frozen=True)
@@ -58,92 +87,106 @@ class DriveDecision:
     def stop(cls, reason: str) -> DriveDecision:
         return cls(0.0, 0.0, 0.0, reason)
 
-    def joy_axes(self) -> list[float]:
-        """Encode field-corrected A2 Joy axes for left/right motion.
-
-        a2_control_node decodes Move(vx=-axes[1], vy=-axes[0], yaw=-axes[2]).
-        Per the reported A2 field behavior, lateral motion and yaw are
-        reversed relative to the path frame. Move therefore gets -vy and
-        -yaw_rate; forward motion keeps its existing sign.
-        """
-
-        return [self.vy, -self.vx, self.yaw_rate]
-
-
-def lidar_frame_matches_base(message_frame: str, path_frame: str) -> bool:
-    """No TF is applied here; only already-transformed base-frame scans are safe."""
-
-    return message_frame.strip().lstrip("/") == path_frame == "base_link"
-
 
 def decide_drive(
     path: SmoothedPath | None,
-    safety: LidarSafetyResult,
     *,
     camera_age_sec: float | None,
     inference_age_sec: float | None,
-    other_control_publishers: bool,
-    enabled: bool,
-    calibrated: bool,
     config: DriveConfig,
+    last_valid_yaw_rate: float | None = None,
+    last_valid_forward_mps: float | None = None,
+    path_unavailable_inferences: int = 0,
 ) -> DriveDecision:
-    """Only permit low-speed motion with fresh, plausible, obstacle-free inputs."""
+    """Slow forward motion when heading demand exceeds available yaw rate.
+
+    The caller counts consecutive unavailable results at inference completion;
+    repeatedly evaluating the same result must not advance that count.
+    During an optional path-loss hold, retain the last forward speed as well as
+    yaw so losing a sharp-turn path cannot accelerate the robot. Older callers
+    that supply only a saved yaw retain their configured speed behavior.
+    """
 
     config.validate()
-    if not enabled or not calibrated:
-        return DriveDecision.stop("drive_not_armed")
-    if other_control_publishers:
-        return DriveDecision.stop("multiple_control_publishers")
     for name, age, maximum in (
         ("camera", camera_age_sec, config.max_camera_age_sec),
         ("inference", inference_age_sec, config.max_inference_age_sec),
     ):
-        if age is None or not math.isfinite(age) or age < 0.0 or age > maximum:
+        if getattr(config, "stop_on_" + name + "_stale") and (
+            age is None or not math.isfinite(age) or age < 0.0 or age > maximum
+        ):
             return DriveDecision.stop(f"{name}_stale")
-    if path is None:
-        return DriveDecision.stop("path_unavailable")
-    if (
-        not math.isfinite(path.age_sec)
-        or path.age_sec < 0.0
-        or path.age_sec > config.max_path_age_sec
+    if path is not None and config.stop_on_low_confidence and (
+        not math.isfinite(path.confidence)
+        or path.confidence < config.min_confidence
     ):
-        return DriveDecision.stop("path_stale")
-    if not math.isfinite(path.confidence) or path.confidence < config.min_confidence:
         return DriveDecision.stop("path_low_confidence")
-    if not safety.lidar_available:
-        return DriveDecision.stop("lidar_unavailable")
+    lateral = path_target_lateral(path, config.lookahead_m)
+    if lateral is None:
+        if config.stop_on_path_unavailable or (
+            config.stop_on_path_loss_limit
+            and path_unavailable_inferences >= MAX_PATH_UNAVAILABLE_INFERENCES
+        ):
+            return DriveDecision.stop("path_unavailable")
+        held_speed = (
+            config.max_forward_mps
+            if last_valid_forward_mps is None
+            else last_valid_forward_mps
+        )
+        if (
+            last_valid_yaw_rate is not None
+            and math.isfinite(last_valid_yaw_rate)
+            and math.isfinite(held_speed)
+            and held_speed >= 0.0
+        ):
+            return DriveDecision(
+                min(held_speed, config.max_forward_mps),
+                0.0,
+                float(np.clip(last_valid_yaw_rate, -config.max_yaw_rps, config.max_yaw_rps)),
+                "tracking_path_hold",
+            )
+        # With no previous usable command there is nothing to hold. Disabling
+        # automatic stops must not invent an initial heading or forward speed.
+        return DriveDecision.stop("waiting_for_path")
     if (
-        safety.age_sec is None
-        or not math.isfinite(safety.age_sec)
-        or safety.age_sec < 0.0
-        or safety.age_sec > config.max_lidar_age_sec
+        config.stop_on_lateral_target
+        and abs(lateral) > config.max_lateral_target_m
     ):
-        return DriveDecision.stop("lidar_stale")
-    if safety.stop:
-        return DriveDecision.stop(f"lidar_{safety.reason}")
-    if safety.clearance_m is not None and (
-        not math.isfinite(safety.clearance_m)
-        or safety.clearance_m <= config.min_clearance_m
-    ):
-        return DriveDecision.stop("lidar_clearance_low")
-
-    points = np.asarray(path.points_xy, dtype=np.float64)
-    if (
-        points.ndim != 2
-        or points.shape[1] != 2
-        or points.shape[0] < 2
-        or not np.all(np.isfinite(points))
-        or not np.all(np.diff(points[:, 0]) > 0.0)
-        or points[0, 0] <= 0.0
-        or points[0, 0] > config.lookahead_m
-        or points[-1, 0] < config.lookahead_m
-    ):
-        return DriveDecision.stop("path_geometry_invalid")
-    lateral = float(np.interp(config.lookahead_m, points[:, 0], points[:, 1]))
-    if abs(lateral) > config.max_lateral_target_m:
         return DriveDecision.stop("path_lateral_target_large")
     heading = math.atan2(lateral, config.lookahead_m)
+    requested_yaw = config.heading_gain * heading
     yaw_rate = float(
-        np.clip(config.heading_gain * heading, -config.max_yaw_rps, config.max_yaw_rps)
+        np.clip(requested_yaw, -config.max_yaw_rps, config.max_yaw_rps)
     )
-    return DriveDecision(config.max_forward_mps, 0.0, yaw_rate, "tracking")
+    # Once yaw saturates, scale forward speed by the same ratio. This preserves
+    # the requested yaw/speed ratio instead of widening the commanded turn.
+    speed_scale = config.max_yaw_rps / max(config.max_yaw_rps, abs(requested_yaw))
+    return DriveDecision(
+        config.max_forward_mps * speed_scale,
+        0.0,
+        yaw_rate,
+        "tracking_slow_turn" if speed_scale < 1.0 else "tracking",
+    )
+
+
+def path_target_lateral(path: SmoothedPath | None, lookahead_m: float) -> float | None:
+    """Use finite points in forward order, clamping to an available endpoint.
+
+    A single point is sufficient. Duplicate forward distances use their first
+    finite point. No numeric coordinates means there is no target to track.
+    """
+
+    if path is None:
+        return None
+    try:
+        points = np.asarray(path.points_xy, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if points.ndim != 2 or points.shape[1] != 2:
+        return None
+    points = points[np.all(np.isfinite(points), axis=1)]
+    if points.shape[0] == 0:
+        return None
+    forward, indices = np.unique(points[:, 0], return_index=True)
+    lateral = float(np.interp(lookahead_m, forward, points[indices, 1]))
+    return lateral if math.isfinite(lateral) else None

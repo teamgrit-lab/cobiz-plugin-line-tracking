@@ -168,6 +168,7 @@ class RosHarness:
             "BestSoFarSegmenter",
             lambda _config: SimpleNamespace(
                 device=SimpleNamespace(type="cuda"),
+            reset=lambda: None,
                 segment=lambda _frame, **_kwargs: SimpleNamespace(
                     selected_mask=np.full((360, 640), 2, np.uint8),
                     inference_seconds=0.01,
@@ -285,7 +286,7 @@ def test_r50_task_drive_accepts_720p_rgb_and_keeps_camera_stop(ros, monkeypatch)
 
     def create_segmenter(config):
         configurations.append(config)
-        return SimpleNamespace(device=SimpleNamespace(type="cuda"), segment=segment)
+        return SimpleNamespace(device=SimpleNamespace(type="cuda"), segment=segment, reset=lambda: None)
 
     monkeypatch.setattr(debug, "BestSoFarSegmenter", create_segmenter)
 
@@ -652,6 +653,7 @@ def test_missing_path_streak_uses_the_task_selected_surface(ros, monkeypatch, ma
         debug, "BestSoFarSegmenter",
         lambda _config: SimpleNamespace(
             device=SimpleNamespace(type="cuda"),
+            reset=lambda: None,
             segment=lambda _frame, **_kwargs: SimpleNamespace(selected_mask=mask.copy()),
         ),
     )
@@ -772,6 +774,7 @@ def test_combined_surface_tracks_either_class_and_stops_on_background(
         "BestSoFarSegmenter",
         lambda _config: SimpleNamespace(
             device=SimpleNamespace(type="cuda"),
+            reset=lambda: None,
             segment=lambda _frame, **_kwargs: SimpleNamespace(selected_mask=mask.copy()),
         ),
     )
@@ -1683,7 +1686,7 @@ def test_conversion_fault_cannot_be_cleared_by_older_inflight_inference(
         return SimpleNamespace(selected_mask=np.full((360, 640), 2, np.uint8), inference_seconds=0.01)
 
     monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _config: SimpleNamespace(
-        device=SimpleNamespace(type='cuda'), segment=segment,
+        device=SimpleNamespace(type='cuda'), segment=segment, reset=lambda: None,
     ))
 
     def scenario(node):
@@ -1768,7 +1771,7 @@ def test_inference_error_stops_even_with_all_automatic_stops_disabled(
         return SimpleNamespace(selected_mask=np.full((360, 640), 2, np.uint8), inference_seconds=0.01)
 
     monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _config: SimpleNamespace(
-        device=SimpleNamespace(type='cuda'), segment=segment,
+        device=SimpleNamespace(type='cuda'), segment=segment, reset=lambda: None,
     ))
 
     def scenario(node):

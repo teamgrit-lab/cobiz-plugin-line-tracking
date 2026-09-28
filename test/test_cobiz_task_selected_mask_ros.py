@@ -199,6 +199,7 @@ def test_task_control_ignores_external_publisher_count(
         "BestSoFarSegmenter",
         lambda _config: SimpleNamespace(
             device=SimpleNamespace(type="cuda"),
+            reset=lambda: None,
             segment=lambda _frame, **_kwargs: SimpleNamespace(
                 selected_mask=np.zeros((360, 640), np.uint8),
                 inference_seconds=0.01,

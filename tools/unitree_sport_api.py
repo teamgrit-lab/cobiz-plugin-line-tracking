@@ -41,7 +41,7 @@ def drive_to_sport_move(*, vx: float, vy: float, yaw_rate: float) -> SportMove:
     return SportMove(
         x=_finite_zero_normalized(vx),
         y=_finite_zero_normalized(-vy),
-        z=_finite_zero_normalized(-yaw_rate),
+        z=_finite_zero_normalized(yaw_rate),
     )
 
 

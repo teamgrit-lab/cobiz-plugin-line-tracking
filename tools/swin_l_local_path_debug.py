@@ -1711,9 +1711,9 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
-        "--branch-preference", choices=("none", "left", "right"),
+        "--branch-preference", choices=("center", "left", "right"),
         default=_env("SWIN_L_BRANCH_PREFERENCE", "right"),
-        help="prefer a confirmed connected left/right fork; none preserves legacy extraction",
+        help="prefer a confirmed connected left/right fork; center preserves legacy extraction",
     )
     parser.add_argument(
         "--branch-min-width-m", type=float,

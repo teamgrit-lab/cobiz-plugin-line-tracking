@@ -65,7 +65,7 @@ def drive(path, lookahead=4.0):
 def test_single_corridor_exactly_preserves_legacy_path(extract, center, preference):
     mask = corridor(center)
     cfg = config(preference)
-    before = extract(mask, replace(cfg, branch_preference="none"))
+    before = extract(mask, replace(cfg, branch_preference="center"))
     smoother = LocalPathSmoother(cfg)
     after = smoother.update(extract(mask, cfg), 1.0)
     np.testing.assert_array_equal(after.points_xy, before.points_xy)
@@ -119,8 +119,8 @@ def test_disconnected_preferred_strip_is_not_a_fork(extract, preference):
     assert abs(path.points_xy[:, 1]).max() < 0.03
 
 
-def test_none_keeps_legacy_fork_path_without_confirmation_or_lock(extract):
-    cfg = config("none")
+def test_center_keeps_legacy_fork_path_without_confirmation_or_lock(extract):
+    cfg = config("center")
     estimate = extract(fork(), cfg)
     assert estimate.branch_observation is None
     smoother = LocalPathSmoother(cfg)
@@ -128,6 +128,7 @@ def test_none_keeps_legacy_fork_path_without_confirmation_or_lock(extract):
     np.testing.assert_array_equal(path.points_xy, estimate.points_xy)
     assert path.stop_reason is None
     assert path.branch_status["state"] == "idle"
+    assert path.branch_status["preference"] == "center"
 
 
 def test_temporary_hole_that_rejoins_is_not_a_fork(extract):
@@ -259,7 +260,7 @@ def test_no_usable_fork_and_excessive_graph_complexity_stop(extract):
 @pytest.mark.parametrize(
     "changes",
     [
-        {"branch_preference": "center"},
+        {"branch_preference": "none"},
         {"branch_min_width_m": float("nan")},
         {"branch_margin_m": 0.4},
         {"branch_confirm_frames": 1},

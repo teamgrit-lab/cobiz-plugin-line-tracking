@@ -79,7 +79,7 @@ class LocalPathConfig:
     path_hold_sec: float = 0.90
     path_duration_sec: float = 1.50
     unrestricted_path_mode: bool = False
-    branch_preference: str = "none"
+    branch_preference: str = "center"
     branch_min_width_m: float = 0.60
     branch_margin_m: float = 0.10
     branch_confirm_frames: int = 2
@@ -118,8 +118,8 @@ class LocalPathConfig:
             raise ValueError("max_lateral_update_m must be positive")
         if self.path_hold_sec < 0.0 or self.path_duration_sec <= 0.0:
             raise ValueError("path hold/duration values are invalid")
-        if self.branch_preference not in ("none", "left", "right"):
-            raise ValueError("branch_preference must be none, left or right")
+        if self.branch_preference not in ("center", "left", "right"):
+            raise ValueError("branch_preference must be center, left or right")
         if not all(math.isfinite(value) and value > 0 for value in (
             self.branch_min_width_m, self.branch_margin_m, self.branch_hold_sec,
         )) or 2 * self.branch_margin_m >= self.branch_min_width_m:
@@ -386,7 +386,7 @@ def extract_sidewalk_centerline(
         mean_sidewalk_width_m=mean_width,
         raw_points_xy=raw_points,
     )
-    if config.branch_preference != "none":
+    if config.branch_preference != "center":
         from branch_path import observe_branches
 
         # Closing may bridge separate patches. Branch connectivity must use the

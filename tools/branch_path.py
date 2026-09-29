@@ -272,7 +272,7 @@ class BranchSelector:
         return dict(self._status)
 
     def update(self, estimate: LocalPathEstimate | None, now: float) -> BranchChoice:
-        if self.config.branch_preference == "none":
+        if self.config.branch_preference == "center":
             return BranchChoice(estimate)
         fresh = math.isfinite(now) and now > self._last_update
         if fresh:

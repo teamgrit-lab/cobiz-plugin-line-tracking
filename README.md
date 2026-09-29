@@ -91,7 +91,8 @@ ROS 실행과 MCAP local-path 모드는 기본적으로 `SWIN_L_BRANCH_PREFERENC
 사용한다. 일반 단일 통로는 기존 중앙선을 유지한다. 공통 진입로에서 갈라진
 후보가 확인되면, `right`는 유효한 후보 중 상대적으로 오른쪽인 경로의 중앙선을,
 `left`는 왼쪽인 경로의 중앙선을 선택한다. 통로의 경계에 붙이는 기능은 아니다.
-`none`은 기존 추출 방식으로 복귀한다.
+`center`는 좌우 분기 선호 없이 기존 중앙선 추출 방식을 사용한다.
+이전 설정값 `none`을 사용 중이라면 `center`로 변경해야 한다.
 
 ```dotenv
 SWIN_L_BRANCH_PREFERENCE=right
@@ -104,7 +105,7 @@ SWIN_L_BRANCH_HOLD_SEC=1.50
 왼쪽 분기를 우선하려면 `.env`에 `SWIN_L_BRANCH_PREFERENCE=left`를 지정한다.
 좌우 모두 동일한 분기 확인·선택 유지·경로 소실 정지 조건을 적용한다.
 
-직접 실행에서는 `--branch-preference left|right|none`, `--branch-min-width-m`,
+직접 실행에서는 `--branch-preference left|right|center`, `--branch-min-width-m`,
 `--branch-margin-m`, `--branch-confirm-frames`, `--branch-hold-sec`로 덮어쓸 수 있다.
 환경 설정을 변경한 뒤 Compose 서비스를 재생성해야 적용된다.
 

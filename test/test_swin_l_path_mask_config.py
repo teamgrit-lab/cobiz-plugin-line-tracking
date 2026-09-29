@@ -115,9 +115,9 @@ def test_task_paths_are_independent_and_active_task_selects_its_own_path():
 
 
 @pytest.mark.parametrize("mode", ["ros2", "task-drive"])
-@pytest.mark.parametrize("preference", ["left", "right"])
+@pytest.mark.parametrize("preference", ["left", "right", "center"])
 def test_branch_configuration_environment_and_cli(monkeypatch, mode, preference):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_PREFERENCE", "none")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_PREFERENCE", "center")
     monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_MIN_WIDTH_M", "0.8")
     monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_MARGIN_M", "0.15")
     monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_CONFIRM_FRAMES", "3")
@@ -132,17 +132,18 @@ def test_branch_configuration_environment_and_cli(monkeypatch, mode, preference)
 
 
 @pytest.mark.parametrize("mode", ["ros2", "task-drive", "mcap"])
-def test_left_preference_from_environment_reaches_path_config(monkeypatch, tmp_path, mode):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_PREFERENCE", "left")
+@pytest.mark.parametrize("preference", ["left", "center"])
+def test_preference_from_environment_reaches_path_config(monkeypatch, tmp_path, mode, preference):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_PREFERENCE", preference)
     arguments = [mode]
     if mode == "mcap":
         arguments += ["--input", str(tmp_path / "input.mcap"), "--output", str(tmp_path / "output.mp4")]
     args = debug.parse_args(arguments)
-    assert debug._local_path_config_from_args(args).branch_preference == "left"
+    assert debug._local_path_config_from_args(args).branch_preference == preference
 
 
 @pytest.mark.parametrize("name,value", [
-    ("PREFERENCE", "center"), ("MIN_WIDTH_M", "nan"), ("MARGIN_M", "-0.1"),
+    ("PREFERENCE", "none"), ("MIN_WIDTH_M", "nan"), ("MARGIN_M", "-0.1"),
     ("CONFIRM_FRAMES", "1"), ("HOLD_SEC", "inf"),
 ])
 def test_invalid_branch_environment_is_rejected_before_startup(monkeypatch, name, value):

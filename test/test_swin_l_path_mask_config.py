@@ -112,3 +112,40 @@ def test_task_paths_are_independent_and_active_task_selects_its_own_path():
         active = ActiveTask("t1", "t1", None, None, 10.0, 30.0, mask_class)
         assert debug.active_path_mask_class(active, 2) == mask_class
     assert debug.active_path_mask_class(None, 2) == 2
+
+
+@pytest.mark.parametrize("mode", ["ros2", "task-drive"])
+@pytest.mark.parametrize("preference", ["left", "right"])
+def test_branch_configuration_environment_and_cli(monkeypatch, mode, preference):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_PREFERENCE", "none")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_MIN_WIDTH_M", "0.8")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_MARGIN_M", "0.15")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_CONFIRM_FRAMES", "3")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_HOLD_SEC", "2.5")
+    args = debug.parse_args([mode, "--branch-preference", preference])
+    cfg = debug._local_path_config_from_args(args)
+    assert cfg.branch_preference == preference
+    assert cfg.branch_min_width_m == 0.8
+    assert cfg.branch_margin_m == 0.15
+    assert cfg.branch_confirm_frames == 3
+    assert cfg.branch_hold_sec == 2.5
+
+
+@pytest.mark.parametrize("mode", ["ros2", "task-drive", "mcap"])
+def test_left_preference_from_environment_reaches_path_config(monkeypatch, tmp_path, mode):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_PREFERENCE", "left")
+    arguments = [mode]
+    if mode == "mcap":
+        arguments += ["--input", str(tmp_path / "input.mcap"), "--output", str(tmp_path / "output.mp4")]
+    args = debug.parse_args(arguments)
+    assert debug._local_path_config_from_args(args).branch_preference == "left"
+
+
+@pytest.mark.parametrize("name,value", [
+    ("PREFERENCE", "center"), ("MIN_WIDTH_M", "nan"), ("MARGIN_M", "-0.1"),
+    ("CONFIRM_FRAMES", "1"), ("HOLD_SEC", "inf"),
+])
+def test_invalid_branch_environment_is_rejected_before_startup(monkeypatch, name, value):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_" + name, value)
+    with pytest.raises(SystemExit):
+        debug.parse_args(["task-drive"])

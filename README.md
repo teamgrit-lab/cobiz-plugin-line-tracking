@@ -13,10 +13,12 @@ combined (`0`) with
 
 ## Runtime contract
 
-All automatic stops default to `false`; each `LINE_TRACKING_STOP_ON_*` setting
+All configurable automatic stops default to `false`; each `LINE_TRACKING_STOP_ON_*` setting
 uses `true` to enable its condition and `false` to disable it. Explicit server
 cancellation, image/model/publish errors, and handled shutdown still stop motion.
 No accepted task means no motion command, and speed limits remain enforced.
+When left/right fork selection is enabled, its confirmation, ambiguity and selected-
+branch-loss guards also stop motion independently of these switches.
 
 - There is no startup hold or automatic task timeout by default.
 - `actual-activate` loads the model once and keeps it in memory. With no
@@ -38,6 +40,8 @@ No accepted task means no motion command, and speed limits remain enforced.
 - With path stops disabled, loss of a path holds the current task's last valid
   forward speed and yaw without a failure-count limit. Camera/inference stalls
   alone do not stop motion when their checks are disabled.
+  A lost or ambiguous committed fork is an exception: it publishes zero motion
+  and clears the saved command until the selected branch can be matched again.
 - `LINE_TRACKING_STOP_ON_APRILTAG=true` enables the existing stop-and-confirm
   behavior: a candidate sends a hard stop, and the same ID in three distinct
   frames across a one-second window completes the task. An unconfirmed candidate
@@ -80,6 +84,62 @@ SWIN_L_APRILTAG_CONFIRM_MIN_HITS=3
 LINE_TRACKING_MAX_FORWARD_MPS=0.50
 LINE_TRACKING_MAX_TARGET_HEADING_DEG=60.0
 ```
+
+## 갈림길에서 좌우 경로 우선
+
+ROS 실행과 MCAP local-path 모드는 기본적으로 `SWIN_L_BRANCH_PREFERENCE=right`를
+사용한다. 일반 단일 통로는 기존 중앙선을 유지한다. 공통 진입로에서 갈라진
+후보가 확인되면, `right`는 유효한 후보 중 상대적으로 오른쪽인 경로의 중앙선을,
+`left`는 왼쪽인 경로의 중앙선을 선택한다. 통로의 경계에 붙이는 기능은 아니다.
+`none`은 기존 추출 방식으로 복귀한다.
+
+```dotenv
+SWIN_L_BRANCH_PREFERENCE=right
+SWIN_L_BRANCH_MIN_WIDTH_M=0.60
+SWIN_L_BRANCH_MARGIN_M=0.10
+SWIN_L_BRANCH_CONFIRM_FRAMES=2
+SWIN_L_BRANCH_HOLD_SEC=1.50
+```
+
+왼쪽 분기를 우선하려면 `.env`에 `SWIN_L_BRANCH_PREFERENCE=left`를 지정한다.
+좌우 모두 동일한 분기 확인·선택 유지·경로 소실 정지 조건을 적용한다.
+
+직접 실행에서는 `--branch-preference left|right|none`, `--branch-min-width-m`,
+`--branch-margin-m`, `--branch-confirm-frames`, `--branch-hold-sec`로 덮어쓸 수 있다.
+환경 설정을 변경한 뒤 Compose 서비스를 재생성해야 적용된다.
+
+- 마스크의 틈을 메우기 **전** BEV에서 행별 구간의 겹침을 추적한다. 가까운 공통
+  진입로와 연결되지 않은 조각은 분기 후보로 쓰지 않으며, 끊긴 행을
+  보간해서 연결하지 않는다. 갈라졌다 다시 합쳐지는 구간은 합류점에서 통합한다.
+- 두 후보가 분기점 이후 같은 전방 거리에서 최소 0.75m 진행하고, 중심 간격
+  0.60m 이상·방향 차이 15° 이상일 때 분기로 판단한다. 후보가 과도하게 늘어나는
+  마스크는 `branch_graph_ambiguous`로 정지한다.
+- **서로 다른 새 추론 2회**에서 같은 후보를 확인한 뒤 선택한다. 확인 중에는
+  `branch_confirming`으로 0 명령을 보낸다. 10Hz 제어 타이머는 확인 횟수를 늘리지
+  않는다. 설정한 폭과 여유를 확보하지 못하거나 연결 경로를 만들 수 없는 후보는
+  제외한다. 선호 방향 후보만 부적합하면 유효한 다른 후보를 선택할 수 있다.
+- 선택 후에는 매번 화면의 선호 방향을 다시 고르지 않고 이전 경로의 먼 구간과 대응시킨다.
+  기본 1.5초가 지나고 새 추론 3회에서 단일 통로가 확인되면 선택 상태를 해제한다.
+  작업 시작·종료 시 초기화하며, 도로·보도·통합 마스크의 상태는 각각 독립적이다.
+- 선택된 가지가 사라지거나 대응이 모호하면 `branch_path_lost` 또는
+  `branch_match_ambiguous`로 정지한다. `LINE_TRACKING_STOP_ON_PATH_UNAVAILABLE=false`
+  등 일반 정지 설정으로 이 분기 보호를 우회하지 않는다. 선택 경로가 다시 확인되면
+  재개하며, 복구되지 않으면 작업 취소/재시작으로 선택 상태를 초기화할 수 있다.
+- 분기 중앙선은 선택된 구간의 여유 범위 안에서 공간적으로 다듬고, 점 사이의 선분도
+  마스크 내부인지 확인한다. 두 가지를 평균 내는 시간 평활화는 적용하지 않는다.
+  분기 경로에는 BEV 행별 점을 유지하므로 기존 `SWIN_L_PATH_POINTS=20`보다 점이
+  많을 수 있다. `unrestricted_path_mode`에서도 분기 판정과 선택 유지는 동작한다.
+
+`metrics.branch_selection`에는 분기 검출 여부, 후보 방향, 유효 후보 수, 확인 횟수,
+선택 상태와 이유, 선호 방향 적용 여부를 기록한다. 정지 중에는 `path_tracked=false`와
+빈 Path를 발행한다. MCAP 화면의 흰 선은 선택된 경로이고 주황 선은 기존 원시 추출이다.
+
+폭·여유·거리 임계값은 **설정된 BEV 좌표 기준 초기값**이다. ROI와 카메라 자세의
+보정 오차를 포함하므로 차체 폭, 회전 시 차체가 차지하는 공간, 실제 경계 여유를
+보장하지 않는다. 이 구현은 x 방향으로 진행하는 Y자 분기가 대상이며 90° 코너를
+해결하지 않는다. IMU/odom 보정도 추가하지 않는다. 프레임 간 경로 이동이 커서
+대응할 수 없으면 추측해서 다른 가지로 바꾸지 않고 정지한다. 실제 로봇 적용 전에는
+기록 영상과 저속 주행으로 분기 판정·회전 방향·여유 폭을 확인해야 한다.
 
 ## 목표 방향에 따른 전진 감속
 

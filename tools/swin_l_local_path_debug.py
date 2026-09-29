@@ -271,6 +271,11 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         path_hold_sec=args.path_hold_sec,
         path_duration_sec=args.path_duration_sec,
         unrestricted_path_mode=args.unrestricted_path_mode,
+        branch_preference=args.branch_preference,
+        branch_min_width_m=args.branch_min_width_m,
+        branch_margin_m=args.branch_margin_m,
+        branch_confirm_frames=args.branch_confirm_frames,
+        branch_hold_sec=args.branch_hold_sec,
     )
 
 
@@ -507,7 +512,7 @@ def render_local_path_overlay(
         f"raw={estimate.confidence:.2f} valid={estimate.valid_ratio:.2f}"
         if estimate
         else "raw=--",
-        f"path={'TRACKED' if path else 'LOST'} hold={path.age_sec:.2f}s"
+        f"path={path.stop_reason or 'TRACKED'} hold={path.age_sec:.2f}s"
         if path
         else "path=LOST",
         f"inference={inference_hz:.2f}Hz updates={inference_count} frame={frame_index}",
@@ -1134,7 +1139,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if decision.reason in (
                 "camera_stale", "inference_stale",
                 "camera_timestamp_invalid", "camera_conversion_error",
-            ):
+            ) or decision.reason.startswith("branch_"):
                 self.last_valid_yaw_rate = None
                 self.last_valid_forward_mps = None
             elif self.tasks.active is not None and decision.reason in (
@@ -1387,7 +1392,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "camera_topic": args.image_topic,
                 "path_mask_class": mask_class,
                 "path_surface": PATH_MASK_CLASSES[mask_class],
-                "path_tracked": path is not None,
+                "path_tracked": path is not None and path.stop_reason is None,
+                "branch_selection": path.branch_status if path else {
+                    "preference": local_config.branch_preference, "state": "idle",
+                    "reason": "no_path", "branch_detected": False,
+                },
                 "path_confidence": float(path.confidence) if path else 0.0,
                 "path_age_sec": float(path.age_sec) if path else None,
                 "path_duration_sec": local_config.path_duration_sec,
@@ -1702,6 +1711,27 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--branch-preference", choices=("none", "left", "right"),
+        default=_env("SWIN_L_BRANCH_PREFERENCE", "right"),
+        help="prefer a confirmed connected left/right fork; none preserves legacy extraction",
+    )
+    parser.add_argument(
+        "--branch-min-width-m", type=float,
+        default=_env_float("SWIN_L_BRANCH_MIN_WIDTH_M", 0.60),
+    )
+    parser.add_argument(
+        "--branch-margin-m", type=float,
+        default=_env_float("SWIN_L_BRANCH_MARGIN_M", 0.10),
+    )
+    parser.add_argument(
+        "--branch-confirm-frames", type=int,
+        default=_env_int("SWIN_L_BRANCH_CONFIRM_FRAMES", 2),
+    )
+    parser.add_argument(
+        "--branch-hold-sec", type=float,
+        default=_env_float("SWIN_L_BRANCH_HOLD_SEC", 1.50),
+    )
+    parser.add_argument(
         "--output-fps", type=float, default=_env_float("SWIN_L_OUTPUT_FPS", 20.0)
     )
     parser.add_argument(
@@ -1824,6 +1854,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 default=_env_float("LINE_TRACKING_UNSAFE_TIMEOUT_SEC", 2.0),
             )
     args = parser.parse_args(argv)
+    if args.mode != "mcap" or args.overlay_mode == "local-path":
+        try:
+            _local_path_config_from_args(args).validate()
+        except ValueError as error:
+            parser.error(str(error))
     if args.mode == "task-drive" and "LINE_TRACKING_BYPASS_PATH_STOPS" in ENV:
         parser.error(
             "LINE_TRACKING_BYPASS_PATH_STOPS was removed; remove it and use "

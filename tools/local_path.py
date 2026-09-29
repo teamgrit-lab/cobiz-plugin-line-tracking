@@ -9,14 +9,17 @@ base extrinsic calibration.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 import math
 import threading
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 import cv2
 import numpy as np
+
+if TYPE_CHECKING:
+    from branch_path import BranchObservation
 
 
 PATH_MASK_CLASSES = {0: "ROAD_OR_SIDEWALK", 1: "ROAD", 2: "SIDEWALK"}
@@ -76,6 +79,11 @@ class LocalPathConfig:
     path_hold_sec: float = 0.90
     path_duration_sec: float = 1.50
     unrestricted_path_mode: bool = False
+    branch_preference: str = "none"
+    branch_min_width_m: float = 0.60
+    branch_margin_m: float = 0.10
+    branch_confirm_frames: int = 2
+    branch_hold_sec: float = 1.50
 
     def validate(self) -> None:
         if self.near_distance_m <= 0.0:
@@ -98,7 +106,7 @@ class LocalPathConfig:
             raise ValueError("min_valid_ratio must be in (0, 1]")
         if self.min_sidewalk_width_m <= 0.0:
             raise ValueError("min_sidewalk_width_m must be positive")
-        if self.close_kernel_px < 0 or self.close_kernel_px % 2 == 0:
+        if self.close_kernel_px < 0 or (self.close_kernel_px > 0 and self.close_kernel_px % 2 == 0):
             raise ValueError("close_kernel_px must be zero or a positive odd number")
         if self.fit_degree not in (1, 2):
             raise ValueError("fit_degree must be 1 or 2")
@@ -110,6 +118,14 @@ class LocalPathConfig:
             raise ValueError("max_lateral_update_m must be positive")
         if self.path_hold_sec < 0.0 or self.path_duration_sec <= 0.0:
             raise ValueError("path hold/duration values are invalid")
+        if self.branch_preference not in ("none", "left", "right"):
+            raise ValueError("branch_preference must be none, left or right")
+        if not all(math.isfinite(value) and value > 0 for value in (
+            self.branch_min_width_m, self.branch_margin_m, self.branch_hold_sec,
+        )) or 2 * self.branch_margin_m >= self.branch_min_width_m:
+            raise ValueError("branch dimensions/hold must be positive; width must exceed twice the margin")
+        if type(self.branch_confirm_frames) is not int or self.branch_confirm_frames < 2:
+            raise ValueError("branch_confirm_frames must be an integer of at least 2")
 
 
 @dataclass(frozen=True)
@@ -121,6 +137,7 @@ class LocalPathEstimate:
     valid_ratio: float
     mean_sidewalk_width_m: float
     raw_points_xy: np.ndarray
+    branch_observation: BranchObservation | None = None
 
     @property
     def is_valid(self) -> bool:
@@ -135,6 +152,8 @@ class SmoothedPath:
     confidence: float
     age_sec: float
     source: str
+    stop_reason: str | None = None
+    branch_status: dict | None = None
 
 
 def normalized_polygon_pixels(
@@ -179,6 +198,8 @@ def ground_to_pixel(
     """Project ground-frame points back into camera pixels."""
 
     points = np.asarray(points_xy, dtype=np.float32).reshape(-1, 1, 2)
+    if not len(points):
+        return np.empty((0, 2), dtype=np.float32)
     inverse = np.linalg.inv(homography_pixel_to_ground)
     projected = cv2.perspectiveTransform(points, inverse)
     return projected.reshape(-1, 2)
@@ -358,13 +379,23 @@ def extract_sidewalk_centerline(
     mean_width = float(np.mean(widths)) if widths.size else 0.0
     width_support = min(1.0, mean_width / max(config.ground_half_width_m * 0.5, 1e-6))
     confidence = float(np.clip(0.75 * valid_ratio + 0.25 * width_support, 0.0, 1.0))
-    return LocalPathEstimate(
+    estimate = LocalPathEstimate(
         points_xy=points,
         confidence=confidence,
         valid_ratio=float(valid_ratio),
         mean_sidewalk_width_m=mean_width,
         raw_points_xy=raw_points,
     )
+    if config.branch_preference != "none":
+        from branch_path import observe_branches
+
+        # Closing may bridge separate patches. Branch connectivity must use the
+        # observed mask, while the legacy single-corridor fit stays unchanged.
+        unclosed, _, _ = _birdseye_sidewalk(mask, replace(config, close_kernel_px=0))
+        estimate = replace(estimate, branch_observation=observe_branches(
+            unclosed, x_values, y_values, config, float(raw_points[0, 1])
+        ))
+    return estimate
 
 
 class LocalPathSmoother:
@@ -377,17 +408,42 @@ class LocalPathSmoother:
         self._points: np.ndarray | None = None
         self._confidence = 0.0
         self._last_update: float | None = None
+        from branch_path import BranchSelector
+
+        self._branch_selector = BranchSelector(config)
+        self._stop_reason: str | None = None
+        self._constrained_branch = False
 
     def reset(self) -> None:
         with self._lock:
             self._points = None
             self._confidence = 0.0
             self._last_update = None
+            self._branch_selector.reset()
+            self._stop_reason = None
+            self._constrained_branch = False
 
     def update(
         self, estimate: LocalPathEstimate | None, timestamp_sec: float
     ) -> SmoothedPath | None:
         with self._lock:
+            choice = self._branch_selector.update(estimate, timestamp_sec)
+            estimate = choice.estimate
+            self._stop_reason = choice.stop_reason
+            self._constrained_branch = choice.constrained
+            if choice.stop_reason is not None:
+                # A distinct guard survives ordinary path-loss bypass and hold.
+                self._points = np.empty((0, 2), dtype=np.float32)
+                self._confidence = 0.0
+                self._last_update = timestamp_sec
+                return self._current_unlocked(timestamp_sec)
+            if choice.constrained and estimate is not None:
+                # An EMA across branches can cross the non-drivable fork gap.
+                # These points have already been smoothed inside one corridor.
+                self._points = estimate.points_xy.copy()
+                self._confidence = estimate.confidence
+                self._last_update = timestamp_sec
+                return self._current_unlocked(timestamp_sec)
             if self.config.unrestricted_path_mode:
                 if estimate is None or not estimate.is_valid:
                     self._points = None
@@ -400,7 +456,7 @@ class LocalPathSmoother:
                 return self._current_unlocked(timestamp_sec)
             if estimate is not None and estimate.is_valid:
                 target = np.asarray(estimate.points_xy, dtype=np.float32)
-                if self._points is None:
+                if self._points is None or self._points.shape != target.shape:
                     self._points = target.copy()
                     self._confidence = estimate.confidence
                 else:
@@ -432,17 +488,21 @@ class LocalPathSmoother:
         if self._points is None or self._last_update is None:
             return None
         age = max(timestamp_sec - self._last_update, 0.0)
-        if not self.config.unrestricted_path_mode and age > self.config.path_hold_sec:
+        if self._stop_reason is None and not self.config.unrestricted_path_mode and age > self.config.path_hold_sec:
             return None
         return SmoothedPath(
             points_xy=self._points.copy(),
             confidence=float(self._confidence),
             age_sec=float(age),
             source=(
+                "branch_guard" if self._stop_reason else
+                "selected_branch" if self._constrained_branch else
                 "raw_latest"
                 if self.config.unrestricted_path_mode
                 else "smoothed_hold"
                 if age > 0.02
                 else "smoothed_update"
             ),
+            stop_reason=self._stop_reason,
+            branch_status=self._branch_selector.metrics(),
         )

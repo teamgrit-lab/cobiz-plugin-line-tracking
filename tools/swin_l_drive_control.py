@@ -108,6 +108,8 @@ def decide_drive(
     """
 
     config.validate()
+    if path is not None and path.stop_reason is not None:
+        return DriveDecision.stop(path.stop_reason)
     for name, age, maximum in (
         ("camera", camera_age_sec, config.max_camera_age_sec),
         ("inference", inference_age_sec, config.max_inference_age_sec),

@@ -20,8 +20,8 @@ camera-rate MP4 overlay.  Swin-L is intentionally scheduled at a lower rate;
 the smoothed path is reused between inference frames.  With ``--overlay-mode
 sidewalk``, every camera frame is inferred without path processing.
 The ``ros2`` mode publishes only path and metrics topics. The
-task-driven mode publishes fail-closed, low-speed Unitree Sport Move requests
-only for an accepted Cobiz task with fresh perception inputs.
+task-driven mode retains the loaded model but only processes camera frames
+while a Cobiz task is accepted, and publishes direct Unitree Sport Move requests.
 Both live modes require a Jetson ROS/PyTorch environment.
 """
 
@@ -35,7 +35,7 @@ import signal
 import threading
 import time
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -342,6 +342,7 @@ class FramePacket:
     image_message: Any
     sequence: int
     source_header: Any = None
+    generation: int = 0
 
 
 def validate_camera_image(message: Any, bridge: Any) -> None:
@@ -373,19 +374,43 @@ def camera_image_rgb(message: Any, bridge: Any) -> np.ndarray:
 class LatestFrameQueue:
     """Depth-one queue: old camera frames are replaced, never accumulated."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, enabled: bool = True) -> None:
         self._condition = threading.Condition()
         self._item: FramePacket | None = None
         self._closed = False
+        self._enabled = enabled
+        self._generation = 0
+        self._resume_immediately = False
         self.overwritten = 0
+
+    @property
+    def enabled(self) -> bool:
+        with self._condition:
+            return self._enabled and not self._closed
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Start a fresh session or suspend it, invalidating pending/in-flight frames."""
+        with self._condition:
+            self._generation += 1
+            self._enabled = enabled
+            self._item = None
+            self._resume_immediately = enabled
+            self._condition.notify_all()
+
+    def is_current(self, packet: FramePacket) -> bool:
+        with self._condition:
+            return (
+                not self._closed and self._enabled
+                and packet.generation == self._generation
+            )
 
     def put(self, item: FramePacket) -> bool:
         with self._condition:
-            if self._closed:
+            if self._closed or not self._enabled:
                 return False
             if self._item is not None:
                 self.overwritten += 1
-            self._item = item
+            self._item = replace(item, generation=self._generation)
             self._condition.notify()
             return True
 
@@ -399,15 +424,16 @@ class LatestFrameQueue:
 
         with self._condition:
             while not self._closed:
-                if self._item is None:
+                if not self._enabled or self._item is None:
                     self._condition.wait()
                     continue
                 remaining = ready_at_sec - time.monotonic()
-                if remaining > 0.0:
+                if remaining > 0.0 and not self._resume_immediately:
                     self._condition.wait(timeout=remaining)
                     continue
                 item = self._item
                 self._item = None
+                self._resume_immediately = False
                 return item
             return None
 
@@ -792,8 +818,9 @@ def run_ros2(args: argparse.Namespace) -> int:
         mask_class: LocalPathSmoother(local_config)
         for mask_class in (PATH_MASK_CLASSES if task_mode else (args.path_mask_class,))
     }
-    latest = LatestFrameQueue()
-    state_lock = threading.Lock()
+    latest = LatestFrameQueue(enabled=not task_mode)
+    # SIGTERM can interrupt a ROS callback already reading this state.
+    state_lock = threading.RLock()
     state: dict[str, Any] = {
         "header": None,
         "sequence": 0,
@@ -946,8 +973,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 )
             if task_mode:
                 self.get_logger().info(
-                    "Cobiz LINE_TRACKING task listener ready; direct Sport request "
-                    "publisher is absent until a safe task is accepted"
+                    "Cobiz LINE_TRACKING task listener ready; model loaded, camera "
+                    "inference paused until task acceptance; Sport publisher absent"
                 )
 
         def publish_task_state(self, body: dict[str, Any]) -> None:
@@ -984,6 +1011,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.abort_active_task("stop_publish_error")
                 return
             body = self.tasks.finish("TASK_COMPLETED", reason)
+            self.set_task_inference(False)
             self.last_valid_yaw_rate = None
             self.last_valid_forward_mps = None
             if body is not None:
@@ -1018,7 +1046,38 @@ def run_ros2(args: argparse.Namespace) -> int:
             if decision.just_confirmed:
                 self.complete_apriltag_task(decision.confirmed_id)
 
+        def set_task_inference(self, enabled: bool) -> None:
+            # Use the same lock as result publication so a cancelled frame can
+            # never repopulate paths after this reset. Model/EMA reset belongs
+            # to the worker, which alone owns the segmenter during forward().
+            with state_lock:
+                latest.set_enabled(enabled)
+                # Replace path histories instead of locking an old smoother:
+                # SIGTERM may have interrupted its current() call on this thread.
+                for mask_class in smoothers:
+                    smoothers[mask_class] = LocalPathSmoother(local_config)
+                for key in (
+                    "last_image_at", "last_image_stamp_ns", "last_inference_at",
+                    "last_inference_stamp_ns", "camera_fault_reason",
+                ):
+                    state[key] = None
+                if enabled:
+                    state["header"] = None
+                state["camera_fault_min_sequence"] = state["sequence"]
+                state["path_unavailable_inferences"] = {
+                    mask_class: 0 for mask_class in smoothers
+                }
+                for key in (
+                    "performance_inference_seconds", "performance_processing_seconds",
+                    "performance_completion_times",
+                ):
+                    state[key].clear()
+            self.last_valid_yaw_rate = None
+            self.last_valid_forward_mps = None
+            self.path_unavailable_inferences = 0
+
         def release_task_control(self, reason: str) -> None:
+            self.set_task_inference(False)
             self.last_valid_yaw_rate = None
             self.last_valid_forward_mps = None
             if self.command_publisher is not None:
@@ -1104,13 +1163,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if body is None:
                 return
             if body["type"] == "TASK_STARTED":
-                self.last_valid_yaw_rate = None
-                self.last_valid_forward_mps = None
-                self.path_unavailable_inferences = 0
-                with state_lock:
-                    state["path_unavailable_inferences"] = {
-                        mask_class: 0 for mask_class in smoothers
-                    }
+                self.set_task_inference(False)
                 self.terminal_apriltag_status = None
                 self.apriltag_window_resolved_at = None
                 try:
@@ -1133,12 +1186,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                             self.tasks.active.selected_mask, now
                         )
                         self.publish_drive(ready)
+                    # Wake only after initial control publication succeeds.
+                    # Idle frames were discarded; wait for a new camera image.
+                    self.set_task_inference(True)
                 except Exception as error:  # noqa: BLE001 - never report start without control.
                     self.get_logger().error(
                         f"failed to acquire direct Sport control: {error}"
                     )
-                    # With startup hold disabled the first command can move.
-                    # A failed publication may still have reached the robot.
+                    # A failed publication may still have reached the robot;
+                    # attempt both stop commands before releasing the publisher.
                     self.release_task_control("control_publisher_error")
                     failed = self.tasks.finish(
                         "TASK_REJECTED", "control_publisher_error"
@@ -1158,6 +1214,9 @@ def run_ros2(args: argparse.Namespace) -> int:
         def publish_drive(self, decision: DriveDecision) -> None:
             if self.command_publisher is None:
                 return
+            if task_mode and not rclpy.ok():
+                # A callback interrupted by SIGTERM can resume after its stop.
+                decision = DriveDecision.stop("shutdown")
             assert Request is not None
             message = populate_move_request(
                 Request(),
@@ -1170,6 +1229,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.command_publisher.publish(message)
 
         def on_image(self, message: Any) -> None:
+            if task_mode and not latest.enabled:
+                return
             try:
                 source_stamp_ns = _stamp_ns(message.header) if task_mode else None
                 if task_mode and self.drive_config.stop_on_camera_timestamp_invalid and (
@@ -1192,15 +1253,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.publish_drive(DriveDecision.stop("camera_timestamp_invalid"))
                     return
                 validate_camera_image(message, self.bridge)
-                accepted = latest.put(
-                    FramePacket(
-                        image_message=message,
-                        sequence=int(state["sequence"]),
-                        source_header=message.header,
+                with state_lock:
+                    accepted = latest.put(
+                        FramePacket(
+                            image_message=message,
+                            sequence=int(state["sequence"]),
+                            source_header=message.header,
+                        )
                     )
-                )
-                if accepted:
-                    with state_lock:
+                    if accepted:
                         state["sequence"] += 1
                         state["last_image_at"] = time.monotonic()
                         if task_mode:
@@ -1208,16 +1269,20 @@ def run_ros2(args: argparse.Namespace) -> int:
             except Exception as error:  # noqa: BLE001 - safe debug boundary.
                 self.camera_conversion_failed(error)
 
-        def camera_conversion_failed(self, error: Exception) -> None:
+        def camera_conversion_failed(
+            self, error: Exception, *, packet: FramePacket | None = None
+        ) -> None:
             # Also used by the worker after deferred image conversion fails.
             if task_mode:
                 with state_lock:
+                    if packet is not None and not latest.is_current(packet):
+                        return
                     state["last_image_at"] = None
                     state["camera_fault_reason"] = "camera_conversion_error"
                     state["camera_fault_min_sequence"] = state["sequence"]
-                self.last_valid_yaw_rate = None
-                self.last_valid_forward_mps = None
-                self.publish_drive(DriveDecision.stop("camera_conversion_error"))
+                    self.last_valid_yaw_rate = None
+                    self.last_valid_forward_mps = None
+                    self.publish_drive(DriveDecision.stop("camera_conversion_error"))
             self.get_logger().error(f"camera conversion failed: {error}")
 
         def publish_state(self) -> None:
@@ -1292,6 +1357,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                                 terminal.get("reason", "task_complete")
                             )
                             self.release_task_control(drive_decision.reason)
+                            path = None
                             self.publish_task_state(terminal)
                         else:
                             self.publish_drive(drive_decision)
@@ -1327,6 +1393,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_duration_sec": local_config.path_duration_sec,
                 "unrestricted_path_mode": args.unrestricted_path_mode,
                 "inference_target_hz": args.inference_hz,
+                "inference_enabled": latest.enabled,
                 "near_distance_m": local_config.near_distance_m,
                 "far_distance_m": local_config.far_distance_m,
                 "queue_overwritten": latest.overwritten,
@@ -1407,11 +1474,18 @@ def run_ros2(args: argparse.Namespace) -> int:
         # Path acceptance settings must never disable the live GPU budget.
         inference_period = 1.0 / args.inference_hz
         next_allowed = time.monotonic()
+        previous_generation: int | None = None
         try:
             while rclpy.ok():
                 packet = latest.get_latest_at(next_allowed)
                 if packet is None:
                     break
+                with state_lock:
+                    if not latest.is_current(packet):
+                        continue
+                if task_mode and packet.generation != previous_generation:
+                    segmenter.reset()
+                    previous_generation = packet.generation
                 inference_started_at = time.monotonic()
                 # Limit start-to-start frequency, including conversion failures.
                 # Slow inference must not incur an extra fixed-period sleep.
@@ -1419,11 +1493,17 @@ def run_ros2(args: argparse.Namespace) -> int:
                 try:
                     frame_rgb = camera_image_rgb(packet.image_message, node.bridge)
                 except Exception as error:  # noqa: BLE001 - retain camera fault handling.
-                    node.camera_conversion_failed(error)
+                    node.camera_conversion_failed(error, packet=packet)
                     continue
+                with state_lock:
+                    if not latest.is_current(packet):
+                        continue
                 result: BestSoFarResult = segmenter.segment(
                     frame_rgb, color_order="rgb"
                 )
+                with state_lock:
+                    if not latest.is_current(packet):
+                        continue
                 # The path becomes usable when this result is available. Using
                 # the camera-arrival timestamp here can expire a path before it
                 # is ever published when inference or rate limiting is slow.
@@ -1432,6 +1512,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                     result.selected_mask, tuple(smoothers), local_config
                 )
                 with state_lock:
+                    if not latest.is_current(packet):
+                        continue
                     # Publish paths, loss streaks and source freshness as one
                     # completed inference. Timer ticks never advance a streak.
                     for mask_class, smoother in smoothers.items():

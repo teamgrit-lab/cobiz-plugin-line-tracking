@@ -149,6 +149,12 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
     class Queue:
         overwritten = 0
 
+        def __init__(self, *, enabled=True):
+            self.enabled = enabled
+
+        def is_current(self, _packet):
+            return self.enabled
+
         def get_latest_at(self, deadline):
             deadlines.append(deadline)
             if len(deadlines) == 1:

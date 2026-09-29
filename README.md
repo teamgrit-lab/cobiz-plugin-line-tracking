@@ -19,8 +19,22 @@ cancellation, image/model/publish errors, and handled shutdown still stop motion
 No accepted task means no motion command, and speed limits remain enforced.
 
 - There is no startup hold or automatic task timeout by default.
-- With a usable path, motion begins on task acceptance. Without one, the task
-  waits at zero until it obtains a target; no initial command is invented.
+- `actual-activate` loads the model once and keeps it in memory. With no
+  accepted task, its inference worker sleeps on a condition variable and the
+  image callback skips validation, decoding, and queueing. ROS task reception
+  and status publication remain active.
+- After acceptance and successful initial zero-command publication, inference
+  starts on the next received camera frame. `TASK_STARTED` can precede motion;
+  the robot waits at zero until this task has a usable path. Initial camera
+  arrival, inference, and path calculation add to the time before movement.
+- Completion, cancellation, and error/shutdown cleanup suspend inference and
+  clear pending frames, paths, and saved commands. An already-running inference
+  may finish, but its result is discarded. Model temporal history is reset by
+  the worker before the next task's first frame; model weights are not reloaded.
+- `debugging-swin-l` (`ros2` mode) still infers continuously without tasks.
+  `metrics.inference_enabled` reports whether the worker accepts frames;
+  `inference_count` counts published results over the process lifetime. Timing
+  samples are cleared between tasks so idle time does not distort throughput.
 - With path stops disabled, loss of a path holds the current task's last valid
   forward speed and yaw without a failure-count limit. Camera/inference stalls
   alone do not stop motion when their checks are disabled.
@@ -156,7 +170,10 @@ LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 유효 Path가 돌아오면 0으로 초기화한다. 제한 모드에서는 smoother가 보존하는 유효
 Path가 만료된 뒤부터 실패로 센다.
 
-`STARTUP_HOLD=false`이면 입력이 준비된 작업은 수락 직후 제어 명령을 보낸다.
+`STARTUP_HOLD=false`이면 별도의 2초 시작 대기는 없지만, 작업 수락 후 새 영상의
+첫 추론과 경로 계산이 끝나기 전까지는 0 속도로 대기한다. 모델은 메모리에 유지하며
+작업 전·종료 후에는 영상 추론을 수행하지 않는다. `STARTUP_UNREADY=true`이면
+이 첫 추론 대기 시간도 기존의 시작 제한 시간에 포함된다.
 `STARTUP_UNREADY`와 `UNSAFE_TIMEOUT`은 서로 독립적인 중단 조건이다.
 `TASK_TIMEOUT=false`이면 payload의 `duration_sec`에 도달해도 작업은 계속된다.
 명시적 취소, 처리 오류·프로세스 종료, 또는 별도로 켠 자동 종료 조건이 작업을 끝낸다.
@@ -494,11 +511,15 @@ Swin-L engine and manifest.
 
 ## Jetson inference stability
 
-Live inference always obeys `SWIN_L_INFERENCE_HZ`, including when
+While enabled, live inference obeys `SWIN_L_INFERENCE_HZ`, including when
 `SWIN_L_UNRESTRICTED_PATH_MODE=true`. The latest-frame queue holds one frame;
 it replaces pending frames while waiting for the next inference start. A late
 inference does not trigger a burst of catch-up jobs. Rate limiting reduces
 average load, but cannot guarantee latency or cap instantaneous GPU power.
+The first frame of a newly accepted task does not wait for the previous task's
+rate-limit deadline. Task-driven mode sleeps between tasks; debug mode does not.
+TensorRT's one-time startup validation with a synthetic input is retained;
+this is separate from camera inference and can briefly use the GPU at startup.
 
 The camera callback validates timestamps, encoding, dimensions, row stride and
 buffer length, then queues the original ROS image message. Only the selected

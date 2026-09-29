@@ -295,6 +295,12 @@ def test_r50_task_drive_accepts_720p_rgb_and_keeps_camera_stop(ros, monkeypatch)
         camera.height, camera.width, camera.step = 720, 1280, 1280 * 3
         camera.header.stamp = ros.stamp()
         node.on_image(camera)
+        node.publish_state()
+        assert ros.metrics()["inference_enabled"] is False
+        assert ros.metrics()["inference_count"] == 0
+        assert SPORT not in ros.published
+        ros.start()
+        node.on_image(camera)
         deadline = time.perf_counter() + 3.0
         while True:
             node.publish_state()
@@ -306,8 +312,6 @@ def test_r50_task_drive_accepts_720p_rgb_and_keeps_camera_stop(ros, monkeypatch)
         assert ros.metrics()["profile"] == debug.R50_PROFILE
         assert ros.metrics()["path_tracked"] is True
         assert ros.published["/line_tracking/swin_l/local_path"][-1].poses
-        assert SPORT not in ros.published
-        ros.start()
         ros.now = 2.1
         node.publish_state()
         assert ros.metrics()["drive_reason"] == "tracking"
@@ -350,8 +354,9 @@ def test_live_callback_queues_messages_and_only_latest_frame_is_decoded(ros, mon
     monkeypatch.setattr(debug, "camera_image_rgb", record_decode)
 
     def scenario(node):
+        ros.start()
         for index in range(12):
-            ros.now = 2.1 + index * 0.01
+            ros.now = 0.1 + index * 0.01
             message = Message()
             message.header.stamp = ros.stamp()
             node.on_image(message)
@@ -485,7 +490,7 @@ def test_disabled_path_stop_holds_last_yaw_and_never_reuses_it_in_another_task(r
         assert node.last_valid_yaw_rate is None
         ros.now = 9.1
         node.publish_state()
-        assert ros.task_state()["reason"] == "startup:waiting_for_path"
+        assert ros.task_state()["reason"] == "startup:camera_stale"
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
 
     ros.run(scenario)
@@ -1591,10 +1596,12 @@ def automatic_stops_off(ros, monkeypatch):
 
 def test_default_policy_starts_without_hold_and_ignores_tags_and_timeouts(ros, automatic_stops_off):
     def scenario(node):
-        ros.camera_ready()
         ros.detect(tag_id=7)
         ros.start(duration=3)
         assert ros.now == 0
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        ros.camera_ready()
+        node.publish_state()
         assert json.loads(ros.published[SPORT][-1].parameter)['x'] == 0.5
         for index, now in enumerate((0.1, 0.2, 1.1, 2.1, 10001), start=2):
             ros.now = now
@@ -1794,11 +1801,10 @@ def test_inference_error_stops_even_with_all_automatic_stops_disabled(
     assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
 
 
-def test_first_moving_command_failure_attempts_stop_before_rejecting(
+def test_initial_zero_command_failure_attempts_stop_before_rejecting(
     ros, automatic_stops_off, monkeypatch,
 ):
     def scenario(node):
-        ros.camera_ready()
         create_publisher = node.create_publisher
 
         def unreliable_publisher(message_type, topic, qos):
@@ -1812,7 +1818,7 @@ def test_first_moving_command_failure_attempts_stop_before_rejecting(
                     original_publish(message)
                     if not failed:
                         failed = True
-                        assert json.loads(message.parameter)['x'] > 0
+                        assert json.loads(message.parameter) == ZERO
                         raise RuntimeError('first command delivery uncertain')
 
                 publisher.publish = publish
@@ -1828,6 +1834,9 @@ def test_first_moving_command_failure_attempts_stop_before_rejecting(
         assert node.tasks.active is None
         assert node.command_publisher is None
         assert node.last_valid_yaw_rate is None
+        node.publish_state()
+        assert ros.metrics()["inference_enabled"] is False
+        assert ros.metrics()["inference_count"] == 0
         assert [message.header.identity.api_id for message in ros.published[SPORT]] == [1008, 1003, 1008]
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
 

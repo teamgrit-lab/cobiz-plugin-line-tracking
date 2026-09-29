@@ -61,6 +61,56 @@ def test_close_interrupts_rate_limit_wait_without_processing_pending_frame():
     assert selected == [None]
 
 
+def test_disabled_queue_waits_for_a_fresh_frame_and_resumes_without_old_deadline():
+    queue = LatestFrameQueue(enabled=False)
+    assert not queue.put(packet(1))
+    selected = []
+    consumer = threading.Thread(
+        target=lambda: selected.append(queue.get_latest_at(time.monotonic() + 60.0))
+    )
+    consumer.start()
+    try:
+        assert selected == []
+        queue.set_enabled(True)
+        assert queue.put(packet(2))
+        consumer.join(timeout=1.0)
+        assert not consumer.is_alive()
+        assert selected[0].sequence == 2
+        assert queue.is_current(selected[0])
+    finally:
+        queue.close()
+        consumer.join(timeout=1.0)
+
+
+def test_pause_discards_pending_frames_and_invalidates_previous_task_results():
+    queue = LatestFrameQueue()
+    queue.put(packet(1))
+    inflight = queue.get_latest_at(time.monotonic())
+    queue.put(packet(2))
+    queue.set_enabled(False)
+    assert not queue.is_current(inflight)
+    assert not queue.put(packet(3))
+    queue.set_enabled(True)
+    queue.put(packet(4))
+    fresh = queue.get_latest_at(time.monotonic())
+    assert fresh.sequence == 4
+    assert fresh.generation != inflight.generation
+    assert not queue.is_current(inflight)
+
+
+def test_close_wakes_worker_while_task_inference_is_disabled():
+    queue = LatestFrameQueue(enabled=False)
+    selected = []
+    consumer = threading.Thread(
+        target=lambda: selected.append(queue.get_latest_at(time.monotonic()))
+    )
+    consumer.start()
+    queue.close()
+    consumer.join(timeout=1.0)
+    assert not consumer.is_alive()
+    assert selected == [None]
+
+
 def test_native_rgb_preserves_channels_and_padded_rows_without_bridge_conversion():
     pixels = np.arange(18, dtype=np.uint8).reshape(2, 3, 3)
     padded = np.full((2, 12), 255, np.uint8)

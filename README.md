@@ -58,7 +58,7 @@ path on sensor/calibration failure by default and reports `vision_fallback=true`
   behavior: a candidate sends a hard stop, and the same ID in three distinct
   frames across a one-second window completes the task. An unconfirmed candidate
   can resume after that window, subject to enabled drive checks.
-- `teamgrit-slam` may supply tags on `/detections`. Missing or empty detection
+- The container runs `apriltag_ros` and supplies tags on `/detections`. Missing or empty detection
   streams only affect liveness metrics. With AprilTag stopping disabled, tags
   never stop or complete the task.
 - This service supplies no obstacle avoidance. Hardware protections and external
@@ -296,8 +296,8 @@ metrics의 `stop_checks`에 12개 설정을 표시한다. `path_yaw_held`,
 
 `cobiz-core` must register `LINE_TRACKING` in `actions.custom`, and its task
 lifecycle bridge must publish `/task_event`. On the Jetson, prepare the DDS
-directory and configure the camera and path geometry. Start `teamgrit-slam` if
-AprilTag-based completion is required.
+directory and configure the camera and path geometry. The container's AprilTag
+detector supplies `/detections`; `teamgrit-slam` is not required for tag completion.
 
 ```bash
 cp .env.example .env
@@ -385,20 +385,79 @@ SWIN_L_EVALUATION_WIDTH=640
 SWIN_L_EVALUATION_HEIGHT=360
 ```
 
+## 컨테이너 내부 AprilTag 검출
+
+`actual-activate`는 라인트래킹과 함께 Humble `apriltag_ros/apriltag_node`를 실행한다.
+LiDAR 활성화 여부나 LINE_TRACKING 작업 수락 여부와 관계없이 태그를 검출하며,
+처리한 영상마다 `/detections`에 `apriltag_msgs/msg/AprilTagDetectionArray`를 발행한다.
+태그가 없는 영상은 빈 배열이다. 카메라 입력이 없으면 검출 메시지도 나오지 않는다.
+
+```dotenv
+SWIN_L_APRILTAG_DETECTOR_ENABLED=true
+SWIN_L_APRILTAG_DETECTIONS_TOPIC=/detections
+# 비워 두면 SWIN_L_IMAGE_TOPIC 및 같은 해상도의 camera_info를 사용한다.
+SWIN_L_APRILTAG_IMAGE_TOPIC=
+SWIN_L_APRILTAG_CAMERA_INFO_TOPIC=
+SWIN_L_APRILTAG_FAMILY=36h11
+SWIN_L_APRILTAG_MAX_HAMMING=0
+SWIN_L_APRILTAG_MAX_HZ=10.0
+```
+
+카메라 릴레이는 최대 10Hz로 원본 영상을 전달하고, 같은 해상도의 최근 CameraInfo를
+각 영상의 헤더 시각에 맞춰 함께 발행한다. 입력 QoS는 BEST_EFFORT이며 검출 배열은
+RELIABLE이므로 기존 라인트래킹 구독자와 연결된다. 모든 `36h11` ID를 검출하며
+ID 목록으로 제한하지 않는다. 원본 광각 영상에서는 ID·2D 모서리만 사용하고,
+정확한 자세를 위한 보정 영상이 아니므로 pose/TF 발행은 끈다.
+
+`LINE_TRACKING_STOP_ON_APRILTAG=true`가 별도로 설정되어야 태그 확인 후 정지·작업 완료가
+활성화된다. 검출을 켜는 것만으로 이 정지 설정을 바꾸지 않는다. 외부 검출기를 사용하는
+경우 `SWIN_L_APRILTAG_DETECTOR_ENABLED=false`로 내부 검출기를 끈다.
+`debugging-swin-l`의 내부 검출기는 중복 발행을 피하려고 기본적으로 꺼져 있으며,
+단독 디버깅 시 `SWIN_L_DEBUG_APRILTAG_DETECTOR_ENABLED=true`로 켤 수 있다.
+
+카메라 릴레이·검출기·라인트래킹 중 하나가 종료되면 다른 프로세스도 종료한다.
+컨테이너 종료 신호는 라인트래킹의 기존 주행 종료 처리로 전달된다. 이 기능을 최초로
+적용하려면 이미지를 다시 빌드해야 한다. 이후 설정 변경은 컨테이너 재생성으로 적용한다.
+
 ## Livox LiDAR로 현재 지면 높이 제한
 
-영상의 차도/인도 클래스와 실제 높이를 함께 사용한다. IMU 가속도의 근처 샘플
-중앙값으로 중력 방향을 구하고, 차체 전방 0.5–2m·좌우 0.5m의 지면 후보에
-평면을 맞춘다. 각 점의 중력 방향 높이는 `h=(n·p+d)/(n·up)`이다.
-현재 평면보다 6cm 넘게 높은 셀과 8cm 넘게 낮은 셀을 제외한다. 차도 위에서
-시작하면 차도가, 인도 위에서 시작하면 인도가 높이 기준이 된다. `selected_mask`
-변경만으로 다른 높이의 면이 허용되지는 않는다.
+프로젝트 루트의 `.env`에서 `SWIN_L_LIDAR_HEIGHT_ENABLED`로 LiDAR 사용 여부를
+제어한다. `true`는 LiDAR 높이 필터를 사용하고, `false`는 LiDAR·IMU·CameraInfo
+입력 없이 영상 경로만 사용한다. 기본값은 `true`이며 두 실행 서비스
+(`actual-activate`, `debugging-swin-l`)에 동일하게 적용된다.
+
+```dotenv
+# true: LiDAR 사용 / false: 영상만 사용
+SWIN_L_LIDAR_HEIGHT_ENABLED=true
+```
+
+`.env` 변경은 실행 중 자동 반영되지 않는다. Docker 실행에서는 사용 중인 서비스를
+재생성해야 한다. 예: `docker compose up -d --no-build --force-recreate actual-activate`.
+직접 Python 실행 시에는 프로세스를 다시 시작한다. 명시한 CLI 옵션과 셸 환경변수는
+`.env`보다 우선한다.
+
+영상의 차도/인도 클래스와 실제 높이를 함께 사용한다. 기본 바닥은 **base_link
+원점에서 중력 방향으로 0.45m 아래인 평면**으로 고정한다. 차체가 수평이면
+`z=-0.45m`이고, IMU로 차체의 roll/pitch를 보정하므로 로봇이 기울어져도
+중력에 수직인 바닥 기준을 사용한다. 장착 변환으로 점군을 base_link에 옮긴 뒤,
+IMU로 구한 위쪽 단위벡터 `up`을 사용해 상대 높이 `h=p·up+0.45`를 계산한다.
+
+기준보다 6cm 넘게 높은 셀과 8cm 넘게 낮은 셀을 제외한다. 수평 차체에서 허용
+범위는 대략 `z=-0.53~-0.39m`이다. 점군의 다수를 차지하는 인도·장애물이나 이전
+추정 결과가 기준 높이를 바꾸지 않는다. 차도/인도 `selected_mask`는 영상 후보만
+선택하며, 고정 높이 조건과 실제 점군 지지 조건을 함께 통과해야 경로가 된다.
+
+기존 자동 평면 추정이 필요한 경우 `SWIN_L_LIDAR_GROUND_REFERENCE_MODE=fit`을
+선택한다. 이 모드에서만 전방 0.5–2m·좌우 0.5m 후보의 RANSAC 평면과 이전
+추정 대비 6cm 높이 변화 제한을 사용한다. 기본 `fixed` 모드는 평면 추정을 하지 않는다.
 
 ```dotenv
 SWIN_L_LIDAR_HEIGHT_ENABLED=true
 SWIN_L_LIDAR_TOPIC=/livox/lidar
 SWIN_L_LIDAR_IMU_TOPIC=/livox/imu
 SWIN_L_LIDAR_IMU_ACCEL_UNIT=auto
+SWIN_L_LIDAR_GROUND_REFERENCE_MODE=fixed
+SWIN_L_LIDAR_BASE_TO_GROUND_M=0.45
 SWIN_L_LIDAR_FRAME_ID=livox_frame
 SWIN_L_LIDAR_CALIBRATION_PROFILE=livox-a2-front
 SWIN_L_LIDAR_STARTUP_VISION_FALLBACK=true
@@ -497,7 +556,10 @@ PointCloud2 필드 오프셋과 26바이트 point_step을 읽고 유효하지 �
   구현하지 않는다. 이 기능은 지면 높이 제한이며 완전한 장애물 회피는 아니다.
 
 `/line_tracking/swin_l/metrics`의 `lidar_height`에 지면 법선·오프셋, 점 수,
-평면 지지율, 허용 셀 비율, 제한값과 높이 처리 상태를 기록한다. 센서 누락·지연,
+평면 지지율, 허용 셀 비율, 제한값과 높이 처리 상태를 기록한다.
+`ground_reference_mode=fixed`, `base_to_ground_m=0.45`로 고정 기준을 확인한다.
+고정 모드에서는 `plane_normal_base`가 IMU 위쪽 방향, `plane_offset_m`이 0.45이고,
+평면을 맞추지 않으므로 `plane_inlier_ratio`는 `null`이다. 센서 누락·지연,
 좌표 변환 누락, 지면 추정 실패(`lidar_waiting_for_*`, `lidar_transform_unavailable`,
 `lidar_stale`, `lidar_ground_*` 등)는 첫 유효 높이 결과 전에는 영상 경로로 처리한다.
 `SWIN_L_LIDAR_STARTUP_VISION_FALLBACK=false`이면 이 초기 영상 경로를 끈다.
@@ -677,8 +739,8 @@ docker compose --profile debug up -d --build debugging-swin-l
 docker compose logs -f debugging-swin-l
 ```
 
-The image build installs the vendored `unitree_api` and `apriltag_msgs`
-interfaces. Checkpoint preparation explicitly loads the pinned Hub
+The image build installs vendored `unitree_api` and the Humble `apriltag_ros`
+package with its matching `apriltag_msgs` interfaces. Checkpoint preparation explicitly loads the pinned Hub
 `model.safetensors`, records any checkpoint-initialized values, and saves one
 complete local safetensors file. The engine build then compiles a static
 `1x3x224x384` FP16 input into a `65x360x640` semantic-score output and writes a

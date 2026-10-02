@@ -122,4 +122,4 @@ if [[ "${SWIN_L_BACKEND:-pytorch}" == "tensorrt" \
   fi
 fi
 
-exec python3 /workspace/tools/swin_l_local_path_debug.py "${mode}"
+exec python3 /workspace/tools/line_tracking_container.py "${mode}"

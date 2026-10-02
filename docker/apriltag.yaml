@@ -1,0 +1,17 @@
+/**:
+  ros__parameters:
+    image_transport: raw
+    qos_profile: sensor_data
+    family: 36h11
+    max_hamming: 0
+    # Only tag IDs/2-D corners are needed for task completion. Do not publish
+    # poses/TF from raw A2 wide-angle images using pinhole intrinsics.
+    pose_estimation_method: ""
+    detector:
+      threads: 2
+      decimate: 1.0
+      blur: 0.0
+      refine: true
+      sharpening: 0.25
+      debug: false
+    # No tag.ids whitelist: detect every ID in the selected family.

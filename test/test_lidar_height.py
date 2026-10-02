@@ -54,7 +54,7 @@ def imu(stamp=100., frame="hesai_lidar"):
 
 
 def configs():
-    return (LidarHeightConfig(footprint_radius_m=.1), LocalPathConfig(
+    return (LidarHeightConfig(ground_reference_mode="fit",footprint_radius_m=.1), LocalPathConfig(
         near_distance_m=.6, far_distance_m=3., search_half_width_m=2.,
         bev_height_px=49, bev_width_px=81, branch_preference="center"))
 
@@ -64,6 +64,49 @@ def fusion(raise_side=0., floor=-.5, label=2):
     return fuse_height(np.full((360,640), label, np.uint8), cloud(points_scene(raise_side, floor)),
                        camera_info(), (2,2), np.eye(4), CAMERA_FROM_BASE,
                        np.array([0,0,1.]), cfg, path, (0,1,2))
+
+
+def test_fixed_ground_uses_45cm_below_base_without_fitting_or_reference_drift(monkeypatch):
+    import lidar_height
+    monkeypatch.setattr(lidar_height,"fit_ground",lambda *_:pytest.fail("fixed ground must not fit a plane"))
+    cfg,path=configs();cfg=replace(cfg,ground_reference_mode="fixed",base_to_ground_m=.45)
+    mask=np.full((360,640),2,np.uint8)
+    previous=(np.array([0,0,1.]),1.2)
+    actual=fuse_height(mask,cloud(points_scene(.15,floor=-.45)),camera_info(),(2,2),
+                       np.eye(4),CAMERA_FROM_BASE,np.array([0,0,1.]),cfg,path,(2,),previous)
+    assert actual.metrics["ground_reference_mode"]=="fixed"
+    assert actual.metrics["plane_offset_m"]==pytest.approx(.45)
+    assert actual.metrics["base_to_ground_m"]==pytest.approx(.45)
+    assert actual.metrics["plane_inlier_ratio"] is None
+    near=(actual.x_values>1)&(actual.x_values<2)
+    assert actual.gate[np.ix_(near,np.abs(actual.y_values)<.3)].all()
+    assert not actual.gate[:,actual.y_values>1.].any()
+    # A new, higher cloud must remain above the reference; it cannot become
+    # "ground" merely because it dominates the scan.
+    raised=fuse_height(mask,cloud(points_scene(floor=-.30)),camera_info(),(2,2),
+                       np.eye(4),CAMERA_FROM_BASE,np.array([0,0,1.]),cfg,path,(2,),
+                       (np.array([0,0,1.]),.45))
+    assert raised.metrics["plane_offset_m"]==pytest.approx(.45)
+    assert not raised.gate.any()
+
+
+def test_fixed_ground_tracks_gravity_with_a_pitched_body_and_tilted_livox_mount():
+    cfg,path=configs();cfg=replace(cfg,ground_reference_mode="fixed")
+    base,camera=a2_livox_front_transforms("livox_frame","base_link","camera_optical_frame")
+    angle=np.deg2rad(12.);up=np.array([np.sin(angle),0,np.cos(angle)])
+    points=points_scene();points[:,2]=(-.45-points[:,:2]@up[:2])/up[2]
+    raw=(points-base[:3,3])@base[:3,:3]
+    actual=fuse_height(np.full((360,640),2,np.uint8),cloud(raw),camera_info(),(2,2),
+                       base,camera,base[:3,:3].T@up,cfg,path,(2,))
+    np.testing.assert_allclose(actual.metrics["plane_normal_base"],up,atol=1e-8)
+    assert actual.metrics["plane_offset_m"]==pytest.approx(.45)
+    assert actual.gate.any()
+
+
+@pytest.mark.parametrize("offset", [0.,-.45,float("nan"),float("inf")])
+def test_fixed_ground_offset_must_be_positive_and_finite(offset):
+    with pytest.raises(ValueError,match="base_to_ground_m"):
+        LidarHeightConfig(base_to_ground_m=offset).validate()
 
 
 @pytest.mark.parametrize("endian", [False,True])

@@ -12,8 +12,8 @@ from test_lidar_height import CAMERA_FROM_BASE, camera_info, cloud, imu, points_
 
 
 @pytest.mark.parametrize("with_lidar", [False, True])
-@pytest.mark.parametrize("recover_at", [2, 5, None])
-def test_completed_inferences_recover_straight_stop_on_fifth_failure_and_reset(monkeypatch,with_lidar,recover_at):
+@pytest.mark.parametrize("recover_at", [2, 3, None])
+def test_completed_inferences_recover_straight_stop_on_third_failure_and_reset(monkeypatch,with_lidar,recover_at):
     ros=RosHarness(monkeypatch)
     monkeypatch.setitem(debug.ENV,"LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED","true")
     monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_HEIGHT_ENABLED",str(with_lidar))
@@ -60,7 +60,7 @@ def test_completed_inferences_recover_straight_stop_on_fifth_failure_and_reset(m
         saved=json.loads(ros.published[SPORT][-1].parameter)
         assert saved["x"]>0 and abs(saved["z"])>0
         assert ros.metrics()["path_recovery"]["failed_inferences"]==0
-        for count in range(1,6):
+        for count in range(1,4):
             detection.mask=good.copy() if count==recover_at else np.zeros_like(good)
             result=feed()
             if count==recover_at:
@@ -68,11 +68,11 @@ def test_completed_inferences_recover_straight_stop_on_fifth_failure_and_reset(m
                 assert result["path_recovery"]["failed_inferences"]==0
                 assert json.loads(ros.published[SPORT][-1].parameter)["z"]!=0
                 break
-            expected="tracking_path_recovery" if count<5 else "path_recovery_exhausted"
+            expected="tracking_path_recovery" if count<3 else "path_recovery_exhausted"
             assert result["drive_reason"]==expected
             assert result["path_recovery"]["failed_inferences"]==count
             command=json.loads(ros.published[SPORT][-1].parameter)
-            assert command==({"x":saved["x"],"y":0.,"z":0.} if count<5 else ZERO)
+            assert command==({"x":saved["x"],"y":0.,"z":0.} if count<3 else ZERO)
             assert not result["path_yaw_held"]
             for _ in range(10):node.publish_state()
             assert ros.metrics()["path_recovery"]["failed_inferences"]==count
@@ -82,7 +82,7 @@ def test_completed_inferences_recover_straight_stop_on_fifth_failure_and_reset(m
                 # A later sensor fault cannot revive motion after the visual
                 # recovery window has already exhausted its budget.
                 assert feed(bad_cloud=True)["drive_reason"]=="path_recovery_exhausted"
-                assert ros.metrics()["path_recovery"]["failed_inferences"]==5
+                assert ros.metrics()["path_recovery"]["failed_inferences"]==3
                 assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
             detection.mask=good.copy();assert feed()["path_tracked"]
         # Successful detection starts a new, independent recovery window.

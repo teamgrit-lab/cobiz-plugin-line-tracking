@@ -244,8 +244,8 @@ LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 속도를 유지하고 회전 명령을 0으로 바꾼다. 급회전 때문에 줄어든 속도도 유지하며,
 작업 시작부터 경로가 없었다면 `waiting_for_path`로 0 속도 대기한다.
 
-연속 검출 실패 1–4회 동안 직진하고, 5번째 추론에서 경로를 찾으면 바로 추종을
-재개한다. 5번째도 실패하면 `path_recovery_exhausted`로 정지한다. 이후 경로를
+연속 검출 실패 1–2회 동안 직진하고, 3번째 추론에서 경로를 찾으면 바로 추종을
+재개한다. 3번째도 실패하면 `path_recovery_exhausted`로 정지한다. 이후 경로를
 다시 찾으면 재개하며 실패 횟수를 0으로 초기화한다. 작업 시작·종료 시에도 저장
 명령과 횟수를 초기화한다. 횟수는 선택한 클래스의 **완료된 추론 결과**로만 세며,
 카메라 수신이나 10Hz 제어 발행은 추가 실패로 세지 않는다. 마지막 경로가 smoother에
@@ -256,9 +256,9 @@ LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 유지 동작에서는 `PATH_UNAVAILABLE=false`, `PATH_LOSS_LIMIT=true`이면 실패 1–4회는
 마지막 전진·회전 명령을 유지하고 5회째 정지한다. 둘 다 `false`이면 그 명령을 유지한다.
 `PATH_UNAVAILABLE=true`는 직진 복구보다 우선하여 즉시 정지한다.
-직진 복구의 5회 제한은 `PATH_LOSS_LIMIT=false`여도 적용된다. 실제 LiDAR 높이 차단,
+직진 복구의 3회 제한은 `PATH_LOSS_LIMIT=false`여도 적용된다. 실제 LiDAR 높이 차단,
 확정한 분기 경로의 소실, 명시적 취소 및 처리 오류의 정지 조건도 유지한다.
-센서 오류는 영상 검출 실패 횟수를 증가시키지 않으며, 이미 5회 실패로 정지한 뒤에는
+센서 오류는 영상 검출 실패 횟수를 증가시키지 않으며, 이미 3회 실패로 정지한 뒤에는
 센서 오류만으로 직진·회전을 재개하지 않는다.
 
 `STARTUP_HOLD=false`이면 별도의 2초 시작 대기는 없지만, 작업 수락 후 새 영상의
@@ -284,7 +284,7 @@ CLI는 `--stop-on-camera-stale`처럼 켜고 `--no-stop-on-camera-stale`처럼 �
 metrics의 `stop_checks`에 12개 설정을 표시한다. `path_yaw_held`,
 `path_unavailable_inferences`, `path_unavailable_limit`(`5`)로 명령 유지와 실패 횟수를
 확인한다. `path_recovery`에는 직진 복구 활성 여부(`active`), 영상 검출 실패 횟수
-(`failed_inferences`), 제한(`limit=5`), 복구 실패 정지 여부(`exhausted`)를 기록한다.
+(`failed_inferences`), 제한(`limit=3`), 복구 실패 정지 여부(`exhausted`)를 기록한다.
 `tracking_path_hold`이면 Path 메시지가 비어 있어도 저장 명령으로 움직일
 수 있다. 호환 진단 키 `stop_checks.path_available`은 즉시 정지가 켜졌거나,
 연속 실패 제한이 켜지고 5회에 도달했을 때만 `true`다.
@@ -504,7 +504,7 @@ PointCloud2 필드 오프셋과 26바이트 point_step을 읽고 유효하지 �
 첫 유효 높이 결과 이후의 센서 오류는 새 높이 Path를 사용할 수 없는 상태로 처리한다.
 이 경우 LiDAR 전용 정지를 추가하지 않으며, 기존 경로 소실 정지 설정이 꺼져 있으면
 `tracking_path_hold`로 현재 작업의 마지막 유효 전진 속도와 회전 명령을 유지한다.
-영상 자체에서 경로를 잃으면 `vision_path_unavailable`로 구분하여 위 5회 직진 복구를
+영상 자체에서 경로를 잃으면 `vision_path_unavailable`로 구분하여 위 3회 직진 복구를
 적용한다. 이전 유효 명령이 없으면 `waiting_for_path`로 0 속도를 유지한다.
 영상 후보는 있지만 유효한 높이 결과가 그 경로를 제외한
 `lidar_path_unavailable`/`lidar_path_blocked`는 계속 정지한다.

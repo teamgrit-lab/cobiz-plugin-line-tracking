@@ -54,14 +54,14 @@ def test_fresh_path_generates_capped_a2_command():
     assert 0.0 < command.yaw_rate <= 0.18
 
 
-@pytest.mark.parametrize("count", [1, 4, 5, 8])
-def test_semantic_loss_recovers_straight_at_saved_speed_with_a_five_inference_limit(count):
+@pytest.mark.parametrize("count", [1, 2, 3, 8])
+def test_semantic_loss_recovers_straight_at_saved_speed_with_a_three_inference_limit(count):
     command=decide_drive(None,camera_age_sec=.1,inference_age_sec=.1,
                          config=DriveConfig(),last_valid_forward_mps=.08,
                          last_valid_yaw_rate=-.18,path_recovery_inferences=count)
     assert command.yaw_rate==command.vy==0
-    assert command.vx==(.08 if count<5 else 0)
-    assert command.reason==("tracking_path_recovery" if count<5 else "path_recovery_exhausted")
+    assert command.vx==(.08 if count<3 else 0)
+    assert command.reason==("tracking_path_recovery" if count<3 else "path_recovery_exhausted")
 
 
 @pytest.mark.parametrize("speed", [None, 0., float("nan"), float("inf"), -.1])

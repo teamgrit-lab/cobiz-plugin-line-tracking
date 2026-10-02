@@ -87,6 +87,7 @@ from r50_checkpoint import validate_checkpoint
 from swin_l_drive_control import (
     DRIVE_STOP_CHECKS,
     MAX_PATH_UNAVAILABLE_INFERENCES,
+    MAX_PATH_RECOVERY_INFERENCES,
     DriveConfig,
     DriveDecision,
     decide_drive,
@@ -1268,7 +1269,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.path_recovery_inferences = state["path_recovery_inferences"][mask_class]
                 recovering = (self.drive_config.path_loss_recovery_enabled and (
                     state["semantic_path_missing"][mask_class]
-                    or self.path_recovery_inferences >= MAX_PATH_UNAVAILABLE_INFERENCES
+                    or self.path_recovery_inferences >= MAX_PATH_RECOVERY_INFERENCES
                 ))
                 if recovering and (path is None or path.stop_reason is None):
                     path = None
@@ -1720,7 +1721,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 metrics["path_recovery"] = {
                     "enabled": self.drive_config.path_loss_recovery_enabled,
                     "failed_inferences": self.path_recovery_inferences,
-                    "limit": MAX_PATH_UNAVAILABLE_INFERENCES,
+                    "limit": MAX_PATH_RECOVERY_INFERENCES,
                     "active": drive_decision.reason == "tracking_path_recovery",
                     "exhausted": drive_decision.reason == "path_recovery_exhausted",
                 }
@@ -2250,7 +2251,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument(
                 "--path-loss-recovery-enabled", action=argparse.BooleanOptionalAction,
                 default=_env_bool("LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", True),
-                help="drive straight during visual path loss; stop after five failed inferences",
+                help="drive straight during visual path loss; stop after three failed inferences",
             )
             live.add_argument(
                 "--max-target-heading-deg",

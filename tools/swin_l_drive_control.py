@@ -16,6 +16,7 @@ from local_path import SmoothedPath
 
 MAX_FORWARD_MPS_HARD_LIMIT = 1.00
 MAX_PATH_UNAVAILABLE_INFERENCES = 5
+MAX_PATH_RECOVERY_INFERENCES = 3
 DRIVE_STOP_CHECKS = (
     "camera_stale",
     "inference_stale",
@@ -108,7 +109,7 @@ def decide_drive(
     The caller counts consecutive unavailable results at inference completion;
     repeatedly evaluating the same result must not advance that count.
     Semantic path loss permits straight motion at the last valid forward speed
-    until the fifth consecutive failed inference. Sensor failures retain the
+    until the third consecutive failed inference. Sensor failures retain the
     existing command-hold policy when no semantic recovery count is supplied.
     """
 
@@ -138,7 +139,7 @@ def decide_drive(
             if (last_valid_forward_mps is None or not math.isfinite(last_valid_forward_mps)
                     or last_valid_forward_mps <= 0):
                 return DriveDecision.stop("waiting_for_path")
-            if path_recovery_inferences >= MAX_PATH_UNAVAILABLE_INFERENCES:
+            if path_recovery_inferences >= MAX_PATH_RECOVERY_INFERENCES:
                 return DriveDecision.stop("path_recovery_exhausted")
             return DriveDecision(min(last_valid_forward_mps, config.max_forward_mps),
                                  0.0, 0.0, "tracking_path_recovery")

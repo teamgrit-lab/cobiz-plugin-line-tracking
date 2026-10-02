@@ -18,10 +18,12 @@ from test_branch_path import X, Y, corridor, direction, fork
 
 
 @pytest.mark.parametrize("preference", ["left", "right"])
+@pytest.mark.parametrize("recovery_enabled", [False, True])
 def test_branch_guard_and_task_restart_with_ordinary_stops_disabled(
-    monkeypatch, preference
+    monkeypatch, preference, recovery_enabled
 ):
     ros = RosHarness(monkeypatch)
+    monkeypatch.setitem(debug.ENV,"LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED",str(recovery_enabled))
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(
             debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "false"

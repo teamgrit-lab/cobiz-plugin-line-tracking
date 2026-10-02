@@ -54,6 +54,49 @@ def test_fresh_path_generates_capped_a2_command():
     assert 0.0 < command.yaw_rate <= 0.18
 
 
+@pytest.mark.parametrize("count", [1, 4, 5, 8])
+def test_semantic_loss_recovers_straight_at_saved_speed_with_a_five_inference_limit(count):
+    command=decide_drive(None,camera_age_sec=.1,inference_age_sec=.1,
+                         config=DriveConfig(),last_valid_forward_mps=.08,
+                         last_valid_yaw_rate=-.18,path_recovery_inferences=count)
+    assert command.yaw_rate==command.vy==0
+    assert command.vx==(.08 if count<5 else 0)
+    assert command.reason==("tracking_path_recovery" if count<5 else "path_recovery_exhausted")
+
+
+@pytest.mark.parametrize("speed", [None, 0., float("nan"), float("inf"), -.1])
+def test_semantic_recovery_cannot_invent_initial_motion(speed):
+    command=decide_drive(None,camera_age_sec=.1,inference_age_sec=.1,
+                         config=DriveConfig(),last_valid_forward_mps=speed,
+                         path_recovery_inferences=1)
+    assert command==debug.DriveDecision.stop("waiting_for_path")
+
+
+@pytest.mark.parametrize("height_reason", ["lidar_path_unavailable", "lidar_path_blocked"])
+def test_semantic_recovery_cannot_bypass_a_height_exclusion(height_reason):
+    command=decide_drive(None,camera_age_sec=.1,inference_age_sec=.1,
+                         config=DriveConfig(),last_valid_forward_mps=.1,
+                         path_recovery_inferences=1,height_stop_reason=height_reason)
+    assert command==debug.DriveDecision.stop(height_reason)
+
+
+def test_straight_recovery_is_enabled_by_default_and_can_be_disabled(monkeypatch):
+    monkeypatch.delitem(debug.ENV,"LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED",raising=False)
+    assert debug._drive_config_from_args(debug.parse_args(["task-drive"])).path_loss_recovery_enabled
+    args=debug.parse_args(["task-drive","--no-path-loss-recovery-enabled"])
+    assert not debug._drive_config_from_args(args).path_loss_recovery_enabled
+
+
+def test_straight_recovery_preserves_branch_and_explicit_immediate_stop_guards():
+    path=replace(_path(),stop_reason="branch_selected_lost")
+    common=dict(camera_age_sec=.1,inference_age_sec=.1,last_valid_forward_mps=.1,
+                last_valid_yaw_rate=.1,path_recovery_inferences=1)
+    assert decide_drive(path,config=DriveConfig(),**common).reason=="branch_selected_lost"
+    assert decide_drive(None,config=DriveConfig(stop_on_path_unavailable=True),**common).reason=="path_unavailable"
+    legacy=decide_drive(None,config=DriveConfig(path_loss_recovery_enabled=False),**common)
+    assert legacy.reason=="tracking_path_hold" and legacy.yaw_rate==.1
+
+
 def test_task_drive_forward_speed_comes_from_environment(monkeypatch):
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_MAX_FORWARD_MPS", "0.35")
 

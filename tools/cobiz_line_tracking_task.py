@@ -11,7 +11,8 @@ from typing import Any, Mapping
 
 
 ACTION_NAME = "LINE_TRACKING"
-TRACKING_REASONS = frozenset(("tracking", "tracking_slow_turn", "tracking_path_hold"))
+TRACKING_REASONS = frozenset(("tracking", "tracking_slow_turn", "tracking_path_hold",
+                              "tracking_path_recovery"))
 TASK_STOP_CHECKS = (
     "startup_hold",
     "startup_unready",

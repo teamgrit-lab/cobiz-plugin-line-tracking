@@ -44,6 +44,7 @@ class DriveConfig:
     stop_on_path_loss_limit: bool = False
     stop_on_low_confidence: bool = False
     stop_on_lateral_target: bool = False
+    path_loss_recovery_enabled: bool = True
 
     def validate(self) -> None:
         positive = (
@@ -68,6 +69,8 @@ class DriveConfig:
             for name in DRIVE_STOP_CHECKS
         ):
             raise ValueError("stop-check switches must be boolean values")
+        if type(self.path_loss_recovery_enabled) is not bool:
+            raise ValueError("path_loss_recovery_enabled must be a boolean value")
 
     @property
     def max_lateral_target_m(self) -> float:
@@ -98,14 +101,15 @@ def decide_drive(
     last_valid_forward_mps: float | None = None,
     path_unavailable_inferences: int = 0,
     height_stop_reason: str | None = None,
+    path_recovery_inferences: int | None = None,
 ) -> DriveDecision:
     """Slow forward motion when heading demand exceeds available yaw rate.
 
     The caller counts consecutive unavailable results at inference completion;
     repeatedly evaluating the same result must not advance that count.
-    During an optional path-loss hold, retain the last forward speed as well as
-    yaw so losing a sharp-turn path cannot accelerate the robot. Older callers
-    that supply only a saved yaw retain their configured speed behavior.
+    Semantic path loss permits straight motion at the last valid forward speed
+    until the fifth consecutive failed inference. Sensor failures retain the
+    existing command-hold policy when no semantic recovery count is supplied.
     """
 
     config.validate()
@@ -128,6 +132,16 @@ def decide_drive(
         return DriveDecision.stop("path_low_confidence")
     lateral = path_target_lateral(path, config.lookahead_m)
     if lateral is None:
+        if config.path_loss_recovery_enabled and path_recovery_inferences is not None:
+            if config.stop_on_path_unavailable:
+                return DriveDecision.stop("path_unavailable")
+            if (last_valid_forward_mps is None or not math.isfinite(last_valid_forward_mps)
+                    or last_valid_forward_mps <= 0):
+                return DriveDecision.stop("waiting_for_path")
+            if path_recovery_inferences >= MAX_PATH_UNAVAILABLE_INFERENCES:
+                return DriveDecision.stop("path_recovery_exhausted")
+            return DriveDecision(min(last_valid_forward_mps, config.max_forward_mps),
+                                 0.0, 0.0, "tracking_path_recovery")
         if config.stop_on_path_unavailable or (
             config.stop_on_path_loss_limit
             and path_unavailable_inferences >= MAX_PATH_UNAVAILABLE_INFERENCES

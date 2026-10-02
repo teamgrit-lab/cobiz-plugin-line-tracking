@@ -62,6 +62,9 @@ class RosHarness:
         # These scenarios isolate the original camera/task/AprilTag contract.
         # The height-fusion suite enables and feeds the additional sensors.
         monkeypatch.setitem(debug.ENV, "SWIN_L_LIDAR_HEIGHT_ENABLED", "false")
+        # Legacy lifecycle/hold scenarios select the former policy explicitly;
+        # test_path_loss_recovery_ros covers the new default recovery policy.
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "false")
         # Existing lifecycle scenarios explicitly exercise all enabled guards.
         for check in debug.AUTOMATIC_STOP_CHECKS:
             monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "true")

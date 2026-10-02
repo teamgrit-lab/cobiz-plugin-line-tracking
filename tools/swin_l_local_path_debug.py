@@ -88,6 +88,7 @@ from r50_checkpoint import validate_checkpoint
 from swin_l_drive_control import (
     DRIVE_STOP_CHECKS,
     MAX_PATH_UNAVAILABLE_INFERENCES,
+    MAX_PATH_RECOVERY_INFERENCES,
     DriveConfig,
     DriveDecision,
     decide_drive,
@@ -313,6 +314,7 @@ def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
     config = DriveConfig(
         max_forward_mps=args.max_forward_mps,
         max_target_heading_deg=args.max_target_heading_deg,
+        path_loss_recovery_enabled=args.path_loss_recovery_enabled,
         **{
             "stop_on_" + name: getattr(args, "stop_on_" + name)
             for name in DRIVE_STOP_CHECKS
@@ -942,6 +944,8 @@ def run_ros2(args: argparse.Namespace) -> int:
         "sequence": 0,
         "inference_count": 0,
         "path_unavailable_inferences": {mask_class: 0 for mask_class in smoothers},
+        "path_recovery_inferences": {key: 0 for key in smoothers},
+        "semantic_path_missing": {key: False for key in smoothers},
         "performance_inference_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_processing_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_completion_times": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
@@ -1006,6 +1010,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.last_valid_yaw_rate: float | None = None
             self.last_valid_forward_mps: float | None = None
             self.path_unavailable_inferences = 0
+            self.path_recovery_inferences = 0
             self.stop_until = 0.0
             self.apriltags = (
                 AprilTagStopMonitor(
@@ -1211,6 +1216,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 state["path_unavailable_inferences"] = {
                     mask_class: 0 for mask_class in smoothers
                 }
+                state["path_recovery_inferences"] = {key: 0 for key in smoothers}
+                state["semantic_path_missing"] = {key: False for key in smoothers}
                 state["height_reasons"] = {key: "lidar_waiting_for_result" for key in smoothers}
                 state["height_fusion"] = None
                 state["height_cloud_arrival"] = None
@@ -1225,6 +1232,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.last_valid_yaw_rate = None
             self.last_valid_forward_mps = None
             self.path_unavailable_inferences = 0
+            self.path_recovery_inferences = 0
 
         def release_task_control(self, reason: str) -> None:
             self.set_task_inference(False)
@@ -1259,7 +1267,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                 last_inference_stamp_ns = state["last_inference_stamp_ns"]
                 path = smoothers[mask_class].current(now)
                 height_reason = self.height_reason(mask_class, now)
-                if height_reason is not None and not state["height_vision_fallback"]:
+                self.path_recovery_inferences = state["path_recovery_inferences"][mask_class]
+                recovering = (self.drive_config.path_loss_recovery_enabled and (
+                    state["semantic_path_missing"][mask_class]
+                    or self.path_recovery_inferences >= MAX_PATH_RECOVERY_INFERENCES
+                ))
+                if recovering and (path is None or path.stop_reason is None):
+                    path = None
+                if (height_reason is not None and not state["height_vision_fallback"]
+                        and (path is None or path.stop_reason is None)):
                     path = None
                 self.path_unavailable_inferences = state["path_unavailable_inferences"][
                     mask_class
@@ -1279,6 +1295,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 last_valid_yaw_rate=self.last_valid_yaw_rate,
                 last_valid_forward_mps=self.last_valid_forward_mps,
                 path_unavailable_inferences=self.path_unavailable_inferences,
+                path_recovery_inferences=self.path_recovery_inferences if recovering else None,
                 # Missing/stale sensors and failed ground fits withdraw the
                 # path, then use the existing path-loss/command-hold policy.
                 # A usable height result that excludes the path keeps its guard.
@@ -1702,6 +1719,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                 }
                 metrics["path_unavailable_inferences"] = self.path_unavailable_inferences
                 metrics["path_unavailable_limit"] = MAX_PATH_UNAVAILABLE_INFERENCES
+                metrics["path_recovery"] = {
+                    "enabled": self.drive_config.path_loss_recovery_enabled,
+                    "failed_inferences": self.path_recovery_inferences,
+                    "limit": MAX_PATH_RECOVERY_INFERENCES,
+                    "active": drive_decision.reason == "tracking_path_recovery",
+                    "exhausted": drive_decision.reason == "path_recovery_exhausted",
+                }
                 metrics["path_yaw_held"] = (
                     drive_decision is not None
                     and drive_decision.reason == "tracking_path_hold"
@@ -1836,6 +1860,20 @@ def run_ros2(args: argparse.Namespace) -> int:
                         result.selected_mask, tuple(smoothers), local_config, fusion
                     )
                 )
+                recovery_enabled = task_mode and node.drive_config.path_loss_recovery_enabled
+                # Separate missing visual paths from paths excluded by measured
+                # heights. A semantic candidate blocked by LiDAR keeps its stop.
+                semantic_estimates = (
+                    extract_path_estimates(result.selected_mask, tuple(smoothers), local_config)
+                    if recovery_enabled and fusion is not None
+                       and any(value is None for value in estimates.values()) else estimates
+                )
+                semantic_missing = {
+                    key: (recovery_enabled and estimates[key] is None
+                          and semantic_estimates[key] is None
+                          and (not args.lidar_height_enabled or fusion is not None or vision_fallback))
+                    for key in smoothers
+                }
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
@@ -1845,13 +1883,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                     # Publish paths, loss streaks and source freshness as one
                     # completed inference. Timer ticks never advance a streak.
                     for mask_class, smoother in smoothers.items():
-                        if args.lidar_height_enabled and estimates[mask_class] is None:
+                        if ((args.lidar_height_enabled or semantic_missing[mask_class])
+                                and estimates[mask_class] is None):
                             smoother.reset(preserve_branch=True)
                         smoother.update(estimates[mask_class], path_updated_at)
                         if args.lidar_height_enabled:
                             reason = height_reason
                             if reason is None and estimates[mask_class] is None:
-                                reason = "lidar_path_unavailable"
+                                reason = ("vision_path_unavailable" if semantic_missing[mask_class]
+                                          else "lidar_path_unavailable")
                             current = smoother.current(path_updated_at)
                             if (fusion is not None and reason is None and current is not None and current.stop_reason is None
                                     and not metric_path_supported(current.points_xy,
@@ -1886,6 +1926,16 @@ def run_ros2(args: argparse.Namespace) -> int:
                                     node.drive_config.lookahead_m,
                                 ) is not None
                             )
+                            current = smoother.current(inference_finished_at)
+                            missing = semantic_missing[mask_class] and (
+                                current is None or current.stop_reason is None
+                            )
+                            state["semantic_path_missing"][mask_class] = missing
+                            recovery_counts = state["path_recovery_inferences"]
+                            if available and current.stop_reason is None:
+                                recovery_counts[mask_class] = 0
+                            elif missing:
+                                recovery_counts[mask_class] += 1
                             counts[mask_class] = 0 if available else counts[mask_class] + 1
                     state["header"] = packet.source_header
                     completed_before = int(state["inference_count"])
@@ -2200,6 +2250,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 "--max-forward-mps",
                 type=float,
                 default=_env_float("LINE_TRACKING_MAX_FORWARD_MPS", 0.50),
+            )
+            live.add_argument(
+                "--path-loss-recovery-enabled", action=argparse.BooleanOptionalAction,
+                default=_env_bool("LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", True),
+                help="drive straight during visual path loss; stop after three failed inferences",
             )
             live.add_argument(
                 "--max-target-heading-deg",

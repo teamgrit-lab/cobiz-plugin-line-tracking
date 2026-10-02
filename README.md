@@ -11,8 +11,8 @@ no Sport Move request. The default path class is sidewalk
 combined (`0`) with
 `payload.selected_mask`.
 The path now also requires observed ground support from
-`/unitree/slam_lidar/points1`, synchronized IMU data, CameraInfo, and measured
-sensor transforms. Unitree height fusion is enabled by default.
+`/livox/lidar`, synchronized IMU data, CameraInfo, and measured
+sensor transforms. Livox height fusion is enabled by default.
 
 ## Runtime contract
 
@@ -79,8 +79,8 @@ limit.
 | Direction | Default | Type | Purpose |
 |---|---|---|---|
 | input | `/a2/front_camera/image_raw` | `sensor_msgs/Image` | A2 front camera |
-| input | `/unitree/slam_lidar/points1` | `sensor_msgs/PointCloud2` | observed ground height and support |
-| input | `/unitree/slam_lidar/imu1` | `sensor_msgs/Imu` | gravity direction in the LiDAR frame |
+| input | `/livox/lidar` | `sensor_msgs/PointCloud2` | observed ground height and support |
+| input | `/livox/imu` | `sensor_msgs/Imu` | gravity direction in the LiDAR frame |
 | input | camera namespace + `/camera_info` | `sensor_msgs/CameraInfo` | intrinsics for the selected raw image |
 | input | `/tf`, `/tf_static` | `tf2_msgs/TFMessage` | measured sensor transforms when matrices are blank |
 | input | `/detections` | `apriltag_msgs/msg/AprilTagDetectionArray` | optional tag detection and liveness metrics |
@@ -370,7 +370,7 @@ SWIN_L_EVALUATION_WIDTH=640
 SWIN_L_EVALUATION_HEIGHT=360
 ```
 
-## Unitree LiDAR로 현재 지면 높이 제한
+## Livox LiDAR로 현재 지면 높이 제한
 
 영상의 차도/인도 클래스와 실제 높이를 함께 사용한다. IMU 가속도의 근처 샘플
 중앙값으로 중력 방향을 구하고, 차체 전방 0.5–2m·좌우 0.5m의 지면 후보에
@@ -381,10 +381,11 @@ SWIN_L_EVALUATION_HEIGHT=360
 
 ```dotenv
 SWIN_L_LIDAR_HEIGHT_ENABLED=true
-SWIN_L_LIDAR_TOPIC=/unitree/slam_lidar/points1
-SWIN_L_LIDAR_IMU_TOPIC=/unitree/slam_lidar/imu1
-SWIN_L_LIDAR_FRAME_ID=hesai_lidar
-SWIN_L_LIDAR_CALIBRATION_PROFILE=unitree-a2-front
+SWIN_L_LIDAR_TOPIC=/livox/lidar
+SWIN_L_LIDAR_IMU_TOPIC=/livox/imu
+SWIN_L_LIDAR_IMU_ACCEL_UNIT=auto
+SWIN_L_LIDAR_FRAME_ID=livox_frame
+SWIN_L_LIDAR_CALIBRATION_PROFILE=tf
 SWIN_L_LIDAR_STARTUP_VISION_FALLBACK=true
 SWIN_L_CAMERA_INFO_TOPIC=
 SWIN_L_LIDAR_TO_BASE_TRANSFORM=
@@ -413,6 +414,8 @@ TF가 없으면 실측한 4×4 강체 변환을 **행 우선 16개 숫자, 쉼�
 `SWIN_L_BASE_TO_CAMERA_TRANSFORM`은 `p_camera=T·p_base` 방향이다.
 회전뿐 아니라 센서 간 위치 차이도 포함해야 한다.
 
+Unitree 입력을 따로 선택하려면 `/unitree/slam_lidar/points1`,
+`/unitree/slam_lidar/imu1`, `hesai_lidar`를 지정한다.
 A2의 전방 `points1` 센서에는 `SWIN_L_LIDAR_CALIBRATION_PROFILE=unitree-a2-front`를
 선택할 수 있다. 이 프로필은 Jetson의 기존
 `teamgrit-slam/slam/src/grit_slam/config/profiles/teamgrit_a2.yaml`에 있는
@@ -436,10 +439,18 @@ A2의 전방 `points1` 센서에는 `SWIN_L_LIDAR_CALIBRATION_PROFILE=unitree-a2
 따라서 모델 처리 시간을 센서 지연으로 중복 계산하지 않으며, 오래된 시각을
 재전송한 점군이나 실제 센서 수신 중단은 여전히 `lidar_stale`로 표시한다.
 
-제공된 Unitree 기록은 점군·IMU frame_id가 `hesai_lidar`이고 TF가 없다.
-센서 Z를 높이로 쓰거나 단위행렬을 가정하면 안 된다. 이 기록의 IMU 중력은
-주로 센서 Y축 방향이다. 구현은 실제 PointCloud2 필드 오프셋과 26바이트
-point_step을 읽고 유효하지 않은 점을 제거한다. 실제 장치의 frame_id가 다르면
+기본 입력은 `/livox/lidar`, `/livox/imu`, `livox_frame`이다. Livox SDK2의
+가속도는 g 단위이므로 `SWIN_L_LIDAR_IMU_ACCEL_UNIT=auto`가 g와 표준 ROS
+m/s²의 중력 크기를 구분한다. `g` 또는 `mps2`로 단위를 고정할 수도 있다.
+기울어진 센서에서는 IMU 중력 방향으로 높이를 계산하며 센서 Z를 직접 높이로
+사용하지 않는다. 중력만으로는 장착 위치와 yaw, 카메라 외부 보정을 알 수 없다.
+Jetson의 `teamgrit_a2_livox_360.yaml` 장착값은 미측정 임시값이므로 사용하지 않는다.
+Livox의 실측 TF 또는 위 두 보정행렬을 제공해야 높이 필터가 적용된다.
+보정값을 기다리는 동안에는 기존 초기 영상 경로 fallback을 사용하고
+`lidar_height.filter_applied=false`로 보고한다. Unitree 수직 장착 프로필을
+Livox에 적용하거나 단위행렬을 장착 보정값으로 가정하면 안 된다.
+제공된 default MCAP의 Livox 점군·IMU도 `livox_frame`이며, 구현은 실제
+PointCloud2 필드 오프셋과 26바이트 point_step을 읽고 유효하지 않은 점을 제거한다. 실제 장치의 frame_id가 다르면
 `SWIN_L_LIDAR_FRAME_ID`와 그에 맞는 변환을 함께 설정한다.
 변환한 중력의 위쪽 방향이 body Z축과 60° 넘게 다르면
 `lidar_gravity_axis_invalid`로 거절한다.
@@ -800,11 +811,11 @@ docker compose run --rm --no-deps test-swin-l local-path \
   --input /bags/input.mcap --device cuda --no-lidar-height-enabled
 ```
 
-Unitree 높이를 포함한 MCAP 검증에는 점군·IMU·CameraInfo를 포함하는 기록과 두
+Livox 높이를 포함한 MCAP 검증에는 점군·IMU·CameraInfo를 포함하는 기록과 두
 실측 변환이 필요하다. 오프라인 모드는 TF를 재생하지 않으므로 변환을 명시한다.
 
 ```bash
-uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/unitree.mcap \
+uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/livox.mcap \
   --image-topic /a2/front_camera/res_720p/image_raw \
   --lidar-to-base-transform "$MEASURED_BASE_FROM_LIDAR" \
   --base-to-camera-transform "$MEASURED_CAMERA_FROM_BASE" --open

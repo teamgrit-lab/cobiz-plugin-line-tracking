@@ -47,9 +47,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--image-topic", default=DEFAULT_IMAGE_TOPIC)
     parser.add_argument("--lidar-height-enabled", action=argparse.BooleanOptionalAction,
-                        default=None, help="default: use Unitree ground-height fusion")
+                        default=None, help="default: use Livox ground-height fusion")
     for name in ("lidar-topic", "lidar-imu-topic", "camera-info-topic", "lidar-frame-id",
-                 "lidar-to-base-transform", "base-to-camera-transform", "lidar-calibration-profile"):
+                 "lidar-to-base-transform", "base-to-camera-transform", "lidar-calibration-profile", "lidar-imu-accel-unit"):
         parser.add_argument("--" + name, default=None)
     parser.add_argument("--device", default="auto", help="auto, mps, cuda or cpu")
     parser.add_argument(
@@ -151,7 +151,7 @@ def build_debug_arguments(
         arguments.append("--lidar-height-enabled" if args.lidar_height_enabled
                          else "--no-lidar-height-enabled")
     for name in ("lidar_topic", "lidar_imu_topic", "camera_info_topic", "lidar_frame_id",
-                 "lidar_to_base_transform", "base_to_camera_transform", "lidar_calibration_profile"):
+                 "lidar_to_base_transform", "base_to_camera_transform", "lidar_calibration_profile", "lidar_imu_accel_unit"):
         value = getattr(args, name)
         if value is not None:
             arguments.extend(("--" + name.replace("_", "-"), value))

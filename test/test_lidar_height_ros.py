@@ -12,8 +12,64 @@ from test_apriltag_task_stop_ros import Message, RosHarness, SPORT, ZERO, debug
 from test_lidar_height import CAMERA_FROM_BASE, camera_info, cloud, imu, points_scene
 
 
+@pytest.fixture(autouse=True)
+def unitree_fixture_frame(monkeypatch):
+    # Existing geometry fixtures explicitly model the optional Unitree sensor.
+    monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_FRAME_ID","hesai_lidar")
+
+
 def matrix_argument(matrix):
     return ",".join(map(str, matrix.ravel()))
+
+
+def test_tilted_livox_g_imu_filters_steps_and_holds_command_on_sensor_loss(monkeypatch):
+    ros=RosHarness(monkeypatch)
+    monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_HEIGHT_ENABLED","true")
+    monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_FRAME_ID","livox_frame")
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV,"LINE_TRACKING_STOP_ON_"+check.upper(),"false")
+    # Synthetic measured mount: forward tilt, plus nonzero translation. This
+    # verifies projection/height logic; it is not a calibration for the robot.
+    angle=np.deg2rad(-34.)
+    base=np.eye(4);base[:3,:3]=[[np.cos(angle),0,np.sin(angle)],[0,1,0],
+                              [-np.sin(angle),0,np.cos(angle)]]
+    base[:3,3]=[.2,0,.1]
+    def scenario(node):
+        assert "/livox/lidar" in ros.subscriptions
+        assert "/livox/imu" in ros.subscriptions
+        ros.start();node.publish_state()
+        def feed(points):
+            ros.now+=.05;stamp=ros.clock_ns()/1e9
+            previous=ros.metrics()["inference_count"]
+            raw=(points-base[:3,3])@base[:3,:3]
+            msg=cloud(raw,stamp);msg.header.frame_id="livox_frame"
+            up=base[:3,:3].T@np.array([0,0,.99])
+            sample=imu(stamp,frame="livox_frame")
+            sample.linear_acceleration=NS(**dict(zip(("x","y","z"),up)))
+            node.on_camera_info(camera_info(stamp));node.on_lidar_imu(sample);node.on_lidar(msg)
+            image=Message();image.header.stamp=ros.stamp();node.on_image(image)
+            deadline=time.perf_counter()+5
+            while True:
+                node.publish_state()
+                if ros.metrics()["inference_count"]>previous:return ros.metrics()
+                assert time.perf_counter()<deadline,ros.errors
+                time.sleep(.001)
+        good=feed(points_scene())
+        assert good["lidar_height"]["filter_applied"] and good["path_tracked"]
+        np.testing.assert_allclose(good["lidar_height"]["up_base"],[0,0,1],atol=1e-6)
+        saved=json.loads(ros.published[SPORT][-1].parameter);assert saved["x"]>0
+        ros.now+=.6;node.publish_state()
+        assert ros.metrics()["lidar_height"]["reason"]=="lidar_stale"
+        assert json.loads(ros.published[SPORT][-1].parameter)==saved
+        blocked=points_scene();blocked[(blocked[:,0]>.9)&(blocked[:,0]<1.2),2]+=.15
+        result=feed(blocked)
+        assert result["lidar_height"]["reason"]=="lidar_path_unavailable"
+        assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
+    ros.run(scenario,"--lidar-to-base-transform",matrix_argument(base),
+            "--base-to-camera-transform",matrix_argument(CAMERA_FROM_BASE),
+            "--near-distance-m",".6","--far-distance-m","3",
+            "--search-half-width-m","2","--lidar-footprint-radius-m",".1",
+            "--bev-height-px","49","--bev-width-px","81","--branch-preference","center")
 
 
 def feed_height(ros,node,points=None,invalid_cloud=False):
@@ -335,9 +391,10 @@ def test_invalid_height_configuration_fails_before_startup(option,value):
     with pytest.raises(SystemExit): debug.parse_args(["ros2",option,value])
 
 
-@pytest.mark.parametrize("profile", ["tf", "unitree-a2-front"])
-def test_mcap_fuses_height_and_clears_path_at_a_reference_jump(tmp_path,monkeypatch,profile):
-    source=tmp_path/"unitree.mcap"; source.touch()
+@pytest.mark.parametrize("profile,frame,unit", [("tf","hesai_lidar","mps2"),
+    ("unitree-a2-front","hesai_lidar","mps2"),("tf","livox_frame","g")])
+def test_mcap_fuses_height_and_clears_path_at_a_reference_jump(tmp_path,monkeypatch,profile,frame,unit):
+    source=tmp_path/"sensor.mcap"; source.touch()
     frames=[]; paths=[]
     monkeypatch.setattr(debug,"_build_writer",lambda *_:NS(write=frames.append,release=lambda:None))
     monkeypatch.setattr(debug,"BestSoFarSegmenter",lambda _:NS(
@@ -350,15 +407,17 @@ def test_mcap_fuses_height_and_clears_path_at_a_reference_jump(tmp_path,monkeypa
         assert debug.DEFAULT_LIDAR_TOPIC in topics
         for stamp,floor in [(100.,-.5),(100.5,-.35)]:
             image=Message(); image.header.stamp=NS(sec=int(stamp),nanosec=round(stamp%1*1e9))
-            points=points_scene(floor=floor);sample=imu(stamp)
+            points=points_scene(floor=floor);sample=imu(stamp,frame=frame)
+            if unit=="g":sample.linear_acceleration.z=.99
             if profile=="unitree-a2-front":
                 image.header.frame_id="camera_optical_frame"
                 base,_=debug.a2_front_transforms("hesai_lidar","base_link","camera_optical_frame")
                 points=(points-base[:3,3])@base[:3,:3]
                 sample.linear_acceleration=NS(x=0.,y=9.81,z=0.)
+            scan=cloud(points,stamp);scan.header.frame_id=frame
             for topic,msg in [(debug.DEFAULT_IMU_TOPIC,sample),
                               ("/camera/camera_info",camera_info(stamp,frame=image.header.frame_id)),
-                              (debug.DEFAULT_LIDAR_TOPIC,cloud(points,stamp)),
+                              (debug.DEFAULT_LIDAR_TOPIC,scan),
                               ("/camera/image_raw",image)]:
                 yield NS(name="sensor_msgs/msg/Image"),NS(topic=topic),NS(log_time=round(stamp*1e9)),msg
     monkeypatch.setattr(debug,"_iter_mcap_events",events)
@@ -367,6 +426,7 @@ def test_mcap_fuses_height_and_clears_path_at_a_reference_jump(tmp_path,monkeypa
     args=debug.parse_args(["mcap","--input",str(source),"--output",str(tmp_path/"out.mp4"),
                           "--report",str(tmp_path/"out.json"),"--image-topic","/camera/image_raw",
                           "--lidar-height-enabled","--lidar-calibration-profile",profile,*matrices,
+                          "--lidar-frame-id",frame,"--lidar-imu-accel-unit",unit,
                           "--near-distance-m",".6","--far-distance-m","3",
                           "--search-half-width-m","2","--lidar-footprint-radius-m",".1",
                           "--bev-height-px","49","--bev-width-px","81","--branch-preference","center"])

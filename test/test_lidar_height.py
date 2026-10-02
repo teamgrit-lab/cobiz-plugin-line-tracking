@@ -239,6 +239,33 @@ def test_missing_imu_camera_calibration_and_invalid_gravity_are_unavailable():
     with pytest.raises(ValueError,match="gravity_invalid"): inputs.snapshot(camera,1.,cfg)
 
 
+@pytest.mark.parametrize("unit,magnitude", [("auto", .99), ("auto", 9.81),
+                                           ("g", .99), ("mps2", 9.81)])
+def test_livox_tilted_gravity_accepts_g_and_standard_ros_acceleration(unit, magnitude):
+    inputs=LidarInputs(); cfg=replace(configs()[0], imu_accel_unit=unit)
+    up=np.array([.01,.56,.83]); up/=np.linalg.norm(up)
+    sample=imu(frame="livox_frame")
+    sample.linear_acceleration=NS(**dict(zip(("x","y","z"),up*magnitude)))
+    msg=cloud(np.array([[1,0,-.5]])); msg.header.frame_id="livox_frame"
+    for kind,message in [("cloud",msg),("imu",sample),("info",camera_info())]:
+        inputs.add(kind,message,1.)
+    _,_,actual=inputs.snapshot(header(100.,"camera"),1.,cfg)
+    np.testing.assert_allclose(actual,up)
+
+
+@pytest.mark.parametrize("unit,magnitude", [("auto",0.),("auto",3.),("auto",20.),
+                                           ("auto",np.nan),("g",9.81),("mps2",1.)])
+def test_acceleration_units_do_not_accept_invalid_gravity(unit, magnitude):
+    inputs=LidarInputs(); cfg=replace(configs()[0], imu_accel_unit=unit)
+    sample=imu();sample.linear_acceleration.z=magnitude
+    for kind,message in [("cloud",cloud(np.array([[1,0,-.5]]))),
+                         ("imu",sample),("info",camera_info())]:inputs.add(kind,message,1.)
+    with pytest.raises(ValueError,match="gravity_invalid"):
+        inputs.snapshot(header(100.,"camera"),1.,cfg)
+    with pytest.raises(ValueError,match="imu_accel_unit"):
+        replace(cfg,imu_accel_unit="invalid").validate()
+
+
 @pytest.mark.parametrize("change", ["size", "intrinsics", "distortion"])
 def test_mismatched_or_unsupported_camera_calibration_is_rejected(change):
     info=camera_info(); cfg,path=configs()

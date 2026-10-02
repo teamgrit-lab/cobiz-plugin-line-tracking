@@ -1,4 +1,4 @@
-"""Unitree PointCloud2 ground-height fusion, independent of ROS imports.
+"""Livox/Unitree PointCloud2 ground-height fusion, independent of ROS imports.
 
 Transforms are measured rigid transforms, never inferred from frame names.
 The optional A2 front profile reuses the rig's existing mounting calibration.
@@ -17,8 +17,9 @@ import cv2
 import numpy as np
 
 
-DEFAULT_LIDAR_TOPIC = "/unitree/slam_lidar/points1"
-DEFAULT_IMU_TOPIC = "/unitree/slam_lidar/imu1"
+DEFAULT_LIDAR_TOPIC = "/livox/lidar"
+DEFAULT_IMU_TOPIC = "/livox/imu"
+IMU_ACCEL_UNITS = ("auto", "g", "mps2")
 CALIBRATION_PROFILES = ("tf", "unitree-a2-front")
 
 
@@ -47,6 +48,7 @@ def a2_front_transforms(lidar_frame: str, base_frame: str,
 
 @dataclass(frozen=True)
 class LidarHeightConfig:
+    imu_accel_unit: str = "auto"
     max_age_sec: float = 0.5
     max_sync_sec: float = 0.15
     max_result_age_sec: float = 1.0
@@ -65,6 +67,8 @@ class LidarHeightConfig:
     min_cell_points: int = 3
 
     def validate(self) -> None:
+        if self.imu_accel_unit not in IMU_ACCEL_UNITS:
+            raise ValueError("invalid lidar imu_accel_unit (auto, g or mps2 required)")
         for name in ("max_age_sec", "max_sync_sec", "max_result_age_sec", "grid_resolution_m", "max_up_m",
                      "max_down_m", "max_reference_change_m", "footprint_radius_m", "seed_near_m", "seed_far_m",
                      "seed_half_width_m", "plane_threshold_m"):
@@ -227,7 +231,12 @@ class LidarInputs:
         acc = np.median([[m.linear_acceleration.x, m.linear_acceleration.y,
                           m.linear_acceleration.z] for m in nearby], axis=0)
         norm = np.linalg.norm(acc)
-        if not np.isfinite(acc).all() or not 5 <= norm <= 15:
+        # Livox SDK2 emits acceleration in g; other ROS IMUs use m/s².
+        # Convert the plausibility check, then normalize direction. Auto only
+        # recognizes the two disjoint gravity bands, not arbitrary magnitudes.
+        scale = 9.80665 if (config.imu_accel_unit == "g" or
+                           (config.imu_accel_unit == "auto" and .5 <= norm <= 1.5)) else 1.
+        if not np.isfinite(acc).all() or not 5 <= norm * scale <= 15:
             raise ValueError("lidar_imu_gravity_invalid")
         matching = [s for s in infos if s.message.header.frame_id == camera_header.frame_id]
         if not matching:

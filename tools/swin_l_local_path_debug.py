@@ -64,7 +64,7 @@ from cobiz_line_tracking_task import (
 )
 from evaluate_mapillary_temporal import upscale_mask
 from lidar_height import (
-    CALIBRATION_PROFILES, DEFAULT_IMU_TOPIC, DEFAULT_LIDAR_TOPIC, HeightFusion,
+    CALIBRATION_PROFILES, DEFAULT_IMU_TOPIC, DEFAULT_LIDAR_TOPIC, IMU_ACCEL_UNITS, HeightFusion,
     LidarHeightConfig, LidarInputs, a2_front_transforms, fuse_height,
     parse_transform, transform_matrix,
 )
@@ -780,6 +780,8 @@ def run_mcap(args: argparse.Namespace) -> int:
             "path_mask_class": args.path_mask_class if with_local_path else None,
             "local_path": asdict(local_config) if local_config else None,
             "lidar_height": {"enabled": use_height, "topic": args.lidar_topic,
+                             "imu_topic": args.lidar_imu_topic,
+                             "imu_accel_unit": lidar_config.imu_accel_unit,
                              "reason": height_reason, **height_metrics},
         }
         args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -1641,6 +1643,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "lidar_height": {
                     **state["height_metrics"], "enabled": args.lidar_height_enabled,
                     "topic": args.lidar_topic,
+                    "imu_topic": args.lidar_imu_topic,
+                    "imu_accel_unit": lidar_config.imu_accel_unit,
                     "reason": self.height_reason(mask_class, now),
                     "filter_applied": path is not None and state["height_fusion"] is not None
                                       and self.height_reason(mask_class, now) is None,
@@ -1935,12 +1939,12 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--lidar-height-enabled", action=argparse.BooleanOptionalAction,
         default=_env_bool("SWIN_L_LIDAR_HEIGHT_ENABLED", True),
-        help="fuse Unitree ground height with semantic paths (enabled by default)",
+        help="fuse Livox/Unitree ground height with semantic paths (enabled by default)",
     )
     parser.add_argument("--lidar-topic", default=_env("SWIN_L_LIDAR_TOPIC", DEFAULT_LIDAR_TOPIC))
     parser.add_argument("--lidar-imu-topic", default=_env("SWIN_L_LIDAR_IMU_TOPIC", DEFAULT_IMU_TOPIC))
     parser.add_argument("--camera-info-topic", default=_env("SWIN_L_CAMERA_INFO_TOPIC", ""))
-    parser.add_argument("--lidar-frame-id", default=_env("SWIN_L_LIDAR_FRAME_ID", "hesai_lidar"))
+    parser.add_argument("--lidar-frame-id", default=_env("SWIN_L_LIDAR_FRAME_ID", "livox_frame"))
     parser.add_argument("--lidar-calibration-profile", choices=CALIBRATION_PROFILES,
                         default=_env("SWIN_L_LIDAR_CALIBRATION_PROFILE", "tf"),
                         help="tf/custom matrices or the calibrated A2 front vertical mount")
@@ -1953,6 +1957,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
                         help="16 row-major camera-optical-from-base_link values; blank uses TF")
     for name, value in asdict(LidarHeightConfig()).items():
         parser.add_argument("--lidar-" + name.replace("_", "-"), type=type(value),
+                            choices=IMU_ACCEL_UNITS if name == "imu_accel_unit" else None,
                             default=type(value)(_env("SWIN_L_LIDAR_" + name.upper(), str(value))))
     parser.add_argument(
         "--profile",

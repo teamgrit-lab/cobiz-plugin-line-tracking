@@ -146,22 +146,25 @@ def test_replay_arguments_forward_height_calibration_and_explicit_camera_only_mo
     source.touch()
     args = cli.parse_args(["local-path", "--input", str(source),
                            "--no-lidar-height-enabled", "--lidar-topic", "/custom/points",
-                           "--base-to-camera-transform", "measured-matrix"])
+                           "--base-to-camera-transform", "measured-matrix",
+                           "--lidar-imu-accel-unit", "g"])
     forwarded = cli.build_debug_arguments(
         args, tmp_path / "overlay.mp4", tmp_path / "report.json"
     )
     assert "--no-lidar-height-enabled" in forwarded
     assert forwarded[forwarded.index("--lidar-topic")+1] == "/custom/points"
     assert forwarded[forwarded.index("--base-to-camera-transform")+1] == "measured-matrix"
+    assert forwarded[forwarded.index("--lidar-imu-accel-unit")+1] == "g"
 
 
-def test_active_parsers_default_to_unitree_height_fusion():
+def test_active_parsers_default_to_livox_height_fusion():
     for argv in (["ros2"], ["task-drive"]):
         args = debug.parse_args(argv)
         assert args.lidar_height_enabled
-        assert args.lidar_topic == "/unitree/slam_lidar/points1"
-        assert args.lidar_imu_topic == "/unitree/slam_lidar/imu1"
-        assert args.lidar_frame_id == "hesai_lidar"
+        assert args.lidar_topic == "/livox/lidar"
+        assert args.lidar_imu_topic == "/livox/imu"
+        assert args.lidar_frame_id == "livox_frame"
+        assert args.lidar_imu_accel_unit == "auto"
         assert not hasattr(args, "clearance_topic")
 
 

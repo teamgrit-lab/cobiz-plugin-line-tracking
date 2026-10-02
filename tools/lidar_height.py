@@ -20,7 +20,46 @@ import numpy as np
 DEFAULT_LIDAR_TOPIC = "/livox/lidar"
 DEFAULT_IMU_TOPIC = "/livox/imu"
 IMU_ACCEL_UNITS = ("auto", "g", "mps2")
-CALIBRATION_PROFILES = ("tf", "unitree-a2-front")
+CALIBRATION_PROFILES = ("tf", "livox-a2-front", "unitree-a2-front")
+
+
+def _a2_camera_from_base() -> np.ndarray:
+    """A2 URDF front camera optical pose (target camera, source base)."""
+    return np.array([
+        [0., -1., 0., .0336], [0., 0., -1., .0525],
+        [1., 0., 0., -.3381], [0., 0., 0., 1.],
+    ])
+
+
+def a2_livox_front_transforms(lidar_frame: str, base_frame: str,
+                              camera_frame: str) -> tuple[np.ndarray, np.ndarray]:
+    """Measured MID360 + A2 front camera mount, including forward tilt.
+
+    Source: teamgrit-slam/slam/src/grit_slam/config/profiles/
+    teamgrit_a2_livox.yaml (grit-lio, file revision 58e074b2).
+    The 2026-08-31 checkerboard calibration is independently carried by
+    fast_livo/config/a2_livox.yaml. This is not the placeholder X5/360 rig.
+    """
+    if (lidar_frame != "livox_frame" or base_frame != "base_link"
+            or camera_frame != "camera_optical_frame"):
+        raise ValueError("lidar_calibration_frame_mismatch")
+    base_from_lidar = np.array([
+        [.012982560, -.856344989, .516240944, .373968],
+        [.999608476, -.001682648, -.027929602, .002419],
+        [.024786027, .516401421, .855987865, .190767],
+        [0., 0., 0., 1.],
+    ])
+    validate_transform(base_from_lidar)
+    return base_from_lidar, _a2_camera_from_base()
+
+
+def calibrated_transforms(profile: str, lidar_frame: str, base_frame: str,
+                          camera_frame: str) -> tuple[np.ndarray, np.ndarray]:
+    if profile == "livox-a2-front":
+        return a2_livox_front_transforms(lidar_frame, base_frame, camera_frame)
+    if profile == "unitree-a2-front":
+        return a2_front_transforms(lidar_frame, base_frame, camera_frame)
+    raise ValueError("lidar_calibration_profile_invalid")
 
 
 def a2_front_transforms(lidar_frame: str, base_frame: str,
@@ -39,11 +78,7 @@ def a2_front_transforms(lidar_frame: str, base_frame: str,
         [0., 0., 1., .33767], [1., 0., 0., 0.],
         [0., 1., 0., .08134], [0., 0., 0., 1.],
     ])
-    camera_from_base = np.array([
-        [0., -1., 0., .0336], [0., 0., -1., .0525],
-        [1., 0., 0., -.3381], [0., 0., 0., 1.],
-    ])
-    return base_from_lidar, camera_from_base
+    return base_from_lidar, _a2_camera_from_base()
 
 
 @dataclass(frozen=True)

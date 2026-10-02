@@ -276,7 +276,9 @@ def test_slow_gpu_inference_uses_the_scan_validated_before_inference(monkeypatch
             "--bev-height-px","49","--bev-width-px","81","--branch-preference","center")
 
 
-def test_a2_vertical_profile_does_not_require_a_tf_publisher(monkeypatch):
+@pytest.mark.parametrize("profile,frame,magnitude", [
+    ("unitree-a2-front","hesai_lidar",9.81),("livox-a2-front","livox_frame",.99)])
+def test_a2_mount_profiles_do_not_require_a_tf_publisher(monkeypatch,profile,frame,magnitude):
     ros=RosHarness(monkeypatch)
     monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_HEIGHT_ENABLED","true")
     for check in debug.AUTOMATIC_STOP_CHECKS:
@@ -284,11 +286,14 @@ def test_a2_vertical_profile_does_not_require_a_tf_publisher(monkeypatch):
     def scenario(node):
         assert node.tf_buffer is None
         ros.start(); ros.now+=.05; stamp=ros.clock_ns()/1e9
-        base,_=debug.a2_front_transforms("hesai_lidar","base_link","camera_optical_frame")
+        base,_=debug.calibrated_transforms(profile,frame,"base_link","camera_optical_frame")
         points=points_scene();raw=(points-base[:3,3])@base[:3,:3]
         node.on_camera_info(camera_info(stamp,frame="camera_optical_frame"))
-        sample=imu(stamp);sample.linear_acceleration=NS(x=0.,y=9.81,z=0.)
-        node.on_lidar_imu(sample);node.on_lidar(cloud(raw,stamp))
+        up=base[:3,:3].T@np.array([0,0,magnitude])
+        sample=imu(stamp,frame=frame)
+        sample.linear_acceleration=NS(**dict(zip(("x","y","z"),up)))
+        scan=cloud(raw,stamp);scan.header.frame_id=frame
+        node.on_lidar_imu(sample);node.on_lidar(scan)
         image=Message();image.header.stamp=ros.stamp();image.header.frame_id="camera_optical_frame"
         node.on_image(image)
         deadline=time.perf_counter()+5
@@ -299,10 +304,10 @@ def test_a2_vertical_profile_does_not_require_a_tf_publisher(monkeypatch):
             time.sleep(.001)
         result=ros.metrics()
         assert result["lidar_height"]["reason"] is None
-        assert result["lidar_height"]["calibration_source"]=="unitree-a2-front"
+        assert result["lidar_height"]["calibration_source"]==profile
         assert result["lidar_height"]["filter_applied"]
         assert result["path_tracked"]
-    ros.run(scenario,"--lidar-calibration-profile","unitree-a2-front",
+    ros.run(scenario,"--lidar-calibration-profile",profile,"--lidar-frame-id",frame,
             "--lidar-to-base-transform","","--base-to-camera-transform","",
             "--near-distance-m",".6","--far-distance-m","3",
             "--search-half-width-m","2","--lidar-footprint-radius-m",".1",
@@ -392,7 +397,8 @@ def test_invalid_height_configuration_fails_before_startup(option,value):
 
 
 @pytest.mark.parametrize("profile,frame,unit", [("tf","hesai_lidar","mps2"),
-    ("unitree-a2-front","hesai_lidar","mps2"),("tf","livox_frame","g")])
+    ("unitree-a2-front","hesai_lidar","mps2"),("tf","livox_frame","g"),
+    ("livox-a2-front","livox_frame","g")])
 def test_mcap_fuses_height_and_clears_path_at_a_reference_jump(tmp_path,monkeypatch,profile,frame,unit):
     source=tmp_path/"sensor.mcap"; source.touch()
     frames=[]; paths=[]
@@ -409,11 +415,12 @@ def test_mcap_fuses_height_and_clears_path_at_a_reference_jump(tmp_path,monkeypa
             image=Message(); image.header.stamp=NS(sec=int(stamp),nanosec=round(stamp%1*1e9))
             points=points_scene(floor=floor);sample=imu(stamp,frame=frame)
             if unit=="g":sample.linear_acceleration.z=.99
-            if profile=="unitree-a2-front":
+            if profile!="tf":
                 image.header.frame_id="camera_optical_frame"
-                base,_=debug.a2_front_transforms("hesai_lidar","base_link","camera_optical_frame")
+                base,_=debug.calibrated_transforms(profile,frame,"base_link","camera_optical_frame")
                 points=(points-base[:3,3])@base[:3,:3]
-                sample.linear_acceleration=NS(x=0.,y=9.81,z=0.)
+                up=base[:3,:3].T@np.array([0,0,.99 if unit=="g" else 9.81])
+                sample.linear_acceleration=NS(**dict(zip(("x","y","z"),up)))
             scan=cloud(points,stamp);scan.header.frame_id=frame
             for topic,msg in [(debug.DEFAULT_IMU_TOPIC,sample),
                               ("/camera/camera_info",camera_info(stamp,frame=image.header.frame_id)),

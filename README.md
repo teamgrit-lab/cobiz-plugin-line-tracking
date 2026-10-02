@@ -385,7 +385,7 @@ SWIN_L_LIDAR_TOPIC=/livox/lidar
 SWIN_L_LIDAR_IMU_TOPIC=/livox/imu
 SWIN_L_LIDAR_IMU_ACCEL_UNIT=auto
 SWIN_L_LIDAR_FRAME_ID=livox_frame
-SWIN_L_LIDAR_CALIBRATION_PROFILE=tf
+SWIN_L_LIDAR_CALIBRATION_PROFILE=livox-a2-front
 SWIN_L_LIDAR_STARTUP_VISION_FALLBACK=true
 SWIN_L_CAMERA_INFO_TOPIC=
 SWIN_L_LIDAR_TO_BASE_TRANSFORM=
@@ -406,13 +406,24 @@ CameraInfo 토픽을 비우면 이미지 네임스페이스를 따른다. 예를
 원본 이미지와 일치해야 한다. `plumb_bob` 또는 `rational_polynomial` 왜곡 모델의
 원본 영상 투영을 지원한다.
 
-변환값을 비우면 점군 시각의 `path_frame_id ← cloud.frame_id` TF와 영상 시각의
+`SWIN_L_LIDAR_CALIBRATION_PROFILE=tf`에서 변환값을 비우면 점군 시각의 `path_frame_id ← cloud.frame_id` TF와 영상 시각의
 `image.frame_id ← path_frame_id` TF를 조회한다. 기본 body 좌표는 `base_link`이며
 x 전방·y 좌측·z 위쪽, 카메라 좌표는 optical 좌표(x 우측·y 아래·z 전방)여야 한다.
 TF가 없으면 실측한 4×4 강체 변환을 **행 우선 16개 숫자, 쉼표 구분**으로 넣는다.
 `SWIN_L_LIDAR_TO_BASE_TRANSFORM`은 `p_base=T·p_lidar`,
 `SWIN_L_BASE_TO_CAMERA_TRANSFORM`은 `p_camera=T·p_base` 방향이다.
 회전뿐 아니라 센서 간 위치 차이도 포함해야 한다.
+
+A2 전방 카메라와 MID360 장착에는 `livox-a2-front`를 선택한다.
+이 프로필은 최신 `teamgrit-slam`의
+`slam/src/grit_slam/config/profiles/teamgrit_a2_livox.yaml`
+(파일 버전 `58e074b2`)의 2026-08-31 실측 보정값을 사용한다.
+LiDAR 위치는 `[0.373968, 0.002419, 0.190767] m`이며 센서 Z가 전방으로
+약 31° 기울어진 회전과 A2 전방 카메라의 URDF 변환을 함께 적용한다.
+`livox_frame`, `base_link`, `camera_optical_frame` 조합에만 사용하며,
+명시한 행렬이 프로필보다 우선한다. 다른 위치에 재장착하면 해당 장착의
+보정값을 사용해야 한다. Jetson에 SLAM 프로필 파일이나 TF가 없어도 이
+명시적 프로필의 보정값으로 실시간·MCAP 높이 필터를 계산할 수 있다.
 
 Unitree 입력을 따로 선택하려면 `/unitree/slam_lidar/points1`,
 `/unitree/slam_lidar/imu1`, `hesai_lidar`를 지정한다.
@@ -444,9 +455,10 @@ A2의 전방 `points1` 센서에는 `SWIN_L_LIDAR_CALIBRATION_PROFILE=unitree-a2
 m/s²의 중력 크기를 구분한다. `g` 또는 `mps2`로 단위를 고정할 수도 있다.
 기울어진 센서에서는 IMU 중력 방향으로 높이를 계산하며 센서 Z를 직접 높이로
 사용하지 않는다. 중력만으로는 장착 위치와 yaw, 카메라 외부 보정을 알 수 없다.
-Jetson의 `teamgrit_a2_livox_360.yaml` 장착값은 미측정 임시값이므로 사용하지 않는다.
-Livox의 실측 TF 또는 위 두 보정행렬을 제공해야 높이 필터가 적용된다.
-보정값을 기다리는 동안에는 기존 초기 영상 경로 fallback을 사용하고
+기존 `teamgrit_a2_livox_360.yaml`은 X5 360° 카메라용 미측정 임시값이므로
+사용하지 않는다. `teamgrit_livox.yaml`의 D435i 보정값도 A2 전방 카메라와
+다른 장착이다. 위 A2 프로필, 실측 TF 또는 두 보정행렬이 필요하다.
+보정값을 구할 수 없으면 기존 초기 영상 경로 fallback을 사용하고
 `lidar_height.filter_applied=false`로 보고한다. Unitree 수직 장착 프로필을
 Livox에 적용하거나 단위행렬을 장착 보정값으로 가정하면 안 된다.
 제공된 default MCAP의 Livox 점군·IMU도 `livox_frame`이며, 구현은 실제
@@ -812,13 +824,12 @@ docker compose run --rm --no-deps test-swin-l local-path \
 ```
 
 Livox 높이를 포함한 MCAP 검증에는 점군·IMU·CameraInfo를 포함하는 기록과 두
-실측 변환이 필요하다. 오프라인 모드는 TF를 재생하지 않으므로 변환을 명시한다.
+실측 변환 또는 `livox-a2-front` 프로필이 필요하다. 오프라인 모드는 TF를 재생하지 않는다.
 
 ```bash
 uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/livox.mcap \
   --image-topic /a2/front_camera/res_720p/image_raw \
-  --lidar-to-base-transform "$MEASURED_BASE_FROM_LIDAR" \
-  --base-to-camera-transform "$MEASURED_CAMERA_FROM_BASE" --open
+  --lidar-calibration-profile livox-a2-front --open
 ```
 
 `sidewalk` 영상 분할 모드에는 높이 입력이 필요하지 않다. LiDAR가 없는 기록의

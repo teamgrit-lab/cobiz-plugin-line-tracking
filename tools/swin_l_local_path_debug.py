@@ -65,7 +65,7 @@ from cobiz_line_tracking_task import (
 from evaluate_mapillary_temporal import upscale_mask
 from lidar_height import (
     CALIBRATION_PROFILES, DEFAULT_IMU_TOPIC, DEFAULT_LIDAR_TOPIC, IMU_ACCEL_UNITS, HeightFusion,
-    LidarHeightConfig, LidarInputs, a2_front_transforms, fuse_height,
+    LidarHeightConfig, LidarInputs, a2_front_transforms, calibrated_transforms, fuse_height,
     parse_transform, transform_matrix,
 )
 from local_path import (
@@ -675,8 +675,9 @@ def run_mcap(args: argparse.Namespace) -> int:
                             sample, info, up = lidar_inputs.snapshot(decoded.header, timestamp_sec, lidar_config)
                             if sample.message.header.frame_id != args.lidar_frame_id:
                                 raise ValueError("lidar_frame_mismatch")
-                            if args.lidar_calibration_profile == "unitree-a2-front":
-                                default_base, default_camera = a2_front_transforms(
+                            if args.lidar_calibration_profile != "tf":
+                                default_base, default_camera = calibrated_transforms(
+                                    args.lidar_calibration_profile,
                                     sample.message.header.frame_id, "base_link",
                                     decoded.header.frame_id,
                                 )
@@ -1455,14 +1456,15 @@ def run_ros2(args: argparse.Namespace) -> int:
             camera_from_base = self.camera_from_base
             calibration_source = "explicit_matrix"
             if ((base_from_lidar is None or camera_from_base is None)
-                    and args.lidar_calibration_profile == "unitree-a2-front"):
-                default_base, default_camera = a2_front_transforms(
+                    and args.lidar_calibration_profile != "tf"):
+                default_base, default_camera = calibrated_transforms(
+                    args.lidar_calibration_profile,
                     cloud.message.header.frame_id, args.path_frame_id,
                     packet.source_header.frame_id,
                 )
                 base_from_lidar = (base_from_lidar if base_from_lidar is not None else default_base)
                 camera_from_base = (camera_from_base if camera_from_base is not None else default_camera)
-                calibration_source = "unitree-a2-front"
+                calibration_source = args.lidar_calibration_profile
             if base_from_lidar is None or camera_from_base is None:
                 from rclpy.time import Time
 
@@ -1947,7 +1949,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lidar-frame-id", default=_env("SWIN_L_LIDAR_FRAME_ID", "livox_frame"))
     parser.add_argument("--lidar-calibration-profile", choices=CALIBRATION_PROFILES,
                         default=_env("SWIN_L_LIDAR_CALIBRATION_PROFILE", "tf"),
-                        help="tf/custom matrices or the calibrated A2 front vertical mount")
+                        help="tf/custom matrices or a measured Livox/Unitree A2 front mount")
     parser.add_argument("--lidar-startup-vision-fallback", action=argparse.BooleanOptionalAction,
                         default=_env_bool("SWIN_L_LIDAR_STARTUP_VISION_FALLBACK", True),
                         help="use an image path on sensor/calibration failure before the first height result")

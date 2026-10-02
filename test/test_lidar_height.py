@@ -8,7 +8,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from lidar_height import (LidarHeightConfig, LidarInputs, cloud_xyz, fit_ground,
-                          a2_front_transforms, fuse_height, parse_transform)
+                          a2_front_transforms, a2_livox_front_transforms,
+                          fuse_height, parse_transform)
 from local_path import LocalPathConfig, extract_metric_centerline, metric_path_supported
 
 
@@ -135,6 +136,31 @@ def test_a2_front_vertical_mount_preserves_ground_height_and_camera_projection()
                                expected.project_path(np.array([[1.,0.]])),atol=1e-6)
     with pytest.raises(ValueError,match="calibration_frame_mismatch"):
         a2_front_transforms("rear_lidar","base_link","camera_optical_frame")
+
+
+def test_measured_livox_mount_matches_slam_camera_calibration_and_excludes_steps():
+    base,camera=a2_livox_front_transforms("livox_frame","base_link","camera_optical_frame")
+    # Independent measured camera_T_livox, as recorded in the SLAM/FAST-LIVO configs.
+    np.testing.assert_allclose(camera@base,[
+        [-.999608476,.001682648,.027929602,.031180709],
+        [-.024786027,-.516401421,-.855987865,-.138267329],
+        [.012982560,-.856344989,.516240944,.035867595],
+        [0,0,0,1]],atol=5e-7)
+    assert np.rad2deg(np.arccos(base[2,2]))==pytest.approx(31.13,abs=.05)
+    points=points_scene(.15);points[:,:2]+=.007
+    raw=(points-base[:3,3])@base[:3,:3]
+    cfg,path=configs();up=base[:3,:3].T@np.array([0,0,1.])
+    actual=fuse_height(np.full((360,640),2,np.uint8),cloud(raw),camera_info(),
+                       (2,2),base,camera,up,cfg,path,(2,))
+    expected=fuse_height(np.full((360,640),2,np.uint8),cloud(points),camera_info(),
+                         (2,2),np.eye(4),camera,np.array([0,0,1.]),cfg,path,(2,))
+    np.testing.assert_array_equal(actual.gate,expected.gate)
+    assert actual.metrics["plane_offset_m"]==pytest.approx(.5,abs=.002)
+    for frame,body,cam in [("hesai_lidar","base_link","camera_optical_frame"),
+                           ("livox_frame","body","camera_optical_frame"),
+                           ("livox_frame","base_link","d435i_color_optical_frame")]:
+        with pytest.raises(ValueError,match="calibration_frame_mismatch"):
+            a2_livox_front_transforms(frame,body,cam)
 
 
 def test_live_cloud_freshness_does_not_reuse_the_old_inference_scan():

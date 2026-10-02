@@ -16,6 +16,8 @@ from test_lidar_height import CAMERA_FROM_BASE, camera_info, cloud, imu, points_
 def unitree_fixture_frame(monkeypatch):
     # Existing geometry fixtures explicitly model the optional Unitree sensor.
     monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_FRAME_ID","hesai_lidar")
+    # Existing scenarios exercise automatic fitting and its failure/hold guards.
+    monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_GROUND_REFERENCE_MODE","fit")
 
 
 def matrix_argument(matrix):
@@ -88,6 +90,43 @@ def feed_height(ros,node,points=None,invalid_cloud=False):
         if ros.metrics()["inference_count"]>=target: return ros.metrics()
         assert time.perf_counter()<deadline,ros.errors
         time.sleep(.001)
+
+
+def test_fixed_ground_works_without_ransac_support_and_preserves_sensor_fault_hold(monkeypatch):
+    ros=RosHarness(monkeypatch)
+    monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_HEIGHT_ENABLED","true")
+    monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_GROUND_REFERENCE_MODE","fixed")
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV,"LINE_TRACKING_STOP_ON_"+check.upper(),"false")
+    def scenario(node):
+        ros.start()
+        good=feed_height(ros,node,points_scene(floor=-.45))
+        assert good["path_tracked"] and good["lidar_height"]["filter_applied"],good
+        assert good["lidar_height"]["ground_reference_mode"]=="fixed"
+        assert good["lidar_height"]["plane_offset_m"]==pytest.approx(.45)
+        assert good["lidar_height"]["plane_inlier_ratio"] is None
+        saved=json.loads(ros.published[SPORT][-1].parameter)
+        assert saved["x"]>0
+        ros.now+=.6;node.publish_state()
+        assert ros.metrics()["drive_reason"]=="tracking_path_hold"
+        assert json.loads(ros.published[SPORT][-1].parameter)==saved
+        for points in (np.empty((0,3)),np.array([[10.,0.,-.45]])):
+            missing=feed_height(ros,node,points)
+            assert missing["lidar_height"]["reason"]=="lidar_points_unavailable"
+            assert missing["drive_reason"]=="tracking_path_hold"
+            assert json.loads(ros.published[SPORT][-1].parameter)==saved
+        # All observed points are now on a raised surface. They must not
+        # redefine the fixed floor or cause an automatic-fit reference jump.
+        raised=feed_height(ros,node,points_scene(floor=-.30))
+        assert raised["lidar_height"]["plane_offset_m"]==pytest.approx(.45)
+        assert raised["lidar_height"]["reason"]=="lidar_path_unavailable"
+        assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
+    ros.run(scenario,"--lidar-to-base-transform",matrix_argument(np.eye(4)),
+            "--base-to-camera-transform",matrix_argument(CAMERA_FROM_BASE),
+            "--lidar-min-plane-points","100000",
+            "--near-distance-m",".6","--far-distance-m","3",
+            "--search-half-width-m","2","--lidar-footprint-radius-m",".1",
+            "--bev-height-px","49","--bev-width-px","81","--branch-preference","center")
 
 
 def test_unitree_sensor_loss_and_ground_fit_failure_hold_motion_but_valid_height_exclusion_stops(monkeypatch):

@@ -20,6 +20,7 @@ import numpy as np
 DEFAULT_LIDAR_TOPIC = "/livox/lidar"
 DEFAULT_IMU_TOPIC = "/livox/imu"
 IMU_ACCEL_UNITS = ("auto", "g", "mps2")
+GROUND_REFERENCE_MODES = ("fixed", "fit")
 CALIBRATION_PROFILES = ("tf", "livox-a2-front", "unitree-a2-front")
 
 
@@ -84,6 +85,8 @@ def a2_front_transforms(lidar_frame: str, base_frame: str,
 @dataclass(frozen=True)
 class LidarHeightConfig:
     imu_accel_unit: str = "auto"
+    ground_reference_mode: str = "fixed"
+    base_to_ground_m: float = 0.45
     max_age_sec: float = 0.5
     max_sync_sec: float = 0.15
     max_result_age_sec: float = 1.0
@@ -104,9 +107,11 @@ class LidarHeightConfig:
     def validate(self) -> None:
         if self.imu_accel_unit not in IMU_ACCEL_UNITS:
             raise ValueError("invalid lidar imu_accel_unit (auto, g or mps2 required)")
+        if self.ground_reference_mode not in GROUND_REFERENCE_MODES:
+            raise ValueError("invalid lidar ground_reference_mode (fixed or fit required)")
         for name in ("max_age_sec", "max_sync_sec", "max_result_age_sec", "grid_resolution_m", "max_up_m",
                      "max_down_m", "max_reference_change_m", "footprint_radius_m", "seed_near_m", "seed_far_m",
-                     "seed_half_width_m", "plane_threshold_m"):
+                     "seed_half_width_m", "plane_threshold_m", "base_to_ground_m"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"lidar {name} must be finite and positive")
@@ -382,16 +387,22 @@ def fuse_height(selected_mask: np.ndarray, cloud: Any, camera_info: Any,
     up /= norm
     if up[2] < 0.5:
         raise ValueError("lidar_gravity_axis_invalid")
-    normal, offset, plane_ratio = fit_ground(points, up, config)
-    if reference_plane is not None:
-        old_normal, old_offset = reference_plane
-        previous_alignment = float(old_normal @ up)
-        if previous_alignment <= 1e-6:
-            raise ValueError("lidar_ground_reference_jump")
-        previous_height = old_offset / previous_alignment
-        current_height = offset / float(normal @ up)
-        if abs(current_height-previous_height) > config.max_reference_change_m:
-            raise ValueError("lidar_ground_reference_jump")
+    if config.ground_reference_mode == "fixed":
+        # The plane stays the configured distance below the base along gravity.
+        # IMU orientation keeps it level when the body pitches/rolls. Nearby
+        # raised surfaces and previous fitted planes cannot move this baseline.
+        normal, offset, plane_ratio = up.copy(), config.base_to_ground_m, None
+    else:
+        normal, offset, plane_ratio = fit_ground(points, up, config)
+        if reference_plane is not None:
+            old_normal, old_offset = reference_plane
+            previous_alignment = float(old_normal @ up)
+            if previous_alignment <= 1e-6:
+                raise ValueError("lidar_ground_reference_jump")
+            previous_height = old_offset / previous_alignment
+            current_height = offset / float(normal @ up)
+            if abs(current_height-previous_height) > config.max_reference_change_m:
+                raise ValueError("lidar_ground_reference_jump")
     height = (points @ normal + offset) / float(normal @ up)
     # Use only the local collision volume. Overhead returns are not curb height.
     span = path_config.search_half_width_m
@@ -403,6 +414,10 @@ def fuse_height(selected_mask: np.ndarray, cloud: Any, camera_info: Any,
     keep = ((points[:, 0] >= 0) & (points[:, 0] <= path_config.far_distance_m)
             & (np.abs(points[:, 1]) <= span) & (height > -1.0) & (height < 1.0))
     points, height = points[keep], height[keep]
+    if not len(points):
+        # No usable local returns are a sensor-data failure, not evidence that
+        # a measured surface violates the height limits.
+        raise ValueError("lidar_points_unavailable")
     gx = np.floor(points[:, 0]/res).astype(int)
     gy = np.floor((span-points[:, 1])/res).astype(int)
     cell_ids = gx*ny+gy
@@ -473,5 +488,7 @@ def fuse_height(selected_mask: np.ndarray, cloud: Any, camera_info: Any,
         point_count=len(raw), plane_normal_base=normal.tolist(), plane_offset_m=offset,
         plane_inlier_ratio=plane_ratio, allowed_bev_ratio=float(gate.mean()),
         max_up_m=config.max_up_m, max_down_m=config.max_down_m,
+        ground_reference_mode=config.ground_reference_mode,
+        base_to_ground_m=config.base_to_ground_m if config.ground_reference_mode == "fixed" else None,
         up_base=up.tolist(),
     ), camera_from_base, k, distortion)

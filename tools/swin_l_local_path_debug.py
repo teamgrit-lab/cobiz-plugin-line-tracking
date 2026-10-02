@@ -64,7 +64,8 @@ from cobiz_line_tracking_task import (
 )
 from evaluate_mapillary_temporal import upscale_mask
 from lidar_height import (
-    CALIBRATION_PROFILES, DEFAULT_IMU_TOPIC, DEFAULT_LIDAR_TOPIC, IMU_ACCEL_UNITS, HeightFusion,
+    CALIBRATION_PROFILES, DEFAULT_IMU_TOPIC, DEFAULT_LIDAR_TOPIC, IMU_ACCEL_UNITS,
+    GROUND_REFERENCE_MODES, HeightFusion,
     LidarHeightConfig, LidarInputs, a2_front_transforms, calibrated_transforms, fuse_height,
     parse_transform, transform_matrix,
 )
@@ -1941,7 +1942,8 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--lidar-height-enabled", action=argparse.BooleanOptionalAction,
         default=_env_bool("SWIN_L_LIDAR_HEIGHT_ENABLED", True),
-        help="fuse Livox/Unitree ground height with semantic paths (enabled by default)",
+        help="fuse Livox/Unitree ground height with semantic paths; "
+             "set SWIN_L_LIDAR_HEIGHT_ENABLED=true/false in .env (default: true)",
     )
     parser.add_argument("--lidar-topic", default=_env("SWIN_L_LIDAR_TOPIC", DEFAULT_LIDAR_TOPIC))
     parser.add_argument("--lidar-imu-topic", default=_env("SWIN_L_LIDAR_IMU_TOPIC", DEFAULT_IMU_TOPIC))
@@ -1959,7 +1961,8 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
                         help="16 row-major camera-optical-from-base_link values; blank uses TF")
     for name, value in asdict(LidarHeightConfig()).items():
         parser.add_argument("--lidar-" + name.replace("_", "-"), type=type(value),
-                            choices=IMU_ACCEL_UNITS if name == "imu_accel_unit" else None,
+                            choices={"imu_accel_unit": IMU_ACCEL_UNITS,
+                                     "ground_reference_mode": GROUND_REFERENCE_MODES}.get(name),
                             default=type(value)(_env("SWIN_L_LIDAR_" + name.upper(), str(value))))
     parser.add_argument(
         "--profile",

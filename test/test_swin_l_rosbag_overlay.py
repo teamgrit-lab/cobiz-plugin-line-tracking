@@ -147,7 +147,8 @@ def test_replay_arguments_forward_height_calibration_and_explicit_camera_only_mo
     args = cli.parse_args(["local-path", "--input", str(source),
                            "--no-lidar-height-enabled", "--lidar-topic", "/custom/points",
                            "--base-to-camera-transform", "measured-matrix",
-                           "--lidar-imu-accel-unit", "g"])
+                           "--lidar-imu-accel-unit", "g",
+                           "--lidar-ground-reference-mode", "fixed", "--lidar-base-to-ground-m", "0.45"])
     forwarded = cli.build_debug_arguments(
         args, tmp_path / "overlay.mp4", tmp_path / "report.json"
     )
@@ -155,6 +156,8 @@ def test_replay_arguments_forward_height_calibration_and_explicit_camera_only_mo
     assert forwarded[forwarded.index("--lidar-topic")+1] == "/custom/points"
     assert forwarded[forwarded.index("--base-to-camera-transform")+1] == "measured-matrix"
     assert forwarded[forwarded.index("--lidar-imu-accel-unit")+1] == "g"
+    assert forwarded[forwarded.index("--lidar-ground-reference-mode")+1] == "fixed"
+    assert forwarded[forwarded.index("--lidar-base-to-ground-m")+1] == "0.45"
 
 
 def test_active_parsers_default_to_livox_height_fusion():
@@ -165,6 +168,8 @@ def test_active_parsers_default_to_livox_height_fusion():
         assert args.lidar_imu_topic == "/livox/imu"
         assert args.lidar_frame_id == "livox_frame"
         assert args.lidar_imu_accel_unit == "auto"
+        assert args.lidar_ground_reference_mode == "fixed"
+        assert args.lidar_base_to_ground_m == .45
         assert not hasattr(args, "clearance_topic")
 
 

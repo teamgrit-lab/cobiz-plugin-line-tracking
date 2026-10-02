@@ -58,7 +58,7 @@ path on sensor/calibration failure by default and reports `vision_fallback=true`
   behavior: a candidate sends a hard stop, and the same ID in three distinct
   frames across a one-second window completes the task. An unconfirmed candidate
   can resume after that window, subject to enabled drive checks.
-- `teamgrit-slam` may supply tags on `/detections`. Missing or empty detection
+- The container runs `apriltag_ros` and supplies tags on `/detections`. Missing or empty detection
   streams only affect liveness metrics. With AprilTag stopping disabled, tags
   never stop or complete the task.
 - This service supplies no obstacle avoidance. Hardware protections and external
@@ -281,8 +281,8 @@ metrics의 `stop_checks`에 12개 설정을 표시한다. `path_yaw_held`,
 
 `cobiz-core` must register `LINE_TRACKING` in `actions.custom`, and its task
 lifecycle bridge must publish `/task_event`. On the Jetson, prepare the DDS
-directory and configure the camera and path geometry. Start `teamgrit-slam` if
-AprilTag-based completion is required.
+directory and configure the camera and path geometry. The container's AprilTag
+detector supplies `/detections`; `teamgrit-slam` is not required for tag completion.
 
 ```bash
 cp .env.example .env
@@ -369,6 +369,40 @@ SWIN_L_IMAGE_TOPIC=/a2/front_camera/image_raw
 SWIN_L_EVALUATION_WIDTH=640
 SWIN_L_EVALUATION_HEIGHT=360
 ```
+
+## 컨테이너 내부 AprilTag 검출
+
+`actual-activate`는 라인트래킹과 함께 Humble `apriltag_ros/apriltag_node`를 실행한다.
+LiDAR 활성화 여부나 LINE_TRACKING 작업 수락 여부와 관계없이 태그를 검출하며,
+처리한 영상마다 `/detections`에 `apriltag_msgs/msg/AprilTagDetectionArray`를 발행한다.
+태그가 없는 영상은 빈 배열이다. 카메라 입력이 없으면 검출 메시지도 나오지 않는다.
+
+```dotenv
+SWIN_L_APRILTAG_DETECTOR_ENABLED=true
+SWIN_L_APRILTAG_DETECTIONS_TOPIC=/detections
+# 비워 두면 SWIN_L_IMAGE_TOPIC 및 같은 해상도의 camera_info를 사용한다.
+SWIN_L_APRILTAG_IMAGE_TOPIC=
+SWIN_L_APRILTAG_CAMERA_INFO_TOPIC=
+SWIN_L_APRILTAG_FAMILY=36h11
+SWIN_L_APRILTAG_MAX_HAMMING=0
+SWIN_L_APRILTAG_MAX_HZ=10.0
+```
+
+카메라 릴레이는 최대 10Hz로 원본 영상을 전달하고, 같은 해상도의 최근 CameraInfo를
+각 영상의 헤더 시각에 맞춰 함께 발행한다. 입력 QoS는 BEST_EFFORT이며 검출 배열은
+RELIABLE이므로 기존 라인트래킹 구독자와 연결된다. 모든 `36h11` ID를 검출하며
+ID 목록으로 제한하지 않는다. 원본 광각 영상에서는 ID·2D 모서리만 사용하고,
+정확한 자세를 위한 보정 영상이 아니므로 pose/TF 발행은 끈다.
+
+`LINE_TRACKING_STOP_ON_APRILTAG=true`가 별도로 설정되어야 태그 확인 후 정지·작업 완료가
+활성화된다. 검출을 켜는 것만으로 이 정지 설정을 바꾸지 않는다. 외부 검출기를 사용하는
+경우 `SWIN_L_APRILTAG_DETECTOR_ENABLED=false`로 내부 검출기를 끈다.
+`debugging-swin-l`의 내부 검출기는 중복 발행을 피하려고 기본적으로 꺼져 있으며,
+단독 디버깅 시 `SWIN_L_DEBUG_APRILTAG_DETECTOR_ENABLED=true`로 켤 수 있다.
+
+카메라 릴레이·검출기·라인트래킹 중 하나가 종료되면 다른 프로세스도 종료한다.
+컨테이너 종료 신호는 라인트래킹의 기존 주행 종료 처리로 전달된다. 이 기능을 최초로
+적용하려면 이미지를 다시 빌드해야 한다. 이후 설정 변경은 컨테이너 재생성으로 적용한다.
 
 ## Livox LiDAR로 현재 지면 높이 제한
 
@@ -688,8 +722,8 @@ docker compose --profile debug up -d --build debugging-swin-l
 docker compose logs -f debugging-swin-l
 ```
 
-The image build installs the vendored `unitree_api` and `apriltag_msgs`
-interfaces. Checkpoint preparation explicitly loads the pinned Hub
+The image build installs vendored `unitree_api` and the Humble `apriltag_ros`
+package with its matching `apriltag_msgs` interfaces. Checkpoint preparation explicitly loads the pinned Hub
 `model.safetensors`, records any checkpoint-initialized values, and saves one
 complete local safetensors file. The engine build then compiles a static
 `1x3x224x384` FP16 input into a `65x360x640` semantic-score output and writes a

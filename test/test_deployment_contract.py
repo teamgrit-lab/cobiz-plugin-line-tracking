@@ -45,7 +45,7 @@ def test_swin_l_debug_service_is_explicit_and_has_no_drive_contract():
         == "${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}"
     )
     assert "SWIN_L_MODE:-ros2" in entrypoint
-    assert 'swin_l_local_path_debug.py "${mode}"' in entrypoint
+    assert 'line_tracking_container.py "${mode}"' in entrypoint
     assert "/workspace/tools" in entrypoint
 
 
@@ -122,14 +122,14 @@ def test_active_deployment_has_no_manual_arm_or_external_clearance_contract():
         assert forbidden not in active
 
 
-def test_unitree_height_inputs_and_limits_reach_both_live_services():
+def test_livox_height_inputs_and_limits_reach_both_live_services():
     import yaml
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("actual-activate", "debugging-swin-l"):
         env = services[name]["environment"]
         assert env["SWIN_L_LIDAR_HEIGHT_ENABLED"].endswith(":-true}")
-        assert env["SWIN_L_LIDAR_TOPIC"].endswith(":-/unitree/slam_lidar/points1}")
-        assert env["SWIN_L_LIDAR_IMU_TOPIC"].endswith(":-/unitree/slam_lidar/imu1}")
+        assert env["SWIN_L_LIDAR_TOPIC"].endswith(":-/livox/lidar}")
+        assert env["SWIN_L_LIDAR_IMU_TOPIC"].endswith(":-/livox/imu}")
         assert env["SWIN_L_LIDAR_TO_BASE_TRANSFORM"].endswith(":-}")
         assert env["SWIN_L_BASE_TO_CAMERA_TRANSFORM"].endswith(":-}")
     assert "ros-humble-tf2-ros" in (ROOT / "Dockerfile.swin-l-debug").read_text()
@@ -294,12 +294,8 @@ def test_jetson_image_builds_and_sources_unitree_request_interface():
         "std_msgs/Header header",
         "AprilTagDetection[] detections",
     ]
-    assert (
-        "COPY third_party/apriltag_msgs/apriltag_msgs /unitree_ws/src/apriltag_msgs"
-    ) in dockerfile
-    assert (
-        "colcon build --merge-install --packages-select unitree_api apriltag_msgs"
-    ) in dockerfile
+    assert "ros-humble-apriltag-ros" in dockerfile
+    assert "COPY third_party/apriltag_msgs" not in dockerfile
     assert "from apriltag_msgs.msg import AprilTagDetectionArray" in dockerfile
 
 

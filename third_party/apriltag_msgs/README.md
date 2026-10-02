@@ -1,5 +1,9 @@
 # Vendored `apriltag_msgs`
 
+This copy is retained for reference. The line-tracking image uses the Humble
+`apriltag_msgs` dependency of `ros-humble-apriltag-ros` so the detector and its
+Python subscriber share the same generated interfaces.
+
 This package is vendored from the upstream `teamgrit-slam` repository:
 
 - Repository: https://github.com/teamgrit-lab/teamgrit-slam.git

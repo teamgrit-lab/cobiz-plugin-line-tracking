@@ -28,6 +28,16 @@ x-lidar-height-environment: &lidar-height-environment
   SWIN_L_LIDAR_MAX_GROUND_TILT_DEG: ${SWIN_L_LIDAR_MAX_GROUND_TILT_DEG:-20.0}
   SWIN_L_LIDAR_MIN_CELL_POINTS: ${SWIN_L_LIDAR_MIN_CELL_POINTS:-3}
 
+x-apriltag-environment: &apriltag-environment
+  SWIN_L_APRILTAG_IMAGE_TOPIC: ${SWIN_L_APRILTAG_IMAGE_TOPIC:-}
+  SWIN_L_APRILTAG_CAMERA_INFO_TOPIC: ${SWIN_L_APRILTAG_CAMERA_INFO_TOPIC:-}
+  SWIN_L_APRILTAG_DETECTIONS_TOPIC: ${SWIN_L_APRILTAG_DETECTIONS_TOPIC:-/detections}
+  SWIN_L_APRILTAG_FAMILY: ${SWIN_L_APRILTAG_FAMILY:-36h11}
+  SWIN_L_APRILTAG_THREADS: ${SWIN_L_APRILTAG_THREADS:-2}
+  SWIN_L_APRILTAG_DECIMATE: ${SWIN_L_APRILTAG_DECIMATE:-1.0}
+  SWIN_L_APRILTAG_MAX_HAMMING: ${SWIN_L_APRILTAG_MAX_HAMMING:-0}
+  SWIN_L_APRILTAG_MAX_HZ: ${SWIN_L_APRILTAG_MAX_HZ:-10.0}
+
 services:
   # Safe inspection-only process. It publishes local path/debug topics and
   # never publishes /api/sport/request. Start it explicitly with:
@@ -54,7 +64,10 @@ services:
       - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
       - ${SWIN_L_ENGINE_DIR:-./models}:/models:ro
     environment:
-      <<: *lidar-height-environment
+      <<: [*lidar-height-environment, *apriltag-environment]
+      # Keep the inspection service from duplicating the driving detector.
+      SWIN_L_APRILTAG_DETECTOR_ENABLED: ${SWIN_L_DEBUG_APRILTAG_DETECTOR_ENABLED:-false}
+      SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/res_360p/image_raw}
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_PROFILE: ${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}
@@ -79,6 +92,7 @@ services:
       OPENBLAS_NUM_THREADS: ${OPENBLAS_NUM_THREADS:-2}
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
+    stop_grace_period: 15s
 
   # Swin-L or R50 task-driving mode. It listens for Cobiz custom actions and creates
   # direct Sport requests only for an accepted LINE_TRACKING task.
@@ -96,7 +110,8 @@ services:
       - ${SWIN_L_ENGINE_DIR:-./models}:/models
       - ${SWIN_L_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint
     environment:
-      <<: *lidar-height-environment
+      <<: [*lidar-height-environment, *apriltag-environment]
+      SWIN_L_APRILTAG_DETECTOR_ENABLED: ${SWIN_L_APRILTAG_DETECTOR_ENABLED:-true}
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_MODE: task-drive
@@ -145,7 +160,6 @@ services:
       SWIN_L_SMOOTHING_TIME_CONSTANT_SEC: ${SWIN_L_SMOOTHING_TIME_CONSTANT_SEC:-0.80}
       SWIN_L_MAX_LATERAL_UPDATE_M: ${SWIN_L_MAX_LATERAL_UPDATE_M:-0.35}
       SWIN_L_PATH_HOLD_SEC: ${SWIN_L_PATH_HOLD_SEC:-0.90}
-      SWIN_L_APRILTAG_DETECTIONS_TOPIC: ${SWIN_L_APRILTAG_DETECTIONS_TOPIC:-/detections}
       SWIN_L_APRILTAG_MAX_AGE_SEC: ${SWIN_L_APRILTAG_MAX_AGE_SEC:-1.0}
       SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC: ${SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC:-1.0}
       SWIN_L_APRILTAG_CONFIRM_MIN_HITS: ${SWIN_L_APRILTAG_CONFIRM_MIN_HITS:-3}
@@ -171,6 +185,7 @@ services:
       LINE_TRACKING_UNSAFE_TIMEOUT_SEC: ${LINE_TRACKING_UNSAFE_TIMEOUT_SEC:-2}
       HF_HOME: /root/.cache/huggingface
     restart: unless-stopped
+    stop_grace_period: 15s
 
   # Freeze checkpoint-initialized values into a reproducible local safetensors
   # artifact before compiling for the target Jetson.

@@ -1792,6 +1792,16 @@ def run_ros2(args: argparse.Namespace) -> int:
                 height_reason = None
                 if args.lidar_height_enabled:
                     try:
+                        if sensor_snapshot is None:
+                            # A matching large scan may arrive after the image
+                            # and during GPU work. Retry pairing without treating
+                            # our measured processing delay as a sensor outage.
+                            sensor_snapshot = lidar_inputs.snapshot_after_processing(
+                                packet.source_header, inference_started_at,
+                                time.monotonic(), lidar_config,
+                                node.get_clock().now().nanoseconds,
+                            )
+                            height_error = None
                         if height_error is not None:
                             raise ValueError(height_error)
                         fusion, cloud_arrival = node.build_height(

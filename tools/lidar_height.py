@@ -8,7 +8,7 @@ accumulation or per-point motion compensation.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 import threading
 from typing import Any
@@ -185,6 +185,23 @@ class LidarInputs:
         if sample is None:
             raise ValueError("lidar_waiting_for_cloud")
         self._check_freshness(sample, now, config, clock_ns)
+
+    def snapshot_after_processing(self, camera_header: Any, started_sec: float,
+                                  now: float, config: LidarHeightConfig,
+                                  clock_ns: int) -> tuple[SensorSample, Any, np.ndarray]:
+        """Recover a synchronized scan delivered while GPU inference ran.
+
+        Large point clouds can arrive later than the matching image. Only the
+        pipeline's measured latency is credited to that historical scan; the
+        live stream must still pass the original, strict freshness budget.
+        """
+        elapsed = now-started_sec
+        if not 0 <= elapsed <= config.max_result_age_sec:
+            raise ValueError("lidar_stale")
+        self.check_cloud_freshness(now, config, clock_ns)
+        return self.snapshot(camera_header, now,
+                             replace(config, max_age_sec=config.max_age_sec+elapsed),
+                             clock_ns)
 
     def snapshot(self, camera_header: Any, now: float, config: LidarHeightConfig,
                  clock_ns: int | None = None) -> tuple[SensorSample, Any, np.ndarray]:

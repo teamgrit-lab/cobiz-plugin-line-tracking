@@ -253,6 +253,43 @@ def test_a2_vertical_profile_does_not_require_a_tf_publisher(monkeypatch):
             "--bev-height-px","49","--bev-width-px","81","--branch-preference","center")
 
 
+def test_scan_delivered_during_gpu_inference_is_paired_without_false_stale(monkeypatch):
+    ros=RosHarness(monkeypatch)
+    monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_HEIGHT_ENABLED","true")
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV,"LINE_TRACKING_STOP_ON_"+check.upper(),"false")
+    def segment(_frame,**_kwargs):
+        stamp=ros.clock_ns()/1e9
+        ros.now+=.3
+        ros.node.on_camera_info(camera_info(stamp))
+        ros.node.on_lidar_imu(imu(stamp))
+        ros.node.on_lidar(cloud(points_scene(),stamp))
+        ros.now+=.5
+        ros.node.on_lidar(cloud(points_scene(),ros.clock_ns()/1e9))
+        return NS(selected_mask=np.full((360,640),2,np.uint8),inference_seconds=.8)
+    monkeypatch.setattr(debug,"BestSoFarSegmenter",lambda _:NS(
+        device=NS(type="cuda"),reset=lambda:None,segment=segment))
+    def scenario(node):
+        ros.start();ros.now+=.05
+        image=Message();image.header.stamp=ros.stamp();node.on_image(image)
+        deadline=time.perf_counter()+5
+        while True:
+            node.publish_state()
+            if ros.metrics()["inference_count"]:break
+            assert time.perf_counter()<deadline,ros.errors
+            time.sleep(.001)
+        result=ros.metrics()
+        assert result["lidar_height"]["reason"] is None
+        assert result["lidar_height"]["filter_applied"]
+        assert not result["lidar_height"]["vision_fallback"]
+        assert result["path_tracked"]
+    ros.run(scenario,"--lidar-to-base-transform",matrix_argument(np.eye(4)),
+            "--base-to-camera-transform",matrix_argument(CAMERA_FROM_BASE),
+            "--near-distance-m",".6","--far-distance-m","3",
+            "--search-half-width-m","2","--lidar-footprint-radius-m",".1",
+            "--bev-height-px","49","--bev-width-px","81","--branch-preference","center")
+
+
 def test_startup_sensor_failure_can_use_vision_but_a_valid_height_block_cannot(monkeypatch):
     ros=RosHarness(monkeypatch)
     monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_HEIGHT_ENABLED","true")

@@ -150,6 +150,23 @@ def test_live_cloud_freshness_does_not_reuse_the_old_inference_scan():
         inputs.check_cloud_freshness(2.,cfg,101_000_000_000)
 
 
+def test_delayed_scan_pairing_credits_only_processing_time_and_requires_a_live_stream():
+    inputs=LidarInputs();cfg,_=configs();target=header(100.,"camera")
+    inputs.add("cloud",cloud(np.array([[1,0,-.5]])),1.3)
+    inputs.add("imu",imu(),1.3)
+    inputs.add("info",camera_info(),1.3)
+    # The only scan is really stale at completion: processing credit alone
+    # cannot make an expired stream usable.
+    with pytest.raises(ValueError,match="stale"):
+        inputs.snapshot_after_processing(target,1.,1.8,cfg,100_800_000_000)
+    inputs.add("cloud",cloud(np.array([[1,0,-.5]]),100.8),1.8)
+    sample,_,_=inputs.snapshot_after_processing(target,1.,1.8,cfg,100_800_000_000)
+    assert sample.message.header.stamp.sec==100
+    assert sample.message.header.stamp.nanosec==0
+    with pytest.raises(ValueError,match="stale"):
+        inputs.snapshot_after_processing(target,1.,2.2,cfg,101_200_000_000)
+
+
 def test_incorrect_axis_calibration_cannot_treat_sensor_y_as_body_up():
     cfg,path=configs()
     with pytest.raises(ValueError, match="gravity_axis_invalid"):

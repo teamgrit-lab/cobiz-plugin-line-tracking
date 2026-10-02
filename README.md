@@ -520,6 +520,11 @@ never falls back automatically in `task-drive` mode. Set
 
 ## MaskFormer R50 on Jetson
 
+For partial-label fine-tuning and deploying a local R50 checkpoint, follow
+[R50 fine-tuning and Jetson deployment](docs/r50-finetuning.md). The separate
+`r50-finetuned-fp16-640x360` profile verifies an exported checkpoint manifest;
+the original R50 profile below remains available for rollback.
+
 Both `actual-activate` and `debugging-swin-l` read `SWIN_L_PROFILE` from `.env`.
 To select the existing R50 runtime, set both the profile and backend:
 

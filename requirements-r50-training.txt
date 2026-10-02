@@ -1,0 +1,8 @@
+# Install a platform-appropriate torch/torchvision pair first; see docs/r50-finetuning.md.
+# Do not use desktop CUDA wheels to replace the Jetson container's PyTorch.
+transformers==5.16.1
+numpy>=1.26,<2
+opencv-python-headless>=4.8,<4.12
+pillow>=10,<14
+scipy>=1.10,<2
+safetensors>=0.4

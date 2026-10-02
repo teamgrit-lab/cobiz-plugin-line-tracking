@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Reject an incompatible R50 backend before ROS setup or Swin-L engine builds.
-if [[ "${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}" == "r50-fp16-640x360" \
+if [[ ( "${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}" == "r50-fp16-640x360" \
+  || "${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}" == "r50-finetuned-fp16-640x360" ) \
   && "${SWIN_L_BACKEND:-pytorch}" != "pytorch" ]]; then
   echo "[line-tracking] R50 requires SWIN_L_BACKEND=pytorch" >&2
   exit 1

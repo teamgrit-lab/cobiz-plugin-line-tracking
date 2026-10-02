@@ -257,6 +257,21 @@ def test_no_usable_fork_and_excessive_graph_complexity_stop(extract):
     assert drive(path).vx == 0
 
 
+def test_sensor_loss_discards_path_history_without_forgetting_selected_fork(extract):
+    cfg=config("right")
+    smoother=LocalPathSmoother(cfg)
+    estimate=extract(fork(),cfg)
+    smoother.update(estimate,1.)
+    chosen=smoother.update(estimate,1.4)
+    assert chosen.stop_reason is None and chosen.points_xy[-1,1]<-1.5
+    smoother.reset(preserve_branch=True)
+    assert smoother.current(1.5) is None
+    lost=smoother.update(None,1.5)
+    assert lost.stop_reason=="branch_path_lost"
+    recovered=smoother.update(estimate,1.8)
+    assert recovered.stop_reason is None and recovered.points_xy[-1,1]<-1.5
+
+
 @pytest.mark.parametrize(
     "changes",
     [

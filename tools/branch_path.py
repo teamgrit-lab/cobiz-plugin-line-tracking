@@ -1,7 +1,7 @@
 """Connected, forward-only fork selection in the configured BEV geometry.
 
-This is not a general 2-D planner: paths must advance in x. All distances are
-in the configured homography, not independently measured robot clearance.
+This is not a general 2-D planner: paths must advance in x. Distances use the
+input metric grid, supplied by calibrated LiDAR fusion or the camera homography.
 """
 
 from __future__ import annotations

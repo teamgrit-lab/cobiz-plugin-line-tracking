@@ -24,6 +24,8 @@ from swin_l_drive_control import DriveDecision  # noqa: E402
 def test_task_control_ignores_external_publisher_count(
     monkeypatch, preexisting_control_publishers
 ):
+    # This isolated task/Sport contract scenario does not provide sensor streams.
+    monkeypatch.setitem(debug.ENV, "SWIN_L_LIDAR_HEIGHT_ENABLED", "false")
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "true")
     published: dict[str, list] = {}

@@ -34,6 +34,7 @@ RUN apt-get update \
         ros-humble-rosidl-generator-dds-idl \
         ros-humble-sensor-msgs \
         ros-humble-std-msgs \
+        ros-humble-tf2-ros \
     && rm -rf /var/lib/apt/lists/*
 
 # python3-opencv installs cv2 into Debian's dist-packages directory, while

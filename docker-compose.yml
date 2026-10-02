@@ -1,3 +1,27 @@
+x-lidar-height-environment: &lidar-height-environment
+  SWIN_L_LIDAR_HEIGHT_ENABLED: ${SWIN_L_LIDAR_HEIGHT_ENABLED:-true}
+  SWIN_L_LIDAR_TOPIC: ${SWIN_L_LIDAR_TOPIC:-/unitree/slam_lidar/points1}
+  SWIN_L_LIDAR_IMU_TOPIC: ${SWIN_L_LIDAR_IMU_TOPIC:-/unitree/slam_lidar/imu1}
+  SWIN_L_CAMERA_INFO_TOPIC: ${SWIN_L_CAMERA_INFO_TOPIC:-}
+  SWIN_L_LIDAR_FRAME_ID: ${SWIN_L_LIDAR_FRAME_ID:-hesai_lidar}
+  SWIN_L_LIDAR_TO_BASE_TRANSFORM: ${SWIN_L_LIDAR_TO_BASE_TRANSFORM:-}
+  SWIN_L_BASE_TO_CAMERA_TRANSFORM: ${SWIN_L_BASE_TO_CAMERA_TRANSFORM:-}
+  SWIN_L_LIDAR_MAX_AGE_SEC: ${SWIN_L_LIDAR_MAX_AGE_SEC:-0.5}
+  SWIN_L_LIDAR_MAX_SYNC_SEC: ${SWIN_L_LIDAR_MAX_SYNC_SEC:-0.15}
+  SWIN_L_LIDAR_GRID_RESOLUTION_M: ${SWIN_L_LIDAR_GRID_RESOLUTION_M:-0.10}
+  SWIN_L_LIDAR_MAX_UP_M: ${SWIN_L_LIDAR_MAX_UP_M:-0.06}
+  SWIN_L_LIDAR_MAX_DOWN_M: ${SWIN_L_LIDAR_MAX_DOWN_M:-0.08}
+  SWIN_L_LIDAR_MAX_REFERENCE_CHANGE_M: ${SWIN_L_LIDAR_MAX_REFERENCE_CHANGE_M:-0.06}
+  SWIN_L_LIDAR_FOOTPRINT_RADIUS_M: ${SWIN_L_LIDAR_FOOTPRINT_RADIUS_M:-0.25}
+  SWIN_L_LIDAR_SEED_NEAR_M: ${SWIN_L_LIDAR_SEED_NEAR_M:-0.5}
+  SWIN_L_LIDAR_SEED_FAR_M: ${SWIN_L_LIDAR_SEED_FAR_M:-2.0}
+  SWIN_L_LIDAR_SEED_HALF_WIDTH_M: ${SWIN_L_LIDAR_SEED_HALF_WIDTH_M:-0.5}
+  SWIN_L_LIDAR_PLANE_THRESHOLD_M: ${SWIN_L_LIDAR_PLANE_THRESHOLD_M:-0.025}
+  SWIN_L_LIDAR_MIN_PLANE_POINTS: ${SWIN_L_LIDAR_MIN_PLANE_POINTS:-30}
+  SWIN_L_LIDAR_MIN_PLANE_RATIO: ${SWIN_L_LIDAR_MIN_PLANE_RATIO:-0.5}
+  SWIN_L_LIDAR_MAX_GROUND_TILT_DEG: ${SWIN_L_LIDAR_MAX_GROUND_TILT_DEG:-20.0}
+  SWIN_L_LIDAR_MIN_CELL_POINTS: ${SWIN_L_LIDAR_MIN_CELL_POINTS:-3}
+
 services:
   # Safe inspection-only process. It publishes local path/debug topics and
   # never publishes /api/sport/request. Start it explicitly with:
@@ -24,6 +48,7 @@ services:
       - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
       - ${SWIN_L_ENGINE_DIR:-./models}:/models:ro
     environment:
+      <<: *lidar-height-environment
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_PROFILE: ${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}
@@ -65,6 +90,7 @@ services:
       - ${SWIN_L_ENGINE_DIR:-./models}:/models
       - ${SWIN_L_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint
     environment:
+      <<: *lidar-height-environment
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       SWIN_L_MODE: task-drive

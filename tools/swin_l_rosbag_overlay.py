@@ -46,6 +46,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="default: a new folder in rosbag-results/swin-l-tests",
     )
     parser.add_argument("--image-topic", default=DEFAULT_IMAGE_TOPIC)
+    parser.add_argument("--lidar-height-enabled", action=argparse.BooleanOptionalAction,
+                        default=None, help="default: use Unitree ground-height fusion")
+    for name in ("lidar-topic", "lidar-imu-topic", "camera-info-topic", "lidar-frame-id",
+                 "lidar-to-base-transform", "base-to-camera-transform"):
+        parser.add_argument("--" + name, default=None)
     parser.add_argument("--device", default="auto", help="auto, mps, cuda or cpu")
     parser.add_argument(
         "--start-offset", type=float, default=0.0, help="seconds from bag start"
@@ -110,7 +115,7 @@ def build_debug_arguments(
     profile = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
     # Pin the model even when a local .env selects R50 or another checkpoint.
     # Geometry settings continue to use the existing local-path configuration.
-    return [
+    arguments = [
         "mcap",
         "--input",
         str(args.input),
@@ -142,6 +147,15 @@ def build_debug_arguments(
         "--inference-hz",
         str(args.inference_hz),
     ]
+    if args.lidar_height_enabled is not None:
+        arguments.append("--lidar-height-enabled" if args.lidar_height_enabled
+                         else "--no-lidar-height-enabled")
+    for name in ("lidar_topic", "lidar_imu_topic", "camera_info_topic", "lidar_frame_id",
+                 "lidar_to_base_transform", "base_to_camera_transform"):
+        value = getattr(args, name)
+        if value is not None:
+            arguments.extend(("--" + name.replace("_", "-"), value))
+    return arguments
 
 
 def open_video(path: Path) -> None:

@@ -307,6 +307,55 @@ def extract_sidewalk_centerline(
     if mask.ndim != 2:
         raise ValueError("sidewalk_mask must be a two-dimensional array")
     birdseye, x_values, y_values = _birdseye_sidewalk(mask, config)
+    unclosed = None
+    if config.branch_preference != "center":
+        unclosed, _, _ = _birdseye_sidewalk(mask, replace(config, close_kernel_px=0))
+    return extract_metric_centerline(birdseye, x_values, y_values, config,
+                                    unclosed=unclosed)
+
+
+def metric_path_supported(
+    points_xy: np.ndarray, region: np.ndarray, x_values: np.ndarray, y_values: np.ndarray,
+) -> bool:
+    """Check every segment at sub-cell spacing, including interpolation gaps."""
+    points = np.asarray(points_xy)
+    if len(points) < 2 or not np.isfinite(points).all():
+        return False
+    step = min(float(np.min(np.diff(x_values))), float(np.min(-np.diff(y_values)))) / 2
+    if step <= 0:
+        return False
+    samples = []
+    for a, b in zip(points, points[1:]):
+        count = max(2, int(math.ceil(float(np.linalg.norm(b-a))/step))+1)
+        samples.append(np.linspace(a, b, count))
+    dense = np.concatenate(samples)
+    if (np.any(dense[:, 0] < x_values[0]) or np.any(dense[:, 0] > x_values[-1])
+            or np.any(dense[:, 1] > y_values[0]) or np.any(dense[:, 1] < y_values[-1])):
+        return False
+    rows = np.rint((dense[:, 0]-x_values[0])/(x_values[-1]-x_values[0])*(len(x_values)-1)).astype(int)
+    cols = np.rint((y_values[0]-dense[:, 1])/(y_values[0]-y_values[-1])*(len(y_values)-1)).astype(int)
+    return bool(np.all(region[rows, cols] > 0))
+
+
+def extract_metric_centerline(
+    birdseye: np.ndarray, x_values: np.ndarray, y_values: np.ndarray,
+    config: LocalPathConfig, *, unclosed: np.ndarray | None = None,
+    hard_gate: np.ndarray | None = None,
+) -> LocalPathEstimate | None:
+    """Share extraction with metric LiDAR fusion; never refill a height exclusion."""
+    config.validate()
+    birdseye = np.asarray(birdseye, dtype=np.uint8).copy()
+    if birdseye.shape != (len(x_values), len(y_values)):
+        raise ValueError("metric region/grid dimensions differ")
+    if hard_gate is not None:
+        if hard_gate.shape != birdseye.shape:
+            raise ValueError("height gate/grid dimensions differ")
+        birdseye[~hard_gate] = 0
+        unclosed = birdseye.copy()
+        if config.close_kernel_px:
+            kernel = np.ones((config.close_kernel_px, config.close_kernel_px), np.uint8)
+            birdseye = cv2.morphologyEx(birdseye, cv2.MORPH_CLOSE, kernel)
+            birdseye[~hard_gate] = 0
     meters_per_column = (
         2.0 * config.search_half_width_m / max(config.bev_width_px - 1, 1)
     )
@@ -376,6 +425,13 @@ def extract_sidewalk_centerline(
             ),
         )
     ).astype(np.float32)
+    if hard_gate is not None and not metric_path_supported(points, birdseye, x_values, y_values):
+        # A polynomial can cut across a curb or extrapolate beyond observations.
+        # Try piecewise interpolation only inside the supported distance span.
+        px = np.linspace(raw_points[0, 0], raw_points[-1, 0], config.path_points)
+        points = np.column_stack((px, np.interp(px, raw_points[:, 0], raw_points[:, 1]))).astype(np.float32)
+        if not metric_path_supported(points, birdseye, x_values, y_values):
+            return None
     mean_width = float(np.mean(widths)) if widths.size else 0.0
     width_support = min(1.0, mean_width / max(config.ground_half_width_m * 0.5, 1e-6))
     confidence = float(np.clip(0.75 * valid_ratio + 0.25 * width_support, 0.0, 1.0))
@@ -391,7 +447,8 @@ def extract_sidewalk_centerline(
 
         # Closing may bridge separate patches. Branch connectivity must use the
         # observed mask, while the legacy single-corridor fit stays unchanged.
-        unclosed, _, _ = _birdseye_sidewalk(mask, replace(config, close_kernel_px=0))
+        if unclosed is None:
+            unclosed = birdseye
         estimate = replace(estimate, branch_observation=observe_branches(
             unclosed, x_values, y_values, config, float(raw_points[0, 1])
         ))
@@ -414,12 +471,14 @@ class LocalPathSmoother:
         self._stop_reason: str | None = None
         self._constrained_branch = False
 
-    def reset(self) -> None:
+    def reset(self, *, preserve_branch: bool = False) -> None:
+        """Discard path history, retaining a committed fork on sensor loss if requested."""
         with self._lock:
             self._points = None
             self._confidence = 0.0
             self._last_update = None
-            self._branch_selector.reset()
+            if not preserve_branch:
+                self._branch_selector.reset()
             self._stop_reason = None
             self._constrained_branch = False
 

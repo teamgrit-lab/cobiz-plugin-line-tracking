@@ -109,18 +109,30 @@ def test_default_compose_is_cobiz_task_listener():
     assert "SWIN_L_OVERLAY_TOPIC" not in (ROOT / ".env.example").read_text()
 
 
-def test_active_deployment_has_no_manual_arm_or_lidar_contract():
+def test_active_deployment_has_no_manual_arm_or_external_clearance_contract():
     active = "\n".join(
         (ROOT / path).read_text() for path in ("docker-compose.yml", ".env.example")
     )
     for forbidden in (
         "SWIN_L_" + "DRIVE_ENABLED",
         "SWIN_L_" + "CALIBRATION_CONFIRMED",
-        "SWIN_L_" + "LIDAR_",
         "SWIN_L_" + "SAFETY_" + "STOP_TOPIC",
         "SWIN_L_" + "CLEARANCE_TOPIC",
     ):
         assert forbidden not in active
+
+
+def test_unitree_height_inputs_and_limits_reach_both_live_services():
+    import yaml
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    for name in ("actual-activate", "debugging-swin-l"):
+        env = services[name]["environment"]
+        assert env["SWIN_L_LIDAR_HEIGHT_ENABLED"].endswith(":-true}")
+        assert env["SWIN_L_LIDAR_TOPIC"].endswith(":-/unitree/slam_lidar/points1}")
+        assert env["SWIN_L_LIDAR_IMU_TOPIC"].endswith(":-/unitree/slam_lidar/imu1}")
+        assert env["SWIN_L_LIDAR_TO_BASE_TRANSFORM"].endswith(":-}")
+        assert env["SWIN_L_BASE_TO_CAMERA_TRANSFORM"].endswith(":-}")
+    assert "ros-humble-tf2-ros" in (ROOT / "Dockerfile.swin-l-debug").read_text()
 
 
 def test_automatic_stop_switches_are_forwarded_and_default_disabled():

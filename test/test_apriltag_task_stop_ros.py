@@ -59,6 +59,9 @@ class FakeQoS:
 
 class RosHarness:
     def __init__(self, monkeypatch):
+        # These scenarios isolate the original camera/task/AprilTag contract.
+        # The height-fusion suite enables and feeds the additional sensors.
+        monkeypatch.setitem(debug.ENV, "SWIN_L_LIDAR_HEIGHT_ENABLED", "false")
         # Existing lifecycle scenarios explicitly exercise all enabled guards.
         for check in debug.AUTOMATIC_STOP_CHECKS:
             monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "true")
@@ -151,7 +154,9 @@ class RosHarness:
                     cv2_to_imgmsg=lambda frame, **_kwargs: SimpleNamespace(frame=frame),
                 )
             ),
-            "sensor_msgs.msg": SimpleNamespace(Image=Message),
+            "sensor_msgs.msg": SimpleNamespace(
+                Image=Message, PointCloud2=Message, Imu=Message, CameraInfo=Message,
+            ),
             "std_msgs.msg": SimpleNamespace(String=Message),
             "nav_msgs.msg": SimpleNamespace(Path=Message),
             "geometry_msgs.msg": SimpleNamespace(PoseStamped=PoseStamped),

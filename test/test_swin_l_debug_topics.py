@@ -220,6 +220,7 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
     args = debug.parse_args(
         [
             "ros2",
+            "--no-lidar-height-enabled",
             "--inference-hz",
             "1.25",
             "--unrestricted-path-mode"

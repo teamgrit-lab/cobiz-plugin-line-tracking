@@ -10,6 +10,9 @@ no Sport Move request. The default path class is sidewalk
 (`SWIN_L_PATH_MASK_CLASS=2`); a task can request road (`1`) or road/sidewalk
 combined (`0`) with
 `payload.selected_mask`.
+The path now also requires observed ground support from
+`/unitree/slam_lidar/points1`, synchronized IMU data, CameraInfo, and measured
+sensor transforms. Unitree height fusion is enabled by default.
 
 ## Runtime contract
 
@@ -19,6 +22,10 @@ cancellation, image/model/publish errors, and handled shutdown still stop motion
 No accepted task means no motion command, and speed limits remain enforced.
 When left/right fork selection is enabled, its confirmation, ambiguity and selected-
 branch-loss guards also stop motion independently of these switches.
+With `SWIN_L_LIDAR_HEIGHT_ENABLED=true`, a usable height result that excludes
+the path stops motion independently of `LINE_TRACKING_STOP_ON_*`. Missing/stale
+height inputs or a failed ground fit withdraw the Path and follow the existing
+path-loss settings; they do not independently stop or clear a saved command.
 
 - There is no startup hold or automatic task timeout by default.
 - `actual-activate` loads the model once and keeps it in memory. With no
@@ -42,6 +49,9 @@ branch-loss guards also stop motion independently of these switches.
   alone do not stop motion when their checks are disabled.
   A lost or ambiguous committed fork is an exception: it publishes zero motion
   and clears the saved command until the selected branch can be matched again.
+  Valid LiDAR results that exclude the path also override command retention.
+  Sensor-data loss or an unreliable ground fit retains the saved command when
+  the ordinary path-loss stops are disabled.
 - `LINE_TRACKING_STOP_ON_APRILTAG=true` enables the existing stop-and-confirm
   behavior: a candidate sends a hard stop, and the same ID in three distinct
   frames across a one-second window completes the task. An unconfirmed candidate
@@ -67,6 +77,10 @@ limit.
 | Direction | Default | Type | Purpose |
 |---|---|---|---|
 | input | `/a2/front_camera/image_raw` | `sensor_msgs/Image` | A2 front camera |
+| input | `/unitree/slam_lidar/points1` | `sensor_msgs/PointCloud2` | observed ground height and support |
+| input | `/unitree/slam_lidar/imu1` | `sensor_msgs/Imu` | gravity direction in the LiDAR frame |
+| input | camera namespace + `/camera_info` | `sensor_msgs/CameraInfo` | intrinsics for the selected raw image |
+| input | `/tf`, `/tf_static` | `tf2_msgs/TFMessage` | measured sensor transforms when matrices are blank |
 | input | `/detections` | `apriltag_msgs/msg/AprilTagDetectionArray` | optional tag detection and liveness metrics |
 | input | `/task_event` | `std_msgs/String` | Cobiz task lifecycle event |
 | output | `/api/sport/request` | `unitree_api/msg/Request` | accepted-task Move requests |
@@ -138,7 +152,8 @@ SWIN_L_BRANCH_HOLD_SEC=1.50
 폭·여유·거리 임계값은 **설정된 BEV 좌표 기준 초기값**이다. ROI와 카메라 자세의
 보정 오차를 포함하므로 차체 폭, 회전 시 차체가 차지하는 공간, 실제 경계 여유를
 보장하지 않는다. 이 구현은 x 방향으로 진행하는 Y자 분기가 대상이며 90° 코너를
-해결하지 않는다. IMU/odom 보정도 추가하지 않는다. 프레임 간 경로 이동이 커서
+해결하지 않는다. 분기 대응에 odom을 사용하지 않는다. 높이 필터는 IMU의 중력 방향을
+사용하지만 스캔의 움직임 보정은 하지 않는다. 프레임 간 경로 이동이 커서
 대응할 수 없으면 추측해서 다른 가지로 바꾸지 않고 정지한다. 실제 로봇 적용 전에는
 기록 영상과 저속 주행으로 분기 판정·회전 방향·여유 폭을 확인해야 한다.
 
@@ -316,6 +331,11 @@ No process can publish a final command after power loss or `SIGKILL`.
 `.env.example` is not a calibrated deployment file. Before operation, validate
 the camera-to-`base_link` geometry and Swin-L path against the installed A2.
 
+With height fusion enabled, raw CameraInfo and calibrated 3-D transforms project
+actual LiDAR returns into the segmentation mask. The ROI homography below is
+used only when height fusion is explicitly disabled. Forward/lateral path ranges
+still limit the metric grid in both modes.
+
 Road and sidewalk share the same ROI. Its default bottom width is 84% of the
 image, top width is 24%, and height is 55% (top at image y=45%):
 
@@ -329,11 +349,12 @@ homography: moving its top changes which pixels map to the configured 8 m far
 distance. Check known ground points after changing it; this setting does not
 measure the distance from the camera.
 
-1. In the debug profile, adjust `SWIN_L_ROI_POLYGON` while inspecting the
+1. For camera-only mode, adjust `SWIN_L_ROI_POLYGON` while inspecting the
    `nav_msgs/Path` local path in RViz; use the offline overlay workflow for a
    rendered camera view.
-2. Measure known ground points to tune `SWIN_L_NEAR_DISTANCE_M`,
-   `SWIN_L_FAR_DISTANCE_M`, and `SWIN_L_GROUND_HALF_WIDTH_M`.
+2. In height mode, verify measured LiDAR-to-body and body-to-camera transforms
+   against known ground points; choose the near/far range from observed support.
+   In camera-only mode, those points instead calibrate the ROI distance mapping.
 3. Select `SWIN_L_PATH_MASK_CLASS=1` for road or `2` for sidewalk.
 4. Verify the camera timestamp, inference freshness, coordinate axes, speed limits,
    and behavior with any concurrently active Sport publishers before a live task.
@@ -347,9 +368,88 @@ SWIN_L_EVALUATION_WIDTH=640
 SWIN_L_EVALUATION_HEIGHT=360
 ```
 
+## Unitree LiDAR로 현재 지면 높이 제한
+
+영상의 차도/인도 클래스와 실제 높이를 함께 사용한다. IMU 가속도의 근처 샘플
+중앙값으로 중력 방향을 구하고, 차체 전방 0.5–2m·좌우 0.5m의 지면 후보에
+평면을 맞춘다. 각 점의 중력 방향 높이는 `h=(n·p+d)/(n·up)`이다.
+현재 평면보다 6cm 넘게 높은 셀과 8cm 넘게 낮은 셀을 제외한다. 차도 위에서
+시작하면 차도가, 인도 위에서 시작하면 인도가 높이 기준이 된다. `selected_mask`
+변경만으로 다른 높이의 면이 허용되지는 않는다.
+
+```dotenv
+SWIN_L_LIDAR_HEIGHT_ENABLED=true
+SWIN_L_LIDAR_TOPIC=/unitree/slam_lidar/points1
+SWIN_L_LIDAR_IMU_TOPIC=/unitree/slam_lidar/imu1
+SWIN_L_LIDAR_FRAME_ID=hesai_lidar
+SWIN_L_CAMERA_INFO_TOPIC=
+SWIN_L_LIDAR_TO_BASE_TRANSFORM=
+SWIN_L_BASE_TO_CAMERA_TRANSFORM=
+SWIN_L_LIDAR_MAX_UP_M=0.06
+SWIN_L_LIDAR_MAX_DOWN_M=0.08
+SWIN_L_LIDAR_MAX_REFERENCE_CHANGE_M=0.06
+SWIN_L_LIDAR_GRID_RESOLUTION_M=0.10
+SWIN_L_LIDAR_FOOTPRINT_RADIUS_M=0.25
+SWIN_L_LIDAR_MAX_AGE_SEC=0.5
+SWIN_L_LIDAR_MAX_SYNC_SEC=0.15
+```
+
+CameraInfo 토픽을 비우면 이미지 네임스페이스를 따른다. 예를 들어
+`/a2/front_camera/res_720p/image_raw`에는
+`/a2/front_camera/res_720p/camera_info`를 사용한다. CameraInfo 크기와 frame_id는
+원본 이미지와 일치해야 한다. `plumb_bob` 또는 `rational_polynomial` 왜곡 모델의
+원본 영상 투영을 지원한다.
+
+변환값을 비우면 점군 시각의 `path_frame_id ← cloud.frame_id` TF와 영상 시각의
+`image.frame_id ← path_frame_id` TF를 조회한다. 기본 body 좌표는 `base_link`이며
+x 전방·y 좌측·z 위쪽, 카메라 좌표는 optical 좌표(x 우측·y 아래·z 전방)여야 한다.
+TF가 없으면 실측한 4×4 강체 변환을 **행 우선 16개 숫자, 쉼표 구분**으로 넣는다.
+`SWIN_L_LIDAR_TO_BASE_TRANSFORM`은 `p_base=T·p_lidar`,
+`SWIN_L_BASE_TO_CAMERA_TRANSFORM`은 `p_camera=T·p_base` 방향이다.
+회전뿐 아니라 센서 간 위치 차이도 포함해야 한다.
+
+제공된 Unitree 기록은 점군·IMU frame_id가 `hesai_lidar`이고 TF가 없다.
+센서 Z를 높이로 쓰거나 단위행렬을 가정하면 안 된다. 이 기록의 IMU 중력은
+주로 센서 Y축 방향이다. 구현은 실제 PointCloud2 필드 오프셋과 26바이트
+point_step을 읽고 유효하지 않은 점을 제거한다. 실제 장치의 frame_id가 다르면
+`SWIN_L_LIDAR_FRAME_ID`와 그에 맞는 변환을 함께 설정한다.
+변환한 중력의 위쪽 방향이 body Z축과 60° 넘게 다르면
+`lidar_gravity_axis_invalid`로 거절한다.
+
+- 10cm 셀에 최소 3개 점이 필요하며 높이의 10/90 백분위로 상승·하강을 검사한다.
+  관측하지 못한 셀은 사용할 수 없다. 주변 25cm 영역에도 지면 지원이 있어야 한다.
+- 높이 조건을 만족하면서 가까운 지면과 연결된 차도/인도 영역만 Path에 사용한다.
+  틈 메우기 이후에도 높이 제외 영역을 유지하고, 보간·평활화한 경로의 선분을
+  다시 검사한다. `unrestricted_path_mode`도 이 검사를 우회하지 않는다.
+- 이전 지면 평면과 비교해 차체 원점에서의 높이가 한 번에 6cm 넘게 바뀌면
+  `lidar_ground_reference_jump`로 새 지면 추정을 거절한다. 단차 앞에서 높은 면을 새 지면으로
+  잘못 선택하는 것을 줄이는 검사이며, 작업 재시작 때 기준을 초기화한다.
+- 최초 지면 후보가 현재 서 있는 면을 충분히 포함해야 한다. 높은 플랫폼이 후보
+  대부분을 차지하는 상황에서는 최초 기준을 잘못 잡을 수 있다. 임계값과 후보 범위는
+  초기 설정이며 로봇 자세 변화, 경사와 실제 점군 밀도에 맞춰 검증해야 한다.
+- 한 스캔으로 계산하며 odom 누적, 점별 움직임 보정과 IMU 동적 가속도 보정은
+  구현하지 않는다. 이 기능은 지면 높이 제한이며 완전한 장애물 회피는 아니다.
+
+`/line_tracking/swin_l/metrics`의 `lidar_height`에 지면 법선·오프셋, 점 수,
+평면 지지율, 허용 셀 비율, 제한값과 높이 처리 상태를 기록한다. 센서 누락·지연,
+좌표 변환 누락, 지면 추정 실패(`lidar_waiting_for_*`, `lidar_transform_unavailable`,
+`lidar_stale`, `lidar_ground_*` 등)는 새 Path를 사용할 수 없는 상태로 처리한다.
+이 경우 LiDAR 전용 정지를 추가하지 않으며, 기존 경로 소실 정지 설정이 꺼져 있으면
+`tracking_path_hold`로 현재 작업의 마지막 유효 전진 속도와 회전 명령을 유지한다.
+이전 명령이 없으면 `waiting_for_path`로 0 속도를 유지한다. 유효한 높이 결과에서
+경로가 제외된 `lidar_path_unavailable`/`lidar_path_blocked`는 계속 정지한다.
+필요한 입력이 다시 유효해지면 경로를 새로 계산한다. 기존 영상 전용 동작은
+`SWIN_L_LIDAR_HEIGHT_ENABLED=false` 또는 `--no-lidar-height-enabled`로 선택한다.
+CLI 설정은 `--lidar-max-up-m`, `--lidar-max-down-m` 등 `.env` 이름과 대응한다.
+
 ## Path generation and motion gates
 
-The road (`1`), sidewalk (`2`), or combined (`0`) region is projected into a 280-by-160
+In height mode, observed returns supply the metric grid and restrict the semantic
+region before fitting. A fit is accepted only inside supported cells; it cannot
+extrapolate through an unobserved or excluded interval. The temporal path and
+selected fork undergo the same support check.
+
+In camera-only mode, the road (`1`), sidewalk (`2`), or combined (`0`) region is projected into a 280-by-160
 ground grid spanning the configured 3-8 m forward range and +/-3.5 m sideways.
 A 5-by-5 morphological closing fills small mask gaps. Each forward-distance
 row selects a contiguous region at least 0.12 m wide, favoring width and
@@ -362,7 +462,7 @@ a qualifying region, including when the selected class is absent from the
 ROI. An invalid new estimate clears the previous path. Valid-ratio filtering,
 temporal smoothing, and the smoother's hold expiry are bypassed in this mode.
 The independent `STOP_ON_LOW_CONFIDENCE=true` drive check still applies at 0.49.
-Sparse observations can therefore be extrapolated over
+In camera-only mode, sparse observations can be extrapolated over
 the full forward range; neither fitting nor gap filling establishes obstacle
 clearance. With unrestricted mode disabled, the default valid-row requirement
 is 35% (56 of 160 rows), and the smoother can retain a previous valid path for
@@ -598,7 +698,7 @@ The worker's processing latency now also includes selected-message decoding;
 previously callback decoding was outside that measurement. TensorRT transfers
 only `pixel_values`, leaving the unused processor `pixel_mask` on the CPU.
 
-BEV projection maps, metric axes and the closing kernel are cached by image
+Camera-only BEV projection maps, metric axes and the closing kernel are cached by image
 dimensions and the frozen local-path configuration (up to eight entries).
 Road, sidewalk and union paths share this immutable geometry, but each current
 mask is remapped and each path/smoother is updated independently. ROI,
@@ -635,7 +735,8 @@ longer inserts zero commands between valid results. The live inference target
 remains 4 Hz. Missing paths and stale camera/inference inputs stop motion only
 when the corresponding automatic flags are enabled. In restricted
 path mode, the smoother's separate 0.90-second hold expiry can still make the
-path unavailable.
+path unavailable. Enabled LiDAR fusion expires height support at 0.5 s, then
+withdraws the Path and follows the same path-loss/command-hold policy.
 
 If an over-current warning appears, inspect the board's actual power modes
 with `nvpmodel -q` and `/etc/nvpmodel.conf`, then validate a supported power
@@ -660,11 +761,25 @@ Jetson:
 
 ```bash
 uv run tools/swin_l_rosbag_overlay.py sidewalk --input /path/to/input.mcap --open
-uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/input.mcap --open
+uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/input.mcap \
+  --no-lidar-height-enabled --open
 
 docker compose run --rm --no-deps test-swin-l local-path \
-  --input /bags/input.mcap --device cuda
+  --input /bags/input.mcap --device cuda --no-lidar-height-enabled
 ```
+
+Unitree 높이를 포함한 MCAP 검증에는 점군·IMU·CameraInfo를 포함하는 기록과 두
+실측 변환이 필요하다. 오프라인 모드는 TF를 재생하지 않으므로 변환을 명시한다.
+
+```bash
+uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/unitree.mcap \
+  --image-topic /a2/front_camera/res_720p/image_raw \
+  --lidar-to-base-transform "$MEASURED_BASE_FROM_LIDAR" \
+  --base-to-camera-transform "$MEASURED_CAMERA_FROM_BASE" --open
+```
+
+`sidewalk` 영상 분할 모드에는 높이 입력이 필요하지 않다. LiDAR가 없는 기록의
+`local-path` 모드는 위 영상 전용 예처럼 높이 기능을 명시적으로 끈다.
 
 These overlays validate segmentation and path geometry; they do not validate a
 live robot operation.

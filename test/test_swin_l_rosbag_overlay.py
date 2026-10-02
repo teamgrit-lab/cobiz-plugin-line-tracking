@@ -86,6 +86,7 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
                 str(output),
                 "--max-frames",
                 "12",
+                "--no-lidar-height-enabled",
             ]
         )
         == 0
@@ -140,21 +141,27 @@ def test_default_outputs_create_distinct_host_mounted_directories(
     assert second_video.parent.is_dir()
 
 
-def test_replay_arguments_are_camera_only(tmp_path):
+def test_replay_arguments_forward_height_calibration_and_explicit_camera_only_mode(tmp_path):
     source = tmp_path / "camera.mcap"
     source.touch()
-    args = cli.parse_args(["local-path", "--input", str(source)])
+    args = cli.parse_args(["local-path", "--input", str(source),
+                           "--no-lidar-height-enabled", "--lidar-topic", "/custom/points",
+                           "--base-to-camera-transform", "measured-matrix"])
     forwarded = cli.build_debug_arguments(
         args, tmp_path / "overlay.mp4", tmp_path / "report.json"
     )
-    assert "--lidar-topic" not in forwarded
-    assert not hasattr(args, "lidar_topic")
+    assert "--no-lidar-height-enabled" in forwarded
+    assert forwarded[forwarded.index("--lidar-topic")+1] == "/custom/points"
+    assert forwarded[forwarded.index("--base-to-camera-transform")+1] == "measured-matrix"
 
 
-def test_active_parsers_expose_no_lidar_arguments():
+def test_active_parsers_default_to_unitree_height_fusion():
     for argv in (["ros2"], ["task-drive"]):
         args = debug.parse_args(argv)
-        assert not any("lidar" in name.lower() for name in vars(args))
+        assert args.lidar_height_enabled
+        assert args.lidar_topic == "/unitree/slam_lidar/points1"
+        assert args.lidar_imu_topic == "/unitree/slam_lidar/imu1"
+        assert args.lidar_frame_id == "hesai_lidar"
         assert not hasattr(args, "clearance_topic")
 
 

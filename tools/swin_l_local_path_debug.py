@@ -45,9 +45,11 @@ import torch
 from apriltag_stop import AprilTagDecision, AprilTagPolicy, AprilTagStopMonitor
 from best_so_far_runtime import (
     DEFAULT_EVALUATION_SIZE,
+    FINETUNED_PROFILE,
     INFERENCE_BACKENDS,
     PROFILE_NAMES,
     R50_PROFILE,
+    R50_PROFILES,
     SWIN_L_ASPECT_FP16_PROFILE,
     BestSoFarConfig,
     BestSoFarResult,
@@ -74,6 +76,7 @@ from local_path import (
     pixel_to_ground_homography,
     selected_path_region,
 )
+from r50_checkpoint import validate_checkpoint
 from swin_l_drive_control import (
     DRIVE_STOP_CHECKS,
     MAX_PATH_UNAVAILABLE_INFERENCES,
@@ -297,6 +300,7 @@ def _runtime_config(args: argparse.Namespace) -> BestSoFarConfig:
         profile=args.profile,
         model_id=args.model_id,
         model_revision=args.model_revision,
+        checkpoint_manifest_sha256=args.checkpoint_manifest_sha256,
         evaluation_height=args.evaluation_size[0],
         evaluation_width=args.evaluation_size[1],
         device=args.device,
@@ -761,18 +765,21 @@ def _path_message(path: SmoothedPath | None, header: Any, frame_id: str) -> Any:
 def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
     """Reject task-driven control unless its model and calibration are explicit."""
 
-    if args.profile not in (SWIN_L_ASPECT_FP16_PROFILE, R50_PROFILE):
+    if args.profile not in (SWIN_L_ASPECT_FP16_PROFILE, *R50_PROFILES):
         raise ValueError(
             "task-drive mode requires a pinned FP16 deployment profile: "
-            f"{SWIN_L_ASPECT_FP16_PROFILE} or {R50_PROFILE}"
+            f"{SWIN_L_ASPECT_FP16_PROFILE}, {R50_PROFILE}, or {FINETUNED_PROFILE}"
         )
     pinned = resolve_profile(args.profile)
-    if args.model_id not in (None, pinned.model_id) or args.model_revision not in (
+    if args.profile == FINETUNED_PROFILE:
+        if args.model_revision is not None:
+            raise ValueError("local R50 task-drive cannot override model_revision")
+    elif args.model_id not in (None, pinned.model_id) or args.model_revision not in (
         None,
         pinned.model_revision,
     ):
         raise ValueError("task-drive mode cannot override the pinned checkpoint")
-    if args.profile == R50_PROFILE and args.backend != "pytorch":
+    if args.profile in R50_PROFILES and args.backend != "pytorch":
         raise ValueError("R50 task-drive mode requires the pytorch backend")
     if tuple(args.evaluation_size) != DEFAULT_EVALUATION_SIZE:
         raise ValueError("task-drive mode requires a 360x640 score map")
@@ -785,6 +792,12 @@ def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
             "task-drive mode prohibits automatic inference-backend fallback"
         )
     _drive_config_from_args(args)
+    if args.profile == FINETUNED_PROFILE:
+        validate_checkpoint(
+            args.model_id or pinned.model_id,
+            args.checkpoint_manifest_sha256,
+            require_pin=True,
+        )
 
 
 def run_ros2(args: argparse.Namespace) -> int:
@@ -1600,6 +1613,12 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model-id", default=_env("SWIN_L_MODEL_ID", "") or None)
     parser.add_argument(
         "--model-revision", default=_env("SWIN_L_MODEL_REVISION", "") or None
+    )
+    parser.add_argument(
+        "--checkpoint-sha256",
+        dest="checkpoint_manifest_sha256",
+        default=_env("SWIN_L_CHECKPOINT_SHA256", "") or None,
+        help="Local R50 checkpoint manifest SHA-256; required for task-drive",
     )
     parser.add_argument("--device", default=_env("SWIN_L_DEVICE", "auto"))
     parser.add_argument(

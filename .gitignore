@@ -19,6 +19,7 @@ models/*.plan
 models/*.pth
 models/*.plan.json
 models/swin-l-checkpoint/
+models/r50-surface-*/
 
 # Local rosbag conversion and inspection artifacts.
 /rosbags/

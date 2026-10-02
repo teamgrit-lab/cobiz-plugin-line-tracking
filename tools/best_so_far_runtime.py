@@ -16,6 +16,8 @@ Named profiles are intentionally kept here:
 * ``r50-fp16-640x360`` is the previous realtime candidate. It uses MaskFormer R50 at
   the native 640x360 camera size, FP16 on MPS/CUDA, Swin-aligned surface label
   aggregation, and a zero-cost temporal margin selected by direct comparison.
+* ``r50-finetuned-fp16-640x360`` loads a validated local R50 checkpoint with
+  operational road labels including manholes and the same R50 cleanup.
 
 Each profile pins its own validated aggregation and temporal defaults so MCAP,
 live ROS 2, and full-video tests remain reproducible.
@@ -39,6 +41,11 @@ from evaluate_mapillary_label_aggregation import (
 )
 from evaluate_mapillary_temporal import aggregated_selected_mask, upscale_mask
 from evaluate_sidewalk_road_temporal import remove_small_components
+from r50_checkpoint import (
+    FINETUNED_PROFILE,
+    checkpoint_manifest_sha256,
+    validate_checkpoint,
+)
 from segment_sidewalk_road import choose_device, render_overlay
 from tensorrt_backend import TensorRTSemanticBackend
 from transformers import (
@@ -52,6 +59,7 @@ SWIN_L_ASPECT_PROFILE = "swin-l-aspect-224x384"
 SWIN_L_ASPECT_FP16_PROFILE = "swin-l-aspect-224x384-fp16"
 SWIN_L_ASPECT_QUALITY_PROFILE = "swin-l-aspect-448x768"
 R50_PROFILE = "r50-fp16-640x360"
+R50_PROFILES = (R50_PROFILE, FINETUNED_PROFILE)
 DEFAULT_PROFILE = SWIN_L_ASPECT_FP16_PROFILE
 DEFAULT_EVALUATION_SIZE = (360, 640)
 R50_ROAD_LABELS = tuple(
@@ -60,6 +68,10 @@ R50_ROAD_LABELS = tuple(
     if label not in {"Bike Lane", "Parking", "Service Lane"}
 )
 R50_SIDEWALK_LABELS = SIDEWALK_LABELS + ("Bike Lane", "Manhole")
+R50_FINETUNED_ROAD_LABELS = R50_ROAD_LABELS + ("Manhole",)
+R50_FINETUNED_SIDEWALK_LABELS = tuple(
+    label for label in R50_SIDEWALK_LABELS if label != "Manhole"
+)
 R50_MAXIMUM_ROAD_ISLAND_AREA = 2560
 R50_MINIMUM_SIDEWALK_RING_RATIO = 0.10
 ROAD_ISLAND_ACTIONS = ("drop", "reassign-sidewalk")
@@ -73,7 +85,7 @@ class ProfileSpec:
     name: str
     model_family: str
     model_id: str
-    model_revision: str
+    model_revision: str | None
     input_height: int
     input_width: int
     precision: str
@@ -137,6 +149,17 @@ PROFILE_SPECS = {
         temporal_alpha=0.62,
         temporal_hysteresis_margin=0.0,
     ),
+    FINETUNED_PROFILE: ProfileSpec(
+        name=FINETUNED_PROFILE,
+        model_family="maskformer",
+        model_id="/models/r50-surface-v6/best",
+        model_revision=None,
+        input_height=360,
+        input_width=640,
+        precision="fp16",
+        temporal_alpha=0.62,
+        temporal_hysteresis_margin=0.0,
+    ),
 }
 PROFILE_NAMES = tuple(PROFILE_SPECS)
 
@@ -169,6 +192,7 @@ class BestSoFarConfig:
     profile: str = DEFAULT_PROFILE
     model_id: str | None = None
     model_revision: str | None = None
+    checkpoint_manifest_sha256: str | None = None
     evaluation_height: int = DEFAULT_EVALUATION_SIZE[0]
     evaluation_width: int = DEFAULT_EVALUATION_SIZE[1]
     temporal_alpha: float | None = None
@@ -192,6 +216,11 @@ class BestSoFarConfig:
             raise ValueError("model_id override must not be empty")
         if self.model_revision is not None and not self.model_revision.strip():
             raise ValueError("model_revision override must not be empty")
+        if self.profile == FINETUNED_PROFILE:
+            if self.model_revision is not None:
+                raise ValueError("local R50 checkpoints do not support model_revision overrides")
+            if self.backend != "pytorch":
+                raise ValueError("local R50 checkpoints require the pytorch backend")
         if self.evaluation_height <= 0 or self.evaluation_width <= 0:
             raise ValueError("evaluation dimensions must be positive")
         if self.temporal_alpha is not None and not 0.5 <= self.temporal_alpha <= 1.0:
@@ -275,6 +304,23 @@ class BestSoFarSegmenter:
             model_id=config.model_id,
             model_revision=config.model_revision,
         )
+        self.checkpoint_manifest: dict[str, Any] | None = None
+        self.checkpoint_manifest_sha256: str | None = None
+        if self.profile.name == FINETUNED_PROFILE:
+            self.profile = replace(
+                self.profile,
+                model_id=str(Path(self.profile.model_id).expanduser().resolve()),
+            )
+            # Pin even unpinned debug loads to the manifest observed here so
+            # metadata identifies the same manifest passed through validation.
+            manifest_sha256 = (
+                config.checkpoint_manifest_sha256
+                or checkpoint_manifest_sha256(self.profile.model_id)
+            )
+            self.checkpoint_manifest = validate_checkpoint(
+                self.profile.model_id, manifest_sha256,
+            )
+            self.checkpoint_manifest_sha256 = manifest_sha256.lower()
         self.temporal_alpha = (
             config.temporal_alpha
             if config.temporal_alpha is not None
@@ -293,10 +339,15 @@ class BestSoFarSegmenter:
             "mps",
         }
         load_started = time.perf_counter()
-        self.processor = AutoImageProcessor.from_pretrained(
-            self.profile.model_id,
-            revision=self.profile.model_revision,
-        )
+        if self.profile.name == FINETUNED_PROFILE:
+            self.processor = AutoImageProcessor.from_pretrained(
+                self.profile.model_id, local_files_only=True,
+            )
+        else:
+            self.processor = AutoImageProcessor.from_pretrained(
+                self.profile.model_id,
+                revision=self.profile.model_revision,
+            )
         self.processor.size = {
             "height": self.profile.input_height,
             "width": self.profile.input_width,
@@ -344,9 +395,15 @@ class BestSoFarSegmenter:
         if self.backend == "tensorrt":
             assert self.tensorrt_backend is not None
             assert self.model is None
-        if self.profile.name == R50_PROFILE:
-            self.road_labels = R50_ROAD_LABELS
-            self.sidewalk_labels = R50_SIDEWALK_LABELS
+        if self.profile.name in R50_PROFILES:
+            self.road_labels = (
+                R50_FINETUNED_ROAD_LABELS
+                if self.profile.name == FINETUNED_PROFILE else R50_ROAD_LABELS
+            )
+            self.sidewalk_labels = (
+                R50_FINETUNED_SIDEWALK_LABELS
+                if self.profile.name == FINETUNED_PROFILE else R50_SIDEWALK_LABELS
+            )
             self.maximum_road_island_area = R50_MAXIMUM_ROAD_ISLAND_AREA
             self.minimum_sidewalk_ring_ratio = (
                 config.minimum_sidewalk_ring_ratio
@@ -367,7 +424,21 @@ class BestSoFarSegmenter:
         self._surface_lookup: torch.Tensor | None = None
 
     def _load_pytorch_model(self) -> Any:
-        if self.profile.model_family == "mask2former":
+        if self.profile.name == FINETUNED_PROFILE:
+            model, loading_info = MaskFormerForInstanceSegmentation.from_pretrained(
+                self.profile.model_id,
+                local_files_only=True,
+                use_safetensors=True,
+                output_loading_info=True,
+            )
+            problems = {
+                key: loading_info[key]
+                for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")
+                if loading_info.get(key)
+            }
+            if problems:
+                raise ValueError(f"Local R50 checkpoint did not load strictly: {problems}")
+        elif self.profile.model_family == "mask2former":
             model = Mask2FormerForUniversalSegmentation.from_pretrained(
                 self.profile.model_id,
                 revision=self.profile.model_revision,
@@ -704,4 +775,12 @@ class BestSoFarSegmenter:
         }
         if self.tensorrt_backend is not None:
             metadata["tensorrt"] = self.tensorrt_backend.metadata()
+        if self.checkpoint_manifest is not None:
+            metadata["checkpoint_manifest_sha256"] = self.checkpoint_manifest_sha256
+            # Live metrics need identity, not the potentially large validation
+            # confusion matrix and training history stored in the artifact.
+            metadata["checkpoint"] = {
+                key: value for key, value in self.checkpoint_manifest.items()
+                if key not in {"training", "evaluation", "note"}
+            }
         return metadata

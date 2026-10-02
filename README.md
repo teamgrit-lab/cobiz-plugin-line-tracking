@@ -25,7 +25,9 @@ branch-loss guards also stop motion independently of these switches.
 With `SWIN_L_LIDAR_HEIGHT_ENABLED=true`, a usable height result that excludes
 the path stops motion independently of `LINE_TRACKING_STOP_ON_*`. Missing/stale
 height inputs or a failed ground fit withdraw the Path and follow the existing
-path-loss settings; they do not independently stop or clear a saved command.
+path-loss settings after the first valid height result; they do not independently
+stop or clear a saved command. Before that first result, startup uses the image
+path on sensor/calibration failure by default and reports `vision_fallback=true`.
 
 - There is no startup hold or automatic task timeout by default.
 - `actual-activate` loads the model once and keeps it in memory. With no
@@ -382,6 +384,8 @@ SWIN_L_LIDAR_HEIGHT_ENABLED=true
 SWIN_L_LIDAR_TOPIC=/unitree/slam_lidar/points1
 SWIN_L_LIDAR_IMU_TOPIC=/unitree/slam_lidar/imu1
 SWIN_L_LIDAR_FRAME_ID=hesai_lidar
+SWIN_L_LIDAR_CALIBRATION_PROFILE=unitree-a2-front
+SWIN_L_LIDAR_STARTUP_VISION_FALLBACK=true
 SWIN_L_CAMERA_INFO_TOPIC=
 SWIN_L_LIDAR_TO_BASE_TRANSFORM=
 SWIN_L_BASE_TO_CAMERA_TRANSFORM=
@@ -392,6 +396,7 @@ SWIN_L_LIDAR_GRID_RESOLUTION_M=0.10
 SWIN_L_LIDAR_FOOTPRINT_RADIUS_M=0.25
 SWIN_L_LIDAR_MAX_AGE_SEC=0.5
 SWIN_L_LIDAR_MAX_SYNC_SEC=0.15
+SWIN_L_LIDAR_MAX_RESULT_AGE_SEC=1.0
 ```
 
 CameraInfo 토픽을 비우면 이미지 네임스페이스를 따른다. 예를 들어
@@ -407,6 +412,26 @@ TF가 없으면 실측한 4×4 강체 변환을 **행 우선 16개 숫자, 쉼�
 `SWIN_L_LIDAR_TO_BASE_TRANSFORM`은 `p_base=T·p_lidar`,
 `SWIN_L_BASE_TO_CAMERA_TRANSFORM`은 `p_camera=T·p_base` 방향이다.
 회전뿐 아니라 센서 간 위치 차이도 포함해야 한다.
+
+A2의 전방 `points1` 센서에는 `SWIN_L_LIDAR_CALIBRATION_PROFILE=unitree-a2-front`를
+선택할 수 있다. 이 프로필은 Jetson의 기존
+`teamgrit-slam/slam/src/grit_slam/config/profiles/teamgrit_a2.yaml`에 있는
+`T_body_lidar`와 A2 URDF 카메라 변환을 재사용한다. 센서 Z→body X,
+센서 X→body Y, 센서 Y→body Z로 회전하며 LiDAR 위치는
+`[0.33767, 0, 0.08134] m`, 카메라 위치는 `[0.3381, 0.0336, 0.0525] m`이다.
+명시한 4×4 행렬은 프로필보다 우선한다. 프로필은 `base_link`,
+`camera_optical_frame`, 전방 `hesai_lidar`/`unitree_lidar1` 좌표에만 사용하며,
+다른 장착에는 기본값 `tf`와 해당 장치의 실측 변환을 사용한다.
+수직 장착 회전은 한 번만 적용하고, IMU의 중력 방향을 같은 회전으로 변환해
+지면 기울기를 추정한다. 센서 Z를 지면 높이로 직접 사용하지 않는다.
+
+실시간 처리는 GPU 추론 **전에** 영상과 가까운 점군·IMU를 선택하고 원본 시각과
+수신 시각의 신선도를 검사한다. 추론이 끝나면 그 입력 묶음으로 높이를 계산한다.
+`SWIN_L_LIDAR_MAX_AGE_SEC`는 현재 점군 스트림의 신선도에 계속 적용하고,
+높이 결과는 입력 선택부터 현재까지의 전체 시간을
+`SWIN_L_LIDAR_MAX_RESULT_AGE_SEC`로 별도 제한한다.
+따라서 모델 처리 시간을 센서 지연으로 중복 계산하지 않으며, 오래된 시각을
+재전송한 점군이나 실제 센서 수신 중단은 여전히 `lidar_stale`로 표시한다.
 
 제공된 Unitree 기록은 점군·IMU frame_id가 `hesai_lidar`이고 TF가 없다.
 센서 Z를 높이로 쓰거나 단위행렬을 가정하면 안 된다. 이 기록의 IMU 중력은
@@ -433,14 +458,18 @@ point_step을 읽고 유효하지 않은 점을 제거한다. 실제 장치의 f
 `/line_tracking/swin_l/metrics`의 `lidar_height`에 지면 법선·오프셋, 점 수,
 평면 지지율, 허용 셀 비율, 제한값과 높이 처리 상태를 기록한다. 센서 누락·지연,
 좌표 변환 누락, 지면 추정 실패(`lidar_waiting_for_*`, `lidar_transform_unavailable`,
-`lidar_stale`, `lidar_ground_*` 등)는 새 Path를 사용할 수 없는 상태로 처리한다.
+`lidar_stale`, `lidar_ground_*` 등)는 첫 유효 높이 결과 전에는 영상 경로로 처리한다.
+`SWIN_L_LIDAR_STARTUP_VISION_FALLBACK=false`이면 이 초기 영상 경로를 끈다.
+첫 유효 높이 결과 이후의 센서 오류는 새 높이 Path를 사용할 수 없는 상태로 처리한다.
 이 경우 LiDAR 전용 정지를 추가하지 않으며, 기존 경로 소실 정지 설정이 꺼져 있으면
 `tracking_path_hold`로 현재 작업의 마지막 유효 전진 속도와 회전 명령을 유지한다.
-이전 명령이 없으면 `waiting_for_path`로 0 속도를 유지한다. 유효한 높이 결과에서
+영상에도 경로가 없고 이전 명령도 없으면 `waiting_for_path`로 0 속도를 유지한다. 유효한 높이 결과에서
 경로가 제외된 `lidar_path_unavailable`/`lidar_path_blocked`는 계속 정지한다.
 필요한 입력이 다시 유효해지면 경로를 새로 계산한다. 기존 영상 전용 동작은
 `SWIN_L_LIDAR_HEIGHT_ENABLED=false` 또는 `--no-lidar-height-enabled`로 선택한다.
 CLI 설정은 `--lidar-max-up-m`, `--lidar-max-down-m` 등 `.env` 이름과 대응한다.
+`lidar_height.filter_applied`와 `lidar_height.vision_fallback`으로 실제 높이 필터가
+적용됐는지 구분한다. `calibration_source`와 `up_base`는 적용한 변환과 body 중력을 표시한다.
 
 ## Path generation and motion gates
 

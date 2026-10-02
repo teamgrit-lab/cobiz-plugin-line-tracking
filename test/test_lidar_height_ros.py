@@ -167,9 +167,11 @@ def test_timestamped_tf_is_required_when_calibration_matrices_are_blank(monkeypa
     def scenario(node):
         ros.start(); result=feed_height(ros,node)
         if missing:
-            assert result["drive_reason"]=="path_unavailable"
+            assert result["drive_reason"] in ("tracking", "tracking_slow_turn")
             assert result["lidar_height"]["reason"]=="lidar_transform_unavailable"
-            assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
+            assert result["lidar_height"]["vision_fallback"]
+            assert not result["lidar_height"]["filter_applied"]
+            assert json.loads(ros.published[SPORT][-1].parameter)["x"]>0
         else:
             assert result["path_tracked"]
             assert calls[0][:2]==("base_link","hesai_lidar")
@@ -177,6 +179,112 @@ def test_timestamped_tf_is_required_when_calibration_matrices_are_blank(monkeypa
             assert calls[0][2:]==calls[1][2:]
 
     ros.run(scenario,"--lidar-to-base-transform","","--base-to-camera-transform","",
+            "--near-distance-m",".6","--far-distance-m","3",
+            "--search-half-width-m","2","--lidar-footprint-radius-m",".1",
+            "--bev-height-px","49","--bev-width-px","81","--branch-preference","center")
+
+
+def test_slow_gpu_inference_uses_the_scan_validated_before_inference(monkeypatch):
+    ros=RosHarness(monkeypatch)
+    monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_HEIGHT_ENABLED","true")
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV,"LINE_TRACKING_STOP_ON_"+check.upper(),"false")
+    def segment(_frame,**_kwargs):
+        # Inference exceeds the source-age budget. New sensor callbacks keep
+        # arriving while the model works, without changing its matched scan.
+        ros.now+=.8
+        ros.node.on_lidar(cloud(points_scene(),ros.clock_ns()/1e9))
+        return NS(selected_mask=np.full((360,640),2,np.uint8),inference_seconds=.8)
+    monkeypatch.setattr(debug,"BestSoFarSegmenter",lambda _:NS(
+        device=NS(type="cuda"),reset=lambda:None,segment=segment))
+    def scenario(node):
+        ros.start(); result=feed_height(ros,node)
+        assert result["path_tracked"]
+        assert result["lidar_height"]["reason"] is None
+        assert result["lidar_height"]["filter_applied"]
+        assert result["lidar_height"]["cloud_stamp_ns"]<ros.clock_ns()
+        ros.now+=.3
+        node.on_lidar(cloud(points_scene(),ros.clock_ns()/1e9))
+        node.publish_state()
+        # The live stream is fresh, but a completed result still has a bounded
+        # total age; it cannot live forever after a long GPU operation.
+        assert ros.metrics()["lidar_height"]["reason"]=="lidar_stale"
+        assert ros.metrics()["drive_reason"]=="tracking_path_hold"
+        ros.now+=.6;node.publish_state()
+        assert ros.metrics()["lidar_height"]["reason"]=="lidar_stale"
+        assert ros.metrics()["drive_reason"]=="tracking_path_hold"
+    ros.run(scenario,"--lidar-to-base-transform",matrix_argument(np.eye(4)),
+            "--base-to-camera-transform",matrix_argument(CAMERA_FROM_BASE),
+            "--near-distance-m",".6","--far-distance-m","3",
+            "--search-half-width-m","2","--lidar-footprint-radius-m",".1",
+            "--bev-height-px","49","--bev-width-px","81","--branch-preference","center")
+
+
+def test_a2_vertical_profile_does_not_require_a_tf_publisher(monkeypatch):
+    ros=RosHarness(monkeypatch)
+    monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_HEIGHT_ENABLED","true")
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV,"LINE_TRACKING_STOP_ON_"+check.upper(),"false")
+    def scenario(node):
+        assert node.tf_buffer is None
+        ros.start(); ros.now+=.05; stamp=ros.clock_ns()/1e9
+        base,_=debug.a2_front_transforms("hesai_lidar","base_link","camera_optical_frame")
+        points=points_scene();raw=(points-base[:3,3])@base[:3,:3]
+        node.on_camera_info(camera_info(stamp,frame="camera_optical_frame"))
+        sample=imu(stamp);sample.linear_acceleration=NS(x=0.,y=9.81,z=0.)
+        node.on_lidar_imu(sample);node.on_lidar(cloud(raw,stamp))
+        image=Message();image.header.stamp=ros.stamp();image.header.frame_id="camera_optical_frame"
+        node.on_image(image)
+        deadline=time.perf_counter()+5
+        while True:
+            node.publish_state()
+            if ros.metrics()["inference_count"]:break
+            assert time.perf_counter()<deadline,ros.errors
+            time.sleep(.001)
+        result=ros.metrics()
+        assert result["lidar_height"]["reason"] is None
+        assert result["lidar_height"]["calibration_source"]=="unitree-a2-front"
+        assert result["lidar_height"]["filter_applied"]
+        assert result["path_tracked"]
+    ros.run(scenario,"--lidar-calibration-profile","unitree-a2-front",
+            "--lidar-to-base-transform","","--base-to-camera-transform","",
+            "--near-distance-m",".6","--far-distance-m","3",
+            "--search-half-width-m","2","--lidar-footprint-radius-m",".1",
+            "--bev-height-px","49","--bev-width-px","81","--branch-preference","center")
+
+
+def test_startup_sensor_failure_can_use_vision_but_a_valid_height_block_cannot(monkeypatch):
+    ros=RosHarness(monkeypatch)
+    monkeypatch.setitem(debug.ENV,"SWIN_L_LIDAR_HEIGHT_ENABLED","true")
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV,"LINE_TRACKING_STOP_ON_"+check.upper(),"false")
+    def scenario(node):
+        ros.start()
+        # No LiDAR inputs on the first camera frame.
+        image=Message();image.header.stamp=ros.stamp();node.on_image(image)
+        deadline=time.perf_counter()+5
+        while True:
+            node.publish_state()
+            if ros.metrics()["inference_count"]:break
+            assert time.perf_counter()<deadline,ros.errors
+            time.sleep(.001)
+        result=ros.metrics()
+        assert result["path_tracked"]
+        assert result["lidar_height"]["vision_fallback"]
+        assert result["lidar_height"]["reason"]=="lidar_waiting_for_cloud"
+        assert json.loads(ros.published[SPORT][-1].parameter)["x"]>0
+        blocked=points_scene();blocked[(blocked[:,0]>.9)&(blocked[:,0]<1.2),2]+=.15
+        result=feed_height(ros,node,blocked)
+        assert result["drive_reason"]=="lidar_path_unavailable"
+        assert not result["lidar_height"]["vision_fallback"]
+        assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
+        # Later sensor failure must not re-enable startup fallback after a real
+        # height result has established the current task's reference.
+        result=feed_height(ros,node,invalid_cloud=True)
+        assert not result["lidar_height"]["vision_fallback"]
+        assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
+    ros.run(scenario,"--lidar-to-base-transform",matrix_argument(np.eye(4)),
+            "--base-to-camera-transform",matrix_argument(CAMERA_FROM_BASE),
             "--near-distance-m",".6","--far-distance-m","3",
             "--search-half-width-m","2","--lidar-footprint-radius-m",".1",
             "--bev-height-px","49","--bev-width-px","81","--branch-preference","center")
@@ -190,7 +298,8 @@ def test_invalid_height_configuration_fails_before_startup(option,value):
     with pytest.raises(SystemExit): debug.parse_args(["ros2",option,value])
 
 
-def test_mcap_fuses_height_and_clears_path_at_a_reference_jump(tmp_path,monkeypatch):
+@pytest.mark.parametrize("profile", ["tf", "unitree-a2-front"])
+def test_mcap_fuses_height_and_clears_path_at_a_reference_jump(tmp_path,monkeypatch,profile):
     source=tmp_path/"unitree.mcap"; source.touch()
     frames=[]; paths=[]
     monkeypatch.setattr(debug,"_build_writer",lambda *_:NS(write=frames.append,release=lambda:None))
@@ -204,16 +313,23 @@ def test_mcap_fuses_height_and_clears_path_at_a_reference_jump(tmp_path,monkeypa
         assert debug.DEFAULT_LIDAR_TOPIC in topics
         for stamp,floor in [(100.,-.5),(100.5,-.35)]:
             image=Message(); image.header.stamp=NS(sec=int(stamp),nanosec=round(stamp%1*1e9))
-            for topic,msg in [(debug.DEFAULT_IMU_TOPIC,imu(stamp)),
-                              ("/camera/camera_info",camera_info(stamp)),
-                              (debug.DEFAULT_LIDAR_TOPIC,cloud(points_scene(floor=floor),stamp)),
+            points=points_scene(floor=floor);sample=imu(stamp)
+            if profile=="unitree-a2-front":
+                image.header.frame_id="camera_optical_frame"
+                base,_=debug.a2_front_transforms("hesai_lidar","base_link","camera_optical_frame")
+                points=(points-base[:3,3])@base[:3,:3]
+                sample.linear_acceleration=NS(x=0.,y=9.81,z=0.)
+            for topic,msg in [(debug.DEFAULT_IMU_TOPIC,sample),
+                              ("/camera/camera_info",camera_info(stamp,frame=image.header.frame_id)),
+                              (debug.DEFAULT_LIDAR_TOPIC,cloud(points,stamp)),
                               ("/camera/image_raw",image)]:
                 yield NS(name="sensor_msgs/msg/Image"),NS(topic=topic),NS(log_time=round(stamp*1e9)),msg
     monkeypatch.setattr(debug,"_iter_mcap_events",events)
+    matrices=["--lidar-to-base-transform",matrix_argument(np.eye(4)),
+              "--base-to-camera-transform",matrix_argument(CAMERA_FROM_BASE)] if profile=="tf" else []
     args=debug.parse_args(["mcap","--input",str(source),"--output",str(tmp_path/"out.mp4"),
                           "--report",str(tmp_path/"out.json"),"--image-topic","/camera/image_raw",
-                          "--lidar-height-enabled","--lidar-to-base-transform",matrix_argument(np.eye(4)),
-                          "--base-to-camera-transform",matrix_argument(CAMERA_FROM_BASE),
+                          "--lidar-height-enabled","--lidar-calibration-profile",profile,*matrices,
                           "--near-distance-m",".6","--far-distance-m","3",
                           "--search-half-width-m","2","--lidar-footprint-radius-m",".1",
                           "--bev-height-px","49","--bev-width-px","81","--branch-preference","center"])

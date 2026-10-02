@@ -1,6 +1,7 @@
 """Unitree PointCloud2 ground-height fusion, independent of ROS imports.
 
 Transforms are measured rigid transforms, never inferred from frame names.
+The optional A2 front profile reuses the rig's existing mounting calibration.
 Unknown cells remain unavailable. Each result uses one scan, without scan
 accumulation or per-point motion compensation.
 """
@@ -18,12 +19,37 @@ import numpy as np
 
 DEFAULT_LIDAR_TOPIC = "/unitree/slam_lidar/points1"
 DEFAULT_IMU_TOPIC = "/unitree/slam_lidar/imu1"
+CALIBRATION_PROFILES = ("tf", "unitree-a2-front")
+
+
+def a2_front_transforms(lidar_frame: str, base_frame: str,
+                        camera_frame: str) -> tuple[np.ndarray, np.ndarray]:
+    """A2 front JT128 mounting calibration, including the vertical sensor axes.
+
+    Source: Jetson teamgrit-slam/slam/src/grit_slam/config/profiles/
+    teamgrit_a2.yaml, T_body_lidar and T_lidar_camera (2026-10-02).
+    Camera pose is independently documented in apriltag_localization/config/
+    extrinsics.yaml from the A2 URDF. Selection is explicit, never automatic.
+    """
+    if (lidar_frame not in ("hesai_lidar", "unitree_lidar1")
+            or base_frame != "base_link" or camera_frame != "camera_optical_frame"):
+        raise ValueError("lidar_calibration_frame_mismatch")
+    base_from_lidar = np.array([
+        [0., 0., 1., .33767], [1., 0., 0., 0.],
+        [0., 1., 0., .08134], [0., 0., 0., 1.],
+    ])
+    camera_from_base = np.array([
+        [0., -1., 0., .0336], [0., 0., -1., .0525],
+        [1., 0., 0., -.3381], [0., 0., 0., 1.],
+    ])
+    return base_from_lidar, camera_from_base
 
 
 @dataclass(frozen=True)
 class LidarHeightConfig:
     max_age_sec: float = 0.5
     max_sync_sec: float = 0.15
+    max_result_age_sec: float = 1.0
     grid_resolution_m: float = 0.10
     max_up_m: float = 0.06
     max_down_m: float = 0.08
@@ -39,7 +65,7 @@ class LidarHeightConfig:
     min_cell_points: int = 3
 
     def validate(self) -> None:
-        for name in ("max_age_sec", "max_sync_sec", "grid_resolution_m", "max_up_m",
+        for name in ("max_age_sec", "max_sync_sec", "max_result_age_sec", "grid_resolution_m", "max_up_m",
                      "max_down_m", "max_reference_change_m", "footprint_radius_m", "seed_near_m", "seed_far_m",
                      "seed_half_width_m", "plane_threshold_m"):
             value = getattr(self, name)
@@ -142,6 +168,24 @@ class LidarInputs:
                 SensorSample(message, now)
             )
 
+    @staticmethod
+    def _check_freshness(sample: SensorSample, now: float,
+                         config: LidarHeightConfig, clock_ns: int | None) -> None:
+        source = stamp_ns(sample.message.header)
+        if (not -config.max_sync_sec <= now - sample.arrival_sec <= config.max_age_sec
+                or (clock_ns is not None and not -config.max_sync_sec <=
+                    (clock_ns - source) / 1e9 <= config.max_age_sec)):
+            raise ValueError("lidar_stale")
+
+    def check_cloud_freshness(self, now: float, config: LidarHeightConfig,
+                              clock_ns: int | None = None) -> None:
+        """Check the current stream independently of the scan used by inference."""
+        with self._lock:
+            sample = self._clouds[-1] if self._clouds else None
+        if sample is None:
+            raise ValueError("lidar_waiting_for_cloud")
+        self._check_freshness(sample, now, config, clock_ns)
+
     def snapshot(self, camera_header: Any, now: float, config: LidarHeightConfig,
                  clock_ns: int | None = None) -> tuple[SensorSample, Any, np.ndarray]:
         target = stamp_ns(camera_header)
@@ -155,10 +199,7 @@ class LidarInputs:
         source = stamp_ns(cloud.message.header)
         if abs(source - target) / 1e9 > config.max_sync_sec:
             raise ValueError("lidar_camera_unsynchronized")
-        if (now - cloud.arrival_sec > config.max_age_sec
-                or (clock_ns is not None and not -config.max_sync_sec <=
-                    (clock_ns - source) / 1e9 <= config.max_age_sec)):
-            raise ValueError("lidar_stale")
+        self._check_freshness(cloud, now, config, clock_ns)
         nearby = [s.message for s in imus
                   if abs(stamp_ns(s.message.header) - source) <= 150_000_000
                   and now - s.arrival_sec <= config.max_age_sec]
@@ -371,4 +412,5 @@ def fuse_height(selected_mask: np.ndarray, cloud: Any, camera_info: Any,
         point_count=len(raw), plane_normal_base=normal.tolist(), plane_offset_m=offset,
         plane_inlier_ratio=plane_ratio, allowed_bev_ratio=float(gate.mean()),
         max_up_m=config.max_up_m, max_down_m=config.max_down_m,
+        up_base=up.tolist(),
     ), camera_from_base, k, distortion)

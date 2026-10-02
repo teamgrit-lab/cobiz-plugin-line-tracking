@@ -64,8 +64,9 @@ from cobiz_line_tracking_task import (
 )
 from evaluate_mapillary_temporal import upscale_mask
 from lidar_height import (
-    DEFAULT_IMU_TOPIC, DEFAULT_LIDAR_TOPIC, HeightFusion, LidarHeightConfig,
-    LidarInputs, fuse_height, parse_transform, transform_matrix,
+    CALIBRATION_PROFILES, DEFAULT_IMU_TOPIC, DEFAULT_LIDAR_TOPIC, HeightFusion,
+    LidarHeightConfig, LidarInputs, a2_front_transforms, fuse_height,
+    parse_transform, transform_matrix,
 )
 from local_path import (
     DEFAULT_ROI_POLYGON,
@@ -602,7 +603,8 @@ def run_mcap(args: argparse.Namespace) -> int:
     lidar_inputs = LidarInputs()
     base_from_lidar = parse_transform(args.lidar_to_base_transform)
     camera_from_base = parse_transform(args.base_to_camera_transform)
-    if use_height and (base_from_lidar is None or camera_from_base is None):
+    if (use_height and args.lidar_calibration_profile == "tf"
+            and (base_from_lidar is None or camera_from_base is None)):
         raise ValueError("MCAP height fusion needs --lidar-to-base-transform and "
                          "--base-to-camera-transform; live ROS uses TF when they are blank")
     segmenter = BestSoFarSegmenter(_runtime_config(args))
@@ -673,6 +675,15 @@ def run_mcap(args: argparse.Namespace) -> int:
                             sample, info, up = lidar_inputs.snapshot(decoded.header, timestamp_sec, lidar_config)
                             if sample.message.header.frame_id != args.lidar_frame_id:
                                 raise ValueError("lidar_frame_mismatch")
+                            if args.lidar_calibration_profile == "unitree-a2-front":
+                                default_base, default_camera = a2_front_transforms(
+                                    sample.message.header.frame_id, "base_link",
+                                    decoded.header.frame_id,
+                                )
+                                base_from_lidar = (base_from_lidar if base_from_lidar is not None
+                                                   else default_base)
+                                camera_from_base = (camera_from_base if camera_from_base is not None
+                                                    else default_camera)
                             fusion = fuse_height(result.selected_mask, sample.message, info,
                                 frame.shape[:2], base_from_lidar, camera_from_base, up,
                                 lidar_config, local_config, (args.path_mask_class,), ground_reference)
@@ -939,6 +950,8 @@ def run_ros2(args: argparse.Namespace) -> int:
         "height_reasons": {key: "lidar_waiting_for_result" for key in smoothers},
         "height_fusion": None,
         "height_cloud_arrival": None,
+        "height_result_at": None,
+        "height_vision_fallback": False,
         "height_metrics": {},
         "lidar_input_fault": None,
     }
@@ -961,7 +974,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.base_from_lidar = parse_transform(args.lidar_to_base_transform)
             self.camera_from_base = parse_transform(args.base_to_camera_transform)
             self.tf_buffer = self.tf_listener = None
-            if args.lidar_height_enabled and (
+            if args.lidar_height_enabled and args.lidar_calibration_profile == "tf" and (
                 self.base_from_lidar is None or self.camera_from_base is None
             ):
                 from tf2_ros import Buffer, TransformListener
@@ -1197,6 +1210,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 state["height_reasons"] = {key: "lidar_waiting_for_result" for key in smoothers}
                 state["height_fusion"] = None
                 state["height_cloud_arrival"] = None
+                state["height_result_at"] = None
+                state["height_vision_fallback"] = False
                 state["height_metrics"] = {}
                 for key in (
                     "performance_inference_seconds", "performance_processing_seconds",
@@ -1240,7 +1255,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 last_inference_stamp_ns = state["last_inference_stamp_ns"]
                 path = smoothers[mask_class].current(now)
                 height_reason = self.height_reason(mask_class, now)
-                if height_reason is not None:
+                if height_reason is not None and not state["height_vision_fallback"]:
                     path = None
                 self.path_unavailable_inferences = state["path_unavailable_inferences"][
                     mask_class
@@ -1428,16 +1443,24 @@ def run_ros2(args: argparse.Namespace) -> int:
                     state["lidar_input_fault"] = "lidar_input_invalid"
 
         def build_height(self, packet: FramePacket, mask: np.ndarray,
-                         reference_plane: tuple[np.ndarray, float] | None = None
+                         reference_plane: tuple[np.ndarray, float] | None = None,
+                         *, sensor_snapshot: tuple[Any, Any, np.ndarray],
                          ) -> tuple[HeightFusion, float]:
-            cloud, info, up = lidar_inputs.snapshot(
-                packet.source_header, time.monotonic(), lidar_config,
-                self.get_clock().now().nanoseconds,
-            )
+            cloud, info, up = sensor_snapshot
             if cloud.message.header.frame_id != args.lidar_frame_id:
                 raise ValueError("lidar_frame_mismatch")
             base_from_lidar = self.base_from_lidar
             camera_from_base = self.camera_from_base
+            calibration_source = "explicit_matrix"
+            if ((base_from_lidar is None or camera_from_base is None)
+                    and args.lidar_calibration_profile == "unitree-a2-front"):
+                default_base, default_camera = a2_front_transforms(
+                    cloud.message.header.frame_id, args.path_frame_id,
+                    packet.source_header.frame_id,
+                )
+                base_from_lidar = (base_from_lidar if base_from_lidar is not None else default_base)
+                camera_from_base = (camera_from_base if camera_from_base is not None else default_camera)
+                calibration_source = "unitree-a2-front"
             if base_from_lidar is None or camera_from_base is None:
                 from rclpy.time import Time
 
@@ -1454,10 +1477,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                         ).transform)
                 except Exception as error:
                     raise ValueError("lidar_transform_unavailable") from error
+                calibration_source = "tf"
             fusion = fuse_height(mask, cloud.message, info,
                                  (packet.image_message.height, packet.image_message.width),
                                  base_from_lidar, camera_from_base, up,
                                  lidar_config, local_config, tuple(smoothers), reference_plane)
+            fusion.metrics.update(calibration_source=calibration_source,
+                                  camera_cloud_delta_sec=(
+                                      _stamp_ns(packet.source_header)-fusion.metrics["cloud_stamp_ns"]
+                                  )/1e9)
             return fusion, cloud.arrival_sec
 
         def height_reason(self, mask_class: int, now: float) -> str | None:
@@ -1473,11 +1501,17 @@ def run_ros2(args: argparse.Namespace) -> int:
             if reason is not None:
                 return reason
             fusion = state["height_fusion"]
-            age = _effective_source_age_sec(
-                state["height_cloud_arrival"], fusion.metrics["cloud_stamp_ns"],
-                now, self.get_clock().now().nanoseconds,
-            )
-            if age is None or age > lidar_config.max_age_sec or age < -lidar_config.max_sync_sec:
+            # The matched scan was checked before GPU inference. Its source age
+            # must not be charged again for the model's own processing latency.
+            # Keep stream freshness and the total result latency independent.
+            try:
+                lidar_inputs.check_cloud_freshness(
+                    now, lidar_config, self.get_clock().now().nanoseconds,
+                )
+            except ValueError as error:
+                return str(error)
+            result_at = state["height_result_at"]
+            if result_at is None or not 0 <= now-result_at <= lidar_config.max_result_age_sec:
                 return "lidar_stale"
             path = smoothers[mask_class].current(now)
             if path is not None and path.stop_reason is None and not metric_path_supported(
@@ -1596,7 +1630,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             else:
                 path = smoothers[mask_class].current(now)
                 with state_lock:
-                    if self.height_reason(mask_class, now) is not None:
+                    if (self.height_reason(mask_class, now) is not None
+                            and not state["height_vision_fallback"]):
                         path = None
             # Real callbacks keep refreshing liveness after completion. Retain
             # the terminal display independently until control is released.
@@ -1607,6 +1642,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                     **state["height_metrics"], "enabled": args.lidar_height_enabled,
                     "topic": args.lidar_topic,
                     "reason": self.height_reason(mask_class, now),
+                    "filter_applied": path is not None and state["height_fusion"] is not None
+                                      and self.height_reason(mask_class, now) is None,
+                    "vision_fallback": state["height_vision_fallback"],
                 },
                 "profile": args.profile,
                 "camera_topic": args.image_topic,
@@ -1729,6 +1767,16 @@ def run_ros2(args: argparse.Namespace) -> int:
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
+                sensor_snapshot = None
+                height_error = None
+                if args.lidar_height_enabled:
+                    try:
+                        sensor_snapshot = lidar_inputs.snapshot(
+                            packet.source_header, time.monotonic(), lidar_config,
+                            node.get_clock().now().nanoseconds,
+                        )
+                    except ValueError as error:
+                        height_error = str(error)
                 result: BestSoFarResult = segmenter.segment(
                     frame_rgb, color_order="rgb"
                 )
@@ -1741,20 +1789,32 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path_updated_at = time.monotonic()
                 fusion = None
                 cloud_arrival = None
-                height_error = None
                 height_reason = None
                 if args.lidar_height_enabled:
                     try:
-                        fusion, cloud_arrival = node.build_height(packet, result.selected_mask, ground_reference)
+                        if height_error is not None:
+                            raise ValueError(height_error)
+                        fusion, cloud_arrival = node.build_height(
+                            packet, result.selected_mask, ground_reference,
+                            sensor_snapshot=sensor_snapshot,
+                        )
                     except (ValueError, cv2.error) as error:
                         height_error = str(error)
                         height_reason = (
                             height_error if height_error.startswith("lidar_")
                             else "lidar_processing_error"
                         )
+                # Startup has no saved motion command. Until the first valid
+                # height result, use the existing image path instead of making
+                # calibration/sensor failures an implicit startup stop. Once a
+                # height result has existed, failures retain command-hold policy;
+                # a real height exclusion must never be bypassed by fallback.
+                vision_fallback = (args.lidar_height_enabled and fusion is None
+                                   and ground_reference is None
+                                   and args.lidar_startup_vision_fallback)
                 estimates = (
                     {key: None for key in smoothers}
-                    if args.lidar_height_enabled and fusion is None
+                    if args.lidar_height_enabled and fusion is None and not vision_fallback
                     else extract_path_estimates(
                         result.selected_mask, tuple(smoothers), local_config, fusion
                     )
@@ -1762,6 +1822,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
+                    if vision_fallback != state["height_vision_fallback"]:
+                        for smoother in smoothers.values():
+                            smoother.reset(preserve_branch=True)
                     # Publish paths, loss streaks and source freshness as one
                     # completed inference. Timer ticks never advance a streak.
                     for mask_class, smoother in smoothers.items():
@@ -1773,7 +1836,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                             if reason is None and estimates[mask_class] is None:
                                 reason = "lidar_path_unavailable"
                             current = smoother.current(path_updated_at)
-                            if (reason is None and current is not None and current.stop_reason is None
+                            if (fusion is not None and reason is None and current is not None and current.stop_reason is None
                                     and not metric_path_supported(current.points_xy,
                                         fusion.regions[mask_class], fusion.x_values, fusion.y_values)):
                                 reason = "lidar_path_blocked"
@@ -1786,8 +1849,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                         state["height_fusion"] = fusion
                         state["height_cloud_arrival"] = cloud_arrival
                         state["height_metrics"] = fusion.metrics if fusion else {"error": height_error}
+                        state["height_vision_fallback"] = vision_fallback
+                        # Bound the complete pipeline, including GPU work. A
+                        # very slow result does not gain a fresh lifetime simply
+                        # because inference finally completed.
+                        state["height_result_at"] = inference_started_at if fusion is not None else None
                         state["lidar_input_fault"] = None
                     inference_finished_at = time.monotonic()
+                    if fusion is not None:
+                        fusion.metrics["processing_latency_sec"] = inference_finished_at-inference_started_at
                     if task_mode:
                         if packet.sequence >= state["camera_fault_min_sequence"]:
                             state["camera_fault_reason"] = None
@@ -1861,6 +1931,12 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lidar-imu-topic", default=_env("SWIN_L_LIDAR_IMU_TOPIC", DEFAULT_IMU_TOPIC))
     parser.add_argument("--camera-info-topic", default=_env("SWIN_L_CAMERA_INFO_TOPIC", ""))
     parser.add_argument("--lidar-frame-id", default=_env("SWIN_L_LIDAR_FRAME_ID", "hesai_lidar"))
+    parser.add_argument("--lidar-calibration-profile", choices=CALIBRATION_PROFILES,
+                        default=_env("SWIN_L_LIDAR_CALIBRATION_PROFILE", "tf"),
+                        help="tf/custom matrices or the calibrated A2 front vertical mount")
+    parser.add_argument("--lidar-startup-vision-fallback", action=argparse.BooleanOptionalAction,
+                        default=_env_bool("SWIN_L_LIDAR_STARTUP_VISION_FALLBACK", True),
+                        help="use an image path on sensor/calibration failure before the first height result")
     parser.add_argument("--lidar-to-base-transform", default=_env("SWIN_L_LIDAR_TO_BASE_TRANSFORM", ""),
                         help="16 row-major base_link-from-lidar matrix values; blank uses TF")
     parser.add_argument("--base-to-camera-transform", default=_env("SWIN_L_BASE_TO_CAMERA_TRANSFORM", ""),
@@ -2139,6 +2215,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args.camera_info_topic = args.camera_info_topic or _camera_info_topic(args.image_topic)
     try:
         _lidar_config_from_args(args).validate()
+        if args.lidar_calibration_profile not in CALIBRATION_PROFILES:
+            raise ValueError("invalid lidar calibration profile")
         parse_transform(args.lidar_to_base_transform)
         parse_transform(args.base_to_camera_transform)
     except ValueError as error:

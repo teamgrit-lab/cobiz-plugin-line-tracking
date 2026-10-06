@@ -68,6 +68,11 @@ class RosHarness:
         # Existing lifecycle scenarios explicitly exercise all enabled guards.
         for check in debug.AUTOMATIC_STOP_CHECKS:
             monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "true")
+        # The id-only scenarios feed bare detections; the range gate has its own
+        # scenarios below that enable it with real corners and calibration.
+        monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MAX_RANGE_M", "0")
+        monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MIN_DECISION_MARGIN", "0")
+        monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_ALLOWED_IDS", "")
         self.now = 0.0
         self.external_publishers = 0
         self.published = {}
@@ -227,6 +232,21 @@ class RosHarness:
         message.detections = [] if tag_id is None else [SimpleNamespace(id=tag_id)]
         self.subscriptions["/detections"](message)
 
+    def detect_at(self, tag_id, distance_m, frame, *, margin=50.0):
+        message = AprilTagDetectionArray()
+        message.header.stamp.nanosec = frame
+        message.detections = [
+            SimpleNamespace(
+                id=tag_id,
+                decision_margin=margin,
+                corners=[
+                    SimpleNamespace(x=float(u), y=float(v))
+                    for u, v in project_tag(distance_m)
+                ],
+            )
+        ]
+        self.subscriptions["/detections"](message)
+
     def task_state(self):
         return json.loads(self.published["/task_state"][-1].data)
 
@@ -276,6 +296,99 @@ class RosHarness:
 @pytest.fixture
 def ros(monkeypatch):
     return RosHarness(monkeypatch)
+
+
+# Live /a2/front_camera/res_720p/camera_info, 2026-10-06.
+A2_K = (535.088326, 0.0, 643.406605, 0.0, 532.843368, 355.973065, 0.0, 0.0, 1.0)
+A2_D = (-2.13869731, 0.77162026, 0.00048845, -0.001401,
+        0.42753978, -1.85354262, 0.07940282, 0.84793409)
+
+
+def project_tag(distance_m, size_m=0.167):
+    import cv2
+
+    half = size_m / 2.0
+    square = np.array(
+        [[-half, half, 0.0], [half, half, 0.0], [half, -half, 0.0], [-half, -half, 0.0]]
+    )
+    pixels, _ = cv2.projectPoints(
+        square, np.zeros(3), np.array([0.0, 0.0, distance_m]),
+        np.array(A2_K).reshape(3, 3), np.array(A2_D),
+    )
+    return pixels.reshape(4, 2)
+
+
+def a2_camera_info():
+    info = Message()
+    info.k, info.d, info.distortion_model = A2_K, A2_D, "rational_polynomial"
+    return info
+
+
+def enable_range_gate(monkeypatch):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MAX_RANGE_M", "3.0")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MIN_DECISION_MARGIN", "15")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_ALLOWED_IDS", "0-30")
+
+
+def test_far_tag_keeps_tracking_and_tag_within_range_stops(ros, monkeypatch):
+    enable_range_gate(monkeypatch)
+
+    def scenario(node):
+        ros.subscriptions[debug.DEFAULT_APRILTAG_CAMERA_INFO_TOPIC](a2_camera_info())
+        ros.establish_tracking()
+        sport_start = len(ros.published[SPORT])
+        # Visible, decodable, allowed -- but 4.5 m out, a faint tag (margin 5)
+        # and a foreign id: none may interrupt tracking.
+        for frame, now in enumerate((2.2, 2.4, 2.6, 2.8, 3.0, 3.2), start=1):
+            ros.now = now
+            ros.detect_at(7, 4.5, frame)
+            ros.detect_at(7, 2.0, frame + 100, margin=5.0)
+            ros.detect_at(31, 2.0, frame + 200)
+            node.publish_state()
+            assert ros.metrics()["drive_reason"] == "tracking"
+            assert ros.metrics()["apriltag"]["state"] == "no_tag"
+        assert all(
+            message.header.identity.api_id != 1003
+            for message in ros.published[SPORT][sport_start:]
+        )
+        assert ros.task_state()["type"] == "TASK_STARTED"
+
+        for frame, now in enumerate((3.3, 3.4, 3.5), start=10):
+            ros.now = now
+            ros.detect_at(7, 2.8, frame)
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "apriltag_verifying"
+        assert ros.metrics()["apriltag"]["candidate_ranges_m"]["7"] == pytest.approx(
+            2.8, rel=0.02
+        )
+        ros.now = 4.3
+        completion_start = len(ros.events)
+        ros.detect_at(7, 2.6, 20)
+        ros.hard_stop_before_task_state(
+            completion_start, "TASK_COMPLETED", "apriltag_confirmed:7"
+        )
+        node.publish_state()
+        assert ros.metrics()["apriltag"]["confirmed_range_m"] == pytest.approx(
+            2.6, rel=0.02
+        )
+
+    ros.run(scenario)
+
+
+def test_range_gate_without_calibration_never_stops(ros, monkeypatch):
+    enable_range_gate(monkeypatch)
+
+    def scenario(node):
+        ros.establish_tracking()
+        for frame, now in enumerate((2.2, 2.4, 2.6, 2.8, 3.4), start=1):
+            ros.now = now
+            ros.detect_at(7, 1.0, frame)
+            node.publish_state()
+            assert ros.metrics()["drive_reason"] == "tracking"
+        assert ros.metrics()["apriltag"]["camera_info_ready"] is False
+        assert ros.task_state()["type"] == "TASK_STARTED"
+
+    ros.run(scenario)
 
 
 def test_r50_task_drive_accepts_720p_rgb_and_keeps_camera_stop(ros, monkeypatch):
@@ -1177,6 +1290,10 @@ def test_tag_metrics_report_verification_and_confirmation(ros):
             "hit_counts": {},
             "confirmed_id": None,
             "window_elapsed_sec": None,
+            "max_range_m": 0.0,
+            "camera_info_ready": False,
+            "candidate_ranges_m": {},
+            "confirmed_range_m": None,
         }
         ros.start()
         ros.detect(tag_id=7, frame=1)
@@ -1193,6 +1310,10 @@ def test_tag_metrics_report_verification_and_confirmation(ros):
             "hit_counts": {"7": 2},
             "confirmed_id": None,
             "window_elapsed_sec": 0.1,
+            "max_range_m": 0.0,
+            "camera_info_ready": False,
+            "candidate_ranges_m": {"7": None},
+            "confirmed_range_m": None,
         }
         assert "/line_tracking/swin_l/overlay" not in ros.published
         ros.now = 0.2

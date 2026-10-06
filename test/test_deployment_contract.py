@@ -88,6 +88,12 @@ def test_default_compose_is_cobiz_task_listener():
         ":-1.0}"
     )
     assert listener["environment"]["SWIN_L_APRILTAG_CONFIRM_MIN_HITS"].endswith(":-3}")
+    assert listener["environment"]["SWIN_L_APRILTAG_MAX_RANGE_M"].endswith(":-3.0}")
+    assert listener["environment"]["SWIN_L_APRILTAG_MIN_DECISION_MARGIN"].endswith(
+        ":-15}"
+    )
+    assert listener["environment"]["SWIN_L_APRILTAG_ALLOWED_IDS"].endswith(":-0-30}")
+    assert listener["environment"]["SWIN_L_APRILTAG_TAG_SIZE_M"].endswith(":-0.167}")
     assert listener["environment"]["LINE_TRACKING_TASK_EVENT_TOPIC"].endswith(
         "/task_event}"
     )

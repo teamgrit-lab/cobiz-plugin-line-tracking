@@ -42,7 +42,15 @@ from typing import Any, Sequence
 import cv2
 import numpy as np
 import torch
-from apriltag_stop import AprilTagDecision, AprilTagPolicy, AprilTagStopMonitor
+from apriltag_stop import (
+    AprilTagDecision,
+    AprilTagGate,
+    AprilTagPolicy,
+    AprilTagStopMonitor,
+    camera_model_from_info,
+    gate_detections,
+    parse_tag_ids,
+)
 from best_so_far_runtime import (
     DEFAULT_EVALUATION_SIZE,
     FINETUNED_PROFILE,
@@ -101,6 +109,8 @@ from unitree_sport_api import (
 )
 
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
+# Published by apriltag_camera_relay, paired with each detector frame.
+DEFAULT_APRILTAG_CAMERA_INFO_TOPIC = "/line_tracking/apriltag/camera_info"
 DEFAULT_LOCAL_PATH_TOPIC = "/line_tracking/swin_l/local_path"
 DEFAULT_METRICS_TOPIC = "/line_tracking/swin_l/metrics"
 PERFORMANCE_WARMUP_FRAMES = 10
@@ -1023,6 +1033,21 @@ def run_ros2(args: argparse.Namespace) -> int:
                 if task_mode
                 else None
             )
+            self.apriltag_gate = (
+                AprilTagGate(
+                    max_range_m=args.apriltag_max_range_m,
+                    min_decision_margin=args.apriltag_min_decision_margin,
+                    allowed_ids=parse_tag_ids(args.apriltag_allowed_ids),
+                    tag_size_m=args.apriltag_tag_size_m,
+                )
+                if task_mode
+                else None
+            )
+            if self.apriltag_gate is not None:
+                self.apriltag_gate.validate()
+            self.apriltag_camera = None
+            self.latest_apriltag_ranges: dict[int, float | None] = {}
+            self.apriltag_confirmed_range_m: float | None = None
             self.apriltag_callback_sequence = 0
             self.latest_apriltag_ids: tuple[int, ...] = ()
             self.latest_apriltag_frame_key = 0
@@ -1098,6 +1123,20 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.on_apriltag_detections,
                     apriltag_qos,
                 )
+                if args.apriltag_max_range_m > 0.0:
+                    from sensor_msgs.msg import CameraInfo
+
+                    # The relay publishes this paired with each detector frame.
+                    self.apriltag_camera_info_subscription = self.create_subscription(
+                        CameraInfo,
+                        args.apriltag_camera_info_topic,
+                        self.on_apriltag_camera_info,
+                        QoSProfile(
+                            history=HistoryPolicy.KEEP_LAST,
+                            depth=1,
+                            reliability=ReliabilityPolicy.BEST_EFFORT,
+                        ),
+                    )
             self.timer = self.create_timer(1.0 / args.output_hz, self.publish_state)
             self.started = time.monotonic()
             self.get_logger().info(
@@ -1156,6 +1195,11 @@ def run_ros2(args: argparse.Namespace) -> int:
             if not args.stop_on_apriltag:
                 return
             reason = f"apriltag_confirmed:{tag_id}"
+            distance = self.apriltag_confirmed_range_m
+            self.get_logger().info(
+                "AprilTag %d confirmed at %s camera range; stopping line tracking"
+                % (tag_id, "unchecked" if distance is None else f"{distance:.2f} m")
+            )
             if not self.publish_hard_stop(reason):
                 self.abort_active_task("stop_publish_error")
                 return
@@ -1170,14 +1214,26 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.publish_task_state(body)
             self.stop_until = time.monotonic() + 1.0
 
+        def on_apriltag_camera_info(self, message: Any) -> None:
+            camera = camera_model_from_info(message)
+            if camera is None:
+                self.get_logger().warning(
+                    "AprilTag range gate cannot use camera_info distortion model %r; "
+                    "tags will not stop tracking" % getattr(message, "distortion_model", "")
+                )
+            self.apriltag_camera = camera
+
         def on_apriltag_detections(self, message: Any) -> None:
             now = time.monotonic()
             stamp_ns = _stamp_ns(message.header)
             self.apriltag_callback_sequence += 1
             frame_key = stamp_ns if stamp_ns > 0 else self.apriltag_callback_sequence
-            self.latest_apriltag_ids = tuple(
-                int(detection.id) for detection in message.detections
+            # Only a tag TAG_APPROACH could take over from may stop tracking:
+            # a far, faint or foreign tag is treated as no tag at all.
+            self.latest_apriltag_ranges = gate_detections(
+                message.detections, self.apriltag_gate, self.apriltag_camera
             )
+            self.latest_apriltag_ids = tuple(sorted(self.latest_apriltag_ranges))
             self.latest_apriltag_frame_key = frame_key
             decision = self.apriltags.observe(
                 ids=self.latest_apriltag_ids,
@@ -1193,6 +1249,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.abort_active_task("stop_publish_error")
                 return
             if decision.just_confirmed:
+                self.apriltag_confirmed_range_m = self.latest_apriltag_ranges.get(
+                    decision.confirmed_id
+                )
                 self.complete_apriltag_task(decision.confirmed_id)
 
         def set_task_inference(self, enabled: bool) -> None:
@@ -1343,6 +1402,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if body["type"] == "TASK_STARTED":
                 self.set_task_inference(False)
                 self.terminal_apriltag_status = None
+                self.apriltag_confirmed_range_m = None
                 self.apriltag_window_resolved_at = None
                 try:
                     assert Request is not None
@@ -1705,6 +1765,17 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "hit_counts": dict(tag_status.hit_counts),
                     "confirmed_id": tag_status.confirmed_id,
                     "window_elapsed_sec": tag_status.window_elapsed_sec,
+                    "max_range_m": args.apriltag_max_range_m,
+                    "camera_info_ready": self.apriltag_camera is not None,
+                    "candidate_ranges_m": {
+                        str(tag_id): distance
+                        for tag_id, distance in self.latest_apriltag_ranges.items()
+                    },
+                    "confirmed_range_m": (
+                        self.apriltag_confirmed_range_m
+                        if tag_status.confirmed_id is not None
+                        else None
+                    ),
                 }
             if self.drive_config is not None:
                 lateral = path_target_lateral(path, self.drive_config.lookahead_m)
@@ -2241,6 +2312,34 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 "--apriltag-confirm-min-hits",
                 type=int,
                 default=_env_int("SWIN_L_APRILTAG_CONFIRM_MIN_HITS", 3),
+            )
+            live.add_argument(
+                "--apriltag-max-range-m",
+                type=float,
+                default=_env_float("SWIN_L_APRILTAG_MAX_RANGE_M", 3.0),
+                help="Only tags within this camera range stop tracking (0 disables)",
+            )
+            live.add_argument(
+                "--apriltag-min-decision-margin",
+                type=float,
+                default=_env_float("SWIN_L_APRILTAG_MIN_DECISION_MARGIN", 15.0),
+            )
+            live.add_argument(
+                "--apriltag-allowed-ids",
+                default=_env("SWIN_L_APRILTAG_ALLOWED_IDS", ""),
+                help='Ids that may stop tracking, e.g. "0-30"; blank means any',
+            )
+            live.add_argument(
+                "--apriltag-tag-size-m",
+                type=float,
+                default=_env_float("SWIN_L_APRILTAG_TAG_SIZE_M", 0.167),
+            )
+            live.add_argument(
+                "--apriltag-camera-info-topic",
+                default=_env(
+                    "SWIN_L_APRILTAG_RANGE_CAMERA_INFO_TOPIC",
+                    DEFAULT_APRILTAG_CAMERA_INFO_TOPIC,
+                ),
             )
             live.add_argument(
                 "--sport-request-topic",

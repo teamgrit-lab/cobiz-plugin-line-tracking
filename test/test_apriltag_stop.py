@@ -5,7 +5,20 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from apriltag_stop import AprilTagPolicy, AprilTagStopMonitor
+from types import SimpleNamespace
+
+import numpy as np
+
+from apriltag_stop import (
+    AprilTagGate,
+    AprilTagPolicy,
+    AprilTagStopMonitor,
+    CameraModel,
+    camera_model_from_info,
+    gate_detections,
+    parse_tag_ids,
+    tag_range_m,
+)
 
 
 def monitor():
@@ -141,3 +154,98 @@ def test_begin_task_does_not_seed_stale_or_empty_cache(ids, now):
 def test_policy_rejects_nonpositive_nonfinite_or_boolean_values(policy):
     with pytest.raises(ValueError):
         AprilTagStopMonitor(policy)
+
+
+# Live /a2/front_camera/res_720p/camera_info, 2026-10-06.
+A2_INFO = SimpleNamespace(
+    k=(535.088326, 0.0, 643.406605, 0.0, 532.843368, 355.973065, 0.0, 0.0, 1.0),
+    d=(-2.13869731, 0.77162026, 0.00048845, -0.001401,
+       0.42753978, -1.85354262, 0.07940282, 0.84793409),
+    distortion_model="rational_polynomial",
+)
+A2 = camera_model_from_info(A2_INFO)
+
+
+def project(distance_m, *, yaw_deg=0.0, lateral_m=0.0, size_m=0.167):
+    import cv2
+
+    half = size_m / 2.0
+    square = np.array(
+        [[-half, half, 0.0], [half, half, 0.0], [half, -half, 0.0], [-half, -half, 0.0]]
+    )
+    rvec = np.array([0.0, np.radians(yaw_deg), 0.0])
+    forward = np.sqrt(distance_m**2 - lateral_m**2)
+    pixels, _ = cv2.projectPoints(
+        square, rvec, np.array([lateral_m, 0.0, forward]),
+        np.array(A2_INFO.k).reshape(3, 3), np.array(A2_INFO.d),
+    )
+    return [tuple(point) for point in pixels.reshape(4, 2)]
+
+
+def detection(tag_id, distance_m, *, margin=50.0, **pose):
+    return SimpleNamespace(
+        id=tag_id,
+        decision_margin=margin,
+        corners=[SimpleNamespace(x=u, y=v) for u, v in project(distance_m, **pose)],
+    )
+
+
+def test_a2_calibration_is_usable_and_unknown_models_are_not():
+    assert A2 == CameraModel(A2_INFO.k, A2_INFO.d, False)
+    assert camera_model_from_info(SimpleNamespace(k=A2_INFO.k, d=(), distortion_model="")) is None
+    assert camera_model_from_info(SimpleNamespace(k=(0.0,) * 9, d=A2_INFO.d,
+                                                  distortion_model="rational_polynomial")) is None
+
+
+@pytest.mark.parametrize("distance", [0.8, 2.0, 3.0, 4.5, 6.0])
+@pytest.mark.parametrize("pose", [{}, {"yaw_deg": 35.0}, {"lateral_m": 0.6}])
+def test_range_recovers_distance_through_the_wide_angle_distortion(distance, pose):
+    assert tag_range_m(project(distance, **pose), 0.167, A2) == pytest.approx(
+        distance, rel=0.01
+    )
+
+
+def test_range_ignores_corner_winding_and_rejects_bad_corners():
+    corners = project(2.5)
+    assert tag_range_m(corners[::-1], 0.167, A2) == pytest.approx(2.5, rel=0.01)
+    assert tag_range_m(corners[:3], 0.167, A2) is None
+    assert tag_range_m([(float("nan"), 0.0)] * 4, 0.167, A2) is None
+
+
+def test_parse_tag_ids():
+    assert parse_tag_ids("") == frozenset()
+    assert parse_tag_ids("0-3, 7,9") == frozenset({0, 1, 2, 3, 7, 9})
+    with pytest.raises(ValueError):
+        parse_tag_ids("5-2")
+
+
+def test_gate_keeps_only_tags_tag_approach_could_take_over():
+    gate = AprilTagGate(max_range_m=3.0, min_decision_margin=15.0,
+                        allowed_ids=parse_tag_ids("0-30"))
+    gate.validate()
+    accepted = gate_detections(
+        [
+            detection(1, 2.9),
+            detection(2, 3.2),               # beyond range
+            detection(3, 1.5, margin=10.0),  # faint
+            detection(31, 1.5),              # not a tank tag
+            detection(1, 1.2),               # nearer duplicate wins
+        ],
+        gate,
+        A2,
+    )
+    assert set(accepted) == {1}
+    assert accepted[1] == pytest.approx(1.2, rel=0.01)
+
+
+def test_gate_without_calibration_accepts_nothing_unless_range_is_disabled():
+    near = [detection(4, 1.0)]
+    assert gate_detections(near, AprilTagGate(), None) == {}
+    assert gate_detections(near, AprilTagGate(max_range_m=0.0), None) == {4: None}
+
+
+def test_gate_rejects_invalid_limits():
+    for gate in (AprilTagGate(max_range_m=-1.0), AprilTagGate(tag_size_m=0.0),
+                 AprilTagGate(min_decision_margin=float("nan"))):
+        with pytest.raises(ValueError):
+            gate.validate()

@@ -46,9 +46,15 @@ path on sensor/calibration failure by default and reports `vision_fallback=true`
   `metrics.inference_enabled` reports whether the worker accepts frames;
   `inference_count` counts published results over the process lifetime. Timing
   samples are cleared between tasks so idle time does not distort throughput.
-- With path stops disabled, loss of a path holds the current task's last valid
-  forward speed and yaw without a failure-count limit. Camera/inference stalls
-  alone do not stop motion when their checks are disabled.
+- Visual path loss retains the last valid forward speed with zero yaw for the
+  first two failed inferences, then stops on the third. One second after that
+  stop, the robot searches in place to 90 degrees left and 90 degrees right of
+  its heading at the stop, returning to that heading if neither side yields a path.
+  `LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION=left` selects left first (default);
+  `right` reverses the search order.
+  Two fresh, confident path results are required to resume. Search requires fresh
+  sensor data even when ordinary stale-input stops are disabled.
+  With recovery disabled, path loss follows the configurable saved-command policy.
   A lost or ambiguous committed fork is an exception: it publishes zero motion
   and clears the saved command until the selected branch can be matched again.
   Valid LiDAR results that exclude the path also override command retention.
@@ -69,7 +75,7 @@ Move API ID `1008`). It bypasses navigation-level command arbitration and does
 not reject or abort a task when other publishers exist. Concurrent publishers
 can therefore issue conflicting commands, and the downstream Unitree interface
 determines which command takes effect. Move serialization preserves the existing
-axis mapping: `x=vx`, `y=-vy`, and `z=-yaw_rate`. The forward speed ceiling defaults to
+axis mapping: `x=vx`, `y=-vy`, and `z=yaw_rate`. The forward speed ceiling defaults to
 `0.50 m/s`, can be adjusted through
 `LINE_TRACKING_MAX_FORWARD_MPS`, and is rejected above the hard `1.00 m/s`
 limit.
@@ -240,26 +246,57 @@ LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 | `TASK_TIMEOUT` | 요청한 작업 시간 도달 시 정지·종료. 기본 500초, 최대 10000초 |
 
 `LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED=true`가 기본값이다. 주행 중 영상 검출에서
-선택한 차도/인도 경로를 찾지 못하면 `tracking_path_recovery`로 마지막 유효 전진
-속도를 유지하고 회전 명령을 0으로 바꾼다. 급회전 때문에 줄어든 속도도 유지하며,
-작업 시작부터 경로가 없었다면 `waiting_for_path`로 0 속도 대기한다.
+선택한 차도/인도 경로를 잃으면 기존처럼 첫 1–2회 실패 동안 `tracking_path_recovery`로
+마지막 유효 전진 속도를 유지하고 회전 명령은 0으로 바꾼다. 급회전 때문에 줄어든
+전진 속도도 유지한다. 3번째 추론에서 경로가 다시 보이면 즉시 추종을 재개한다.
+3번째도 실패하면 전진·회전을 0으로 바꾸고 `path_recovery_waiting`으로 대기한다.
+기본 대기 시간은 **정지 명령을 발행한 뒤부터 1초**이며, 최초 소실부터 세지 않는다.
+실패 횟수는 선택한 클래스의 완료된 추론 결과로만 증가하고 제어 발행은 추가로 세지 않는다.
+작업 시작부터 경로가 없었다면 `waiting_for_path`로 대기하며 자동 회전하지 않는다.
 
-연속 검출 실패 1–2회 동안 직진하고, 3번째 추론에서 경로를 찾으면 바로 추종을
-재개한다. 3번째도 실패하면 `path_recovery_exhausted`로 정지한다. 이후 경로를
-다시 찾으면 재개하며 실패 횟수를 0으로 초기화한다. 작업 시작·종료 시에도 저장
-명령과 횟수를 초기화한다. 횟수는 선택한 클래스의 **완료된 추론 결과**로만 세며,
-카메라 수신이나 10Hz 제어 발행은 추가 실패로 세지 않는다. 마지막 경로가 smoother에
-남아 있어도 새 검출에서 경로를 잃은 즉시 직진 복구를 시작한다.
+대기 후 제자리에서 정지 당시 방향을 기준으로 **왼쪽 +90° → 오른쪽 -90° → 원래 0°**를
+기본 순서로 탐색한다. `.env`의 `LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION=right`로
+설정하면 **오른쪽 -90° → 왼쪽 +90° → 원래 0°** 순서로 바뀐다. `left`이면 왼쪽을 먼저
+탐색한다. 첫 번째 끝에서 반대쪽 끝으로 가는 회전량은 180°다. 탐색 중 전진·횡이동은
+항상 0이고 회전 속도는 기본 0.18rad/s(약 10.3°/s)다. 각 끝에서는 그 방향에서 촬영한
+새 영상의 추론이 완료될 때까지 정지해 확인한다. 탐색 중 선택한 클래스의 경로가
+보이면 일단 정지하고 `path_recovery_confirming`으로 확인한다. 신뢰도 0.49 이상인
+서로 다른 새 추론 결과가 기본 2회 연속 확인되어야 주행을 재개한다. 첫 확인 후에는
+정지 이후 촬영된 영상만 추가 확인으로 인정한다. 같은 결과를 여러 번 발행해도
+확인 횟수는 증가하지 않는다.
+
+| 설정 / CLI | 기본값 | 의미 |
+| --- | --- | --- |
+| `LINE_TRACKING_PATH_RECOVERY_WAIT_SEC` / `--path-recovery-wait-sec` | `1.0` | 경로 소실로 정지한 뒤 회전 전 대기 시간(초, 양수) |
+| `LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION` / `--path-recovery-first-direction` | `left` | 먼저 탐색할 방향(`left` 또는 `right`) |
+| `LINE_TRACKING_PATH_RECOVERY_YAW_RPS` / `--path-recovery-yaw-rps` | `0.18` | 탐색 회전 속도(rad/s, 0 초과 0.18 이하) |
+| `LINE_TRACKING_PATH_RECOVERY_CONFIRM_FRAMES` / `--path-recovery-confirm-frames` | `2` | 재개에 필요한 연속 새 경로 결과 수(2 이상) |
+
+전체 탐색에 실패하면 원래 방향으로 돌아와 `path_recovery_exhausted`로 정지한다.
+같은 소실에 대해 탐색을 무한 반복하지 않는다. 작업이 활성 상태이면 이후 새 경로가
+연속 확인될 때 재개할 수 있다. 재개 후 다시 경로를 잃으면 새 대기·탐색을 시작한다.
+작업 시작·종료 시 저장 명령, 탐색 상태와 확인 횟수를 초기화한다.
+
+90°는 발행한 회전 속도와 경과 시간을 적분한 **명령 기준 추정각**이다. 실제 자세의
+피드백 제어가 아니므로 미끄러짐이나 로봇의 명령 미수행에 따라 실제 각도는 달라질
+수 있다. 각도 계산에는 실제로 발행한 회전 명령만 반영하며, AprilTag 확인이나 센서
+오류로 정지한 시간은 회전량에 포함하지 않는다. 회전 중 제어 발행 간격이 정상 주기의
+2배를 초과하면 그 탐색을 종료하고 정지한다. 이 기능은 경로 소실 복구이며, 경로가
+계속 생성되는 차도/인도 오분류 자체를 판별하거나 수정하지는 않는다.
 
 복구를 끄려면 `LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED=false` 또는
 `--no-path-loss-recovery-enabled`를 사용한다. 이때와 LiDAR 센서 오류의 기존 명령
 유지 동작에서는 `PATH_UNAVAILABLE=false`, `PATH_LOSS_LIMIT=true`이면 실패 1–4회는
 마지막 전진·회전 명령을 유지하고 5회째 정지한다. 둘 다 `false`이면 그 명령을 유지한다.
-`PATH_UNAVAILABLE=true`는 직진 복구보다 우선하여 즉시 정지한다.
-직진 복구의 3회 제한은 `PATH_LOSS_LIMIT=false`여도 적용된다. 실제 LiDAR 높이 차단,
-확정한 분기 경로의 소실, 명시적 취소 및 처리 오류의 정지 조건도 유지한다.
-센서 오류는 영상 검출 실패 횟수를 증가시키지 않으며, 이미 3회 실패로 정지한 뒤에는
-센서 오류만으로 직진·회전을 재개하지 않는다.
+`PATH_UNAVAILABLE=true`는 자동 탐색보다 우선하여 즉시 정지하고 탐색을 시작하지 않는다.
+복구가 활성화된 영상 경로 소실에는 3회 실패 정지 후 위 탐색 절차를 적용한다.
+실제 LiDAR 높이 차단, 확정한 분기 경로의 소실, 명시적 취소 및 처리 오류의 정지 조건도
+유지한다. 탐색 도중 카메라·추론·LiDAR 입력이 오래되거나 센서 오류가 있으면 자동
+정지한다. 이 탐색 정지는 일반 주행의 센서 정지 스위치와 독립적이다. 센서 오류는 영상
+검출 실패 횟수를 증가시키지 않으며, 탐색이 진행 중이거나 실패한 뒤에는 저장된 전진
+명령을 되살리지 않는다. `UNSAFE_TIMEOUT=true`여도 정상 대기·탐색·확인에는 2초 제한을
+적용하지 않지만 센서/높이/분기 정지 및 탐색 실패에는 적용한다. `TASK_TIMEOUT=true`의
+작업 종료 시간은 탐색 중에도 유지한다.
 
 `STARTUP_HOLD=false`이면 별도의 2초 시작 대기는 없지만, 작업 수락 후 새 영상의
 첫 추론과 경로 계산이 끝나기 전까지는 0 속도로 대기한다. 모델은 메모리에 유지하며
@@ -283,8 +320,11 @@ CLI는 `--stop-on-camera-stale`처럼 켜고 `--no-stop-on-camera-stale`처럼 �
 
 metrics의 `stop_checks`에 12개 설정을 표시한다. `path_yaw_held`,
 `path_unavailable_inferences`, `path_unavailable_limit`(`5`)로 명령 유지와 실패 횟수를
-확인한다. `path_recovery`에는 직진 복구 활성 여부(`active`), 영상 검출 실패 횟수
-(`failed_inferences`), 제한(`limit=3`), 복구 실패 정지 여부(`exhausted`)를 기록한다.
+확인한다. `path_recovery`에는 탐색 활성 여부(`active`), 단계(`phase`), 영상 검출 실패
+횟수(`failed_inferences`), 정지 기준(`limit=3`), 대기·회전 설정(`wait_sec`, `yaw_rps`,
+`first_direction`), 명령 기준 추정 회전각
+(`estimated_angle_deg`), 연속 확인 횟수와 설정(`confirmed_frames`, `confirm_frames`),
+복구 실패 정지 여부(`exhausted`)를 기록한다.
 `tracking_path_hold`이면 Path 메시지가 비어 있어도 저장 명령으로 움직일
 수 있다. 호환 진단 키 `stop_checks.path_available`은 즉시 정지가 켜졌거나,
 연속 실패 제한이 켜지고 5회에 도달했을 때만 `true`다.
@@ -564,9 +604,9 @@ PointCloud2 필드 오프셋과 26바이트 point_step을 읽고 유효하지 �
 `lidar_stale`, `lidar_ground_*` 등)는 첫 유효 높이 결과 전에는 영상 경로로 처리한다.
 `SWIN_L_LIDAR_STARTUP_VISION_FALLBACK=false`이면 이 초기 영상 경로를 끈다.
 첫 유효 높이 결과 이후의 센서 오류는 새 높이 Path를 사용할 수 없는 상태로 처리한다.
-이 경우 LiDAR 전용 정지를 추가하지 않으며, 기존 경로 소실 정지 설정이 꺼져 있으면
+경로 복구 중이 아니라면 LiDAR 전용 정지를 추가하지 않으며, 기존 경로 소실 정지 설정이 꺼져 있으면
 `tracking_path_hold`로 현재 작업의 마지막 유효 전진 속도와 회전 명령을 유지한다.
-영상 자체에서 경로를 잃으면 `vision_path_unavailable`로 구분하여 위 3회 직진 복구를
+영상 자체에서 경로를 잃으면 `vision_path_unavailable`로 구분하여 위 정지·대기·좌우 탐색을
 적용한다. 이전 유효 명령이 없으면 `waiting_for_path`로 0 속도를 유지한다.
 영상 후보는 있지만 유효한 높이 결과가 그 경로를 제외한
 `lidar_path_unavailable`/`lidar_path_blocked`는 계속 정지한다.
@@ -632,7 +672,8 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 
 ### 주행 중 정지 조건
 
-각 자동 조건은 위 표의 해당 `STOP_ON_*` 값이 `true`일 때만 적용한다.
+일반 주행의 자동 조건은 위 표의 해당 `STOP_ON_*` 값이 `true`일 때 적용한다.
+경로 복구 중 센서 신선도 확인과 복구 대기·확인·실패 정지는 별도로 적용한다.
 
 | 사유 | 발생 조건/동작 |
 |---|---|
@@ -642,6 +683,10 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 | `camera_conversion_error` | 메타데이터 검사 또는 선택 프레임 변환 예외. 모든 자동 조건이 꺼져도 정지 및 저장 명령 삭제. 새 유효 프레임의 추론 성공까지 유지하며 `camera_fault_reason`으로 확인 |
 | `path_unavailable` | 즉시 Path 정지 또는 5회 실패 제한이 활성화되어 정지 |
 | `waiting_for_path` | Path 정지는 꺼져 있지만 현재 작업에 저장된 유효 명령도 없어 0 속도 대기 |
+| `path_recovery_waiting` | 영상 경로 검출 3회 연속 실패로 정지한 뒤 기본 1초 대기 |
+| `path_recovery_hold_left`, `path_recovery_hold_right` | ±90° 끝에서 해당 방향의 새 영상 결과를 기다리며 정지 |
+| `path_recovery_confirming` | 재발견한 경로를 새 프레임으로 연속 확인하며 정지 |
+| `path_recovery_exhausted` | 좌우 탐색 후 원래 방향에서 정지. 새 경로 연속 확인 시 재개 가능 |
 | `path_low_confidence` | 신뢰도 0.49 미만 또는 NaN/Inf |
 | `path_lateral_target_large` | 목표각 절댓값이 허용각(기본 60°) 초과 |
 | `apriltag_verifying` | 후보 확인 중. `StopMove`와 0 속도로 정지 |

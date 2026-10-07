@@ -98,6 +98,7 @@ from swin_l_drive_control import (
     MAX_PATH_RECOVERY_INFERENCES,
     DriveConfig,
     DriveDecision,
+    PathLossRecovery,
     decide_drive,
     path_target_lateral,
 )
@@ -310,6 +311,10 @@ def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
         max_forward_mps=args.max_forward_mps,
         max_target_heading_deg=args.max_target_heading_deg,
         path_loss_recovery_enabled=args.path_loss_recovery_enabled,
+        path_recovery_wait_sec=args.path_recovery_wait_sec,
+        path_recovery_yaw_rps=args.path_recovery_yaw_rps,
+        path_recovery_confirm_frames=args.path_recovery_confirm_frames,
+        path_recovery_first_direction=args.path_recovery_first_direction,
         **{
             "stop_on_" + name: getattr(args, "stop_on_" + name)
             for name in DRIVE_STOP_CHECKS
@@ -881,6 +886,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                     raise ValueError("lidar_transform_unavailable") from error
             self.obstacles = LidarRuntime(args, _lidar_config_from_args(args),
                 _avoidance_config_from_args(args), lookup, self.drive_config or DriveConfig()) if args.avoidance_enabled else None
+            self.path_search = (
+                PathLossRecovery(self.drive_config, output_hz=args.output_hz)
+                if task_mode else None
+            )
             self.tasks = (
                 LineTrackingTasks(
                     TaskPolicy(
@@ -1170,6 +1179,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.last_valid_forward_mps = None
             self.path_unavailable_inferences = 0
             self.path_recovery_inferences = 0
+            if self.path_search is not None:
+                self.path_search.reset()
 
         def release_task_control(self, reason: str) -> None:
             self.set_task_inference(False)
@@ -1208,6 +1219,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     state["semantic_path_missing"][mask_class]
                     or self.path_recovery_inferences >= MAX_PATH_RECOVERY_INFERENCES
                 ))
+                inference_id = int(state["inference_count"])
                 if recovering and (path is None or path.stop_reason is None):
                     path = None
                 self.path_unavailable_inferences = state["path_unavailable_inferences"][
@@ -1236,6 +1248,27 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "camera_stale", "inference_stale"
             ):
                 decision = DriveDecision.stop(camera_fault_reason)
+            if self.tasks.active is not None and self.obstacles is None:
+                sensor_reason = None
+                # Searching requires live observations even when normal driving's
+                # optional stale-sensor stops are disabled.
+                for name, age, maximum in (
+                    ("camera", camera_age_sec, self.drive_config.max_camera_age_sec),
+                    ("inference", inference_age_sec, self.drive_config.max_inference_age_sec),
+                ):
+                    if age is None or not math.isfinite(age) or not 0 <= age <= maximum:
+                        sensor_reason = name + "_stale"
+                        break
+                decision = self.path_search.decide(
+                    decision, now=now, inference_id=inference_id,
+                    inference_source_at=(now-inference_age_sec
+                                         if inference_age_sec is not None else None),
+                    sensors_ready=sensor_reason is None,
+                    sensor_reason=sensor_reason or "inputs_not_ready",
+                    path_confidence=path.confidence if path is not None else None,
+                )
+                if self.path_search.active and (path is None or path.stop_reason is None):
+                    path = None
             if decision.reason in (
                 "camera_stale", "inference_stale",
                 "camera_timestamp_invalid", "camera_conversion_error",
@@ -1337,6 +1370,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 ),
             )
             self.command_publisher.publish(message)
+            self.path_search.record_command(decision, now=time.monotonic())
             return decision
 
         def on_image(self, message: Any) -> None:
@@ -1574,8 +1608,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "enabled": self.drive_config.path_loss_recovery_enabled,
                     "failed_inferences": self.path_recovery_inferences,
                     "limit": MAX_PATH_RECOVERY_INFERENCES,
-                    "active": drive_decision.reason == "tracking_path_recovery",
-                    "exhausted": drive_decision.reason == "path_recovery_exhausted",
+                    "active": self.path_search.active,
+                    "phase": self.path_search.phase,
+                    "wait_sec": self.drive_config.path_recovery_wait_sec,
+                    "first_direction": self.drive_config.path_recovery_first_direction,
+                    "yaw_rps": self.drive_config.path_recovery_yaw_rps,
+                    "estimated_angle_deg": math.degrees(self.path_search.angle_rad),
+                    "confirmed_frames": self.path_search.confirmed_frames,
+                    "confirm_frames": self.drive_config.path_recovery_confirm_frames,
+                    "exhausted": self.path_search.phase == "exhausted",
                 }
                 metrics["path_yaw_held"] = (
                     drive_decision is not None
@@ -2026,7 +2067,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument(
                 "--path-loss-recovery-enabled", action=argparse.BooleanOptionalAction,
                 default=_env_bool("LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", True),
-                help="drive straight during visual path loss; stop after three failed inferences",
+                help="Retain straight recovery until the third visual path failure; wait after stopping, then scan +/-90 degrees",
+            )
+            live.add_argument(
+                "--path-recovery-wait-sec", type=float,
+                default=_env_float("LINE_TRACKING_PATH_RECOVERY_WAIT_SEC", 1.0),
+            )
+            live.add_argument(
+                "--path-recovery-first-direction", choices=("left", "right"),
+                default=_env("LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION", "left"),
+                help="Which side to search first after the path-loss stop",
+            )
+            live.add_argument(
+                "--path-recovery-yaw-rps", type=float,
+                default=_env_float("LINE_TRACKING_PATH_RECOVERY_YAW_RPS", 0.18),
+            )
+            live.add_argument(
+                "--path-recovery-confirm-frames", type=int,
+                default=_env_int("LINE_TRACKING_PATH_RECOVERY_CONFIRM_FRAMES", 2),
             )
             live.add_argument(
                 "--max-target-heading-deg",

@@ -55,13 +55,13 @@ def test_fresh_path_generates_capped_a2_command():
 
 
 @pytest.mark.parametrize("count", [1, 2, 3, 8])
-def test_semantic_loss_recovers_straight_at_saved_speed_with_a_three_inference_limit(count):
+def test_semantic_loss_retains_straight_recovery_and_stops_on_third_failure(count):
     command=decide_drive(None,camera_age_sec=.1,inference_age_sec=.1,
                          config=DriveConfig(),last_valid_forward_mps=.08,
                          last_valid_yaw_rate=-.18,path_recovery_inferences=count)
     assert command.yaw_rate==command.vy==0
-    assert command.vx==(.08 if count<3 else 0)
-    assert command.reason==("tracking_path_recovery" if count<3 else "path_recovery_exhausted")
+    assert command.vx == (.08 if count < 3 else 0)
+    assert command.reason == ("tracking_path_recovery" if count < 3 else "path_recovery_waiting")
 
 
 @pytest.mark.parametrize("speed", [None, 0., float("nan"), float("inf"), -.1])
@@ -80,14 +80,40 @@ def test_semantic_recovery_cannot_bypass_an_obstacle_stop(obstacle_reason):
     assert command==debug.DriveDecision.stop(obstacle_reason)
 
 
-def test_straight_recovery_is_enabled_by_default_and_can_be_disabled(monkeypatch):
+def test_search_recovery_is_enabled_by_default_and_can_be_disabled(monkeypatch):
     monkeypatch.delitem(debug.ENV,"LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED",raising=False)
-    assert debug._drive_config_from_args(debug.parse_args(["task-drive"])).path_loss_recovery_enabled
+    monkeypatch.delitem(debug.ENV,"LINE_TRACKING_PATH_RECOVERY_WAIT_SEC",raising=False)
+    monkeypatch.delitem(debug.ENV,"LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION",raising=False)
+    config = debug._drive_config_from_args(debug.parse_args(["task-drive"]))
+    assert config.path_loss_recovery_enabled
+    assert config.path_recovery_wait_sec == 1.0
+    assert config.path_recovery_first_direction == "left"
     args=debug.parse_args(["task-drive","--no-path-loss-recovery-enabled"])
     assert not debug._drive_config_from_args(args).path_loss_recovery_enabled
 
 
-def test_straight_recovery_preserves_branch_and_explicit_immediate_stop_guards():
+def test_search_settings_flow_from_environment_and_cli(monkeypatch):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_RECOVERY_WAIT_SEC", "3.5")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_RECOVERY_YAW_RPS", "0.12")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_RECOVERY_CONFIRM_FRAMES", "3")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION", "right")
+    config = debug._drive_config_from_args(debug.parse_args(["task-drive"]))
+    assert config.path_recovery_wait_sec == 3.5
+    assert config.path_recovery_yaw_rps == .12
+    assert config.path_recovery_confirm_frames == 3
+    assert config.path_recovery_first_direction == "right"
+    config = debug._drive_config_from_args(debug.parse_args([
+        "task-drive", "--path-recovery-wait-sec", "1.5",
+        "--path-recovery-yaw-rps", ".1", "--path-recovery-confirm-frames", "2",
+        "--path-recovery-first-direction", "left",
+    ]))
+    assert config.path_recovery_wait_sec == 1.5
+    assert config.path_recovery_yaw_rps == .1
+    assert config.path_recovery_confirm_frames == 2
+    assert config.path_recovery_first_direction == "left"
+
+
+def test_search_recovery_preserves_branch_and_explicit_immediate_stop_guards():
     path=replace(_path(),stop_reason="branch_selected_lost")
     common=dict(camera_age_sec=.1,inference_age_sec=.1,last_valid_forward_mps=.1,
                 last_valid_yaw_rate=.1,path_recovery_inferences=1)

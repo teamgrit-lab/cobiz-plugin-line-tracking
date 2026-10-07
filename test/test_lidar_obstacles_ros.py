@@ -212,6 +212,39 @@ def test_sensor_and_path_faults_override_retained_commands(monkeypatch, fault):
     ros.run(scenario, "--branch-preference", "center")
 
 
+def test_enabled_avoidance_stops_on_path_loss_without_starting_scan_recovery(monkeypatch):
+    ros = enabled_ros(monkeypatch)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "true")
+    detection = NS(mask=np.full((360, 640), 2, np.uint8))
+    monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _: NS(
+        device=NS(type="cuda"), reset=lambda: None,
+        segment=lambda _frame, **kwargs: NS(
+            selected_mask=detection.mask.copy(), inference_seconds=.01),
+    ))
+
+    def scenario(node):
+        ros.start()
+        ros.now = 2.1
+        sensors(node, ros)
+        assert complete_inference(node, ros)["drive_reason"] == "lidar_tracking"
+        detection.mask[:] = 0
+        # Fresh LiDAR continues for longer than the camera-only recovery wait.
+        # Neither losing the Path nor passing the wait can trigger blind rotation.
+        for _ in range(15):
+            ros.now += .1
+            sensors(node, ros)
+            result = complete_inference(node, ros)
+            assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+            assert not result["path_recovery"]["active"]
+            assert result["path_recovery"]["phase"] == "idle"
+        for reason in ("path_recovery_scan_left", "path_recovery_scan_right", "path_recovery_return"):
+            result = node.publish_drive(debug.DriveDecision(0, 0, .18, reason))
+            assert result == debug.DriveDecision.stop("avoidance_path_unavailable")
+            assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario, "--branch-preference", "center")
+
+
 def test_latest_camera_classification_constrains_visible_space_without_history(
     monkeypatch,
 ):

@@ -630,7 +630,7 @@ def test_live_turn_slows_on_first_result_and_stops_beyond_sixty_degrees(
         ros.now = 2.4
         path_hold.refresh()
         command = json.loads(ros.published[SPORT][-1].parameter)
-        assert command == pytest.approx({"x": 0.1718873385, "y": 0.0, "z": -sign * 0.18})
+        assert command == pytest.approx({"x": 0.1718873385, "y": 0.0, "z": sign * 0.18})
         assert ros.metrics()["drive_reason"] == "tracking_slow_turn"
         assert ros.metrics()["turn_speed_control"]["target_heading_deg"] == pytest.approx(sign * 30)
         assert "adaptive_control" not in ros.metrics()

@@ -180,7 +180,7 @@ class LidarRuntime:
         with self.lock:
             if nominal.reason not in ("tracking", "tracking_slow_turn"):
                 reason = nominal.reason
-                if reason in ("tracking_path_recovery", "tracking_path_hold"):
+                if reason in ("tracking_path_recovery", "tracking_path_hold") or reason.startswith("path_recovery_"):
                     reason = "avoidance_path_unavailable"
                 result = self.controller.stop(reason)
                 self.metrics = {**self.metrics, **self.controller.metrics}
@@ -232,7 +232,7 @@ class LidarRuntime:
             return decision
         with self.lock:
             try:
-                if decision.reason in ("tracking_path_recovery", "tracking_path_hold"):
+                if decision.reason in ("tracking_path_recovery", "tracking_path_hold") or decision.reason.startswith("path_recovery_"):
                     raise ValueError("avoidance_path_unavailable")
                 scan, region = self._context(mask_class, now, clock_ns)
                 plan = self.controller.planned_velocity

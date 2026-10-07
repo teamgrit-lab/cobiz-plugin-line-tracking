@@ -128,16 +128,22 @@ def test_active_deployment_has_no_manual_arm_or_external_clearance_contract():
         assert forbidden not in active
 
 
-def test_livox_height_inputs_and_limits_reach_both_live_services():
+def test_livox_obstacle_inputs_and_limits_reach_both_live_services():
     import yaml
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("actual-activate", "debugging-swin-l"):
         env = services[name]["environment"]
-        assert env["SWIN_L_LIDAR_HEIGHT_ENABLED"].endswith(":-true}")
+        assert env["LINE_TRACKING_AVOIDANCE_ENABLED"].endswith(":-true}")
         assert env["SWIN_L_LIDAR_TOPIC"].endswith(":-/livox/lidar}")
         assert env["SWIN_L_LIDAR_IMU_TOPIC"].endswith(":-/livox/imu}")
         assert env["SWIN_L_LIDAR_TO_BASE_TRANSFORM"].endswith(":-}")
         assert env["SWIN_L_BASE_TO_CAMERA_TRANSFORM"].endswith(":-}")
+        assert env["LIDAR_OBSTACLE_HEIGHT_REFERENCE"].endswith(":-base_link}")
+        assert env["LIDAR_OBSTACLE_MIN_HEIGHT_M"].endswith(":--0.2}")
+        assert env["LIDAR_OBSTACLE_MAX_HEIGHT_M"].endswith(":-0.2}")
+        assert env["LIDAR_OBSTACLE_HORIZONTAL_RANGE_M"].endswith(":-1.5}")
+        assert env["LIDAR_OBSTACLE_FOV_DEG"].endswith(":-190.0}")
+        assert not any("ODOM" in key or "CORRIDOR_MEMORY" in key for key in env)
     assert "ros-humble-tf2-ros" in (ROOT / "Dockerfile.swin-l-debug").read_text()
 
 

@@ -12,7 +12,8 @@ from typing import Any, Mapping
 
 ACTION_NAME = "LINE_TRACKING"
 TRACKING_REASONS = frozenset(("tracking", "tracking_slow_turn", "tracking_path_hold",
-                              "tracking_path_recovery"))
+                              "tracking_path_recovery", "lidar_tracking",
+                              "lidar_avoiding", "lidar_returning"))
 PATH_RECOVERY_REASONS = frozenset((
     "path_recovery_waiting", "path_recovery_scan_left", "path_recovery_hold_left",
     "path_recovery_scan_right", "path_recovery_hold_right", "path_recovery_return",

@@ -31,7 +31,7 @@ def test_camera_info_is_paired_to_image_without_changing_source():
 
 def test_detector_uses_same_camera_as_tracking_and_is_independent_of_lidar():
     env = {"SWIN_L_IMAGE_TOPIC": "/a2/front_camera/res_720p/image_raw",
-           "SWIN_L_LIDAR_HEIGHT_ENABLED": "false"}
+           "LINE_TRACKING_AVOIDANCE_ENABLED": "false"}
     relay, detector, tracking = child_commands("task-drive", env)
     assert "input_image_topic:=/a2/front_camera/res_720p/image_raw" in relay[1]
     assert "input_camera_info_topic:=/a2/front_camera/res_720p/camera_info" in relay[1]

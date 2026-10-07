@@ -9,13 +9,12 @@ import numpy as np
 import pytest
 
 from test_apriltag_task_stop_ros import Message, RosHarness, SPORT, ZERO, debug
-from test_lidar_height import CAMERA_FROM_BASE, camera_info, cloud, imu, points_scene
 
 
-def run_recovery(monkeypatch, scenario, *, with_lidar=False, extra_args=()):
+def run_recovery(monkeypatch, scenario, *, extra_args=()):
     ros = RosHarness(monkeypatch)
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "true")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_LIDAR_HEIGHT_ENABLED", str(with_lidar))
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false")
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "false")
     # Exercise the short task safety timeout while running the longer search.
@@ -32,22 +31,11 @@ def run_recovery(monkeypatch, scenario, *, with_lidar=False, extra_args=()):
         node.drive_config = replace(node.drive_config, heading_gain=2.)
         ros.start(duration=200)
 
-        def feed(*, visible=False, bad_cloud=False, points=None, dt=.1):
+        def feed(*, visible=False, dt=.1):
             detection.mask = good.copy() if visible else np.zeros_like(good)
             ros.now += dt
             previous = ros.metrics()["inference_count"] if ros.published.get(
                 debug.DEFAULT_METRICS_TOPIC) else 0
-            stamp = ros.clock_ns()/1e9
-            if with_lidar:
-                scan = cloud(points_scene() if points is None else points, stamp)
-                scan.header.frame_id = "livox_frame"
-                if bad_cloud:
-                    scan.data = scan.data[:-1]
-                sample = imu(stamp, frame="livox_frame")
-                sample.linear_acceleration.z = .99
-                node.on_camera_info(camera_info(stamp))
-                node.on_lidar_imu(sample)
-                node.on_lidar(scan)
             image = Message()
             image.header.stamp = ros.stamp()
             node.on_image(image)
@@ -61,21 +49,16 @@ def run_recovery(monkeypatch, scenario, *, with_lidar=False, extra_args=()):
 
         scenario(ros, node, feed)
 
-    def matrix(m):
-        return ",".join(map(str, m.ravel()))
-    ros.run(exercise, "--lidar-to-base-transform", matrix(np.eye(4)),
-            "--base-to-camera-transform", matrix(CAMERA_FROM_BASE),
-            "--near-distance-m", ".6", "--far-distance-m", "3",
-            "--search-half-width-m", "2", "--lidar-footprint-radius-m", ".1",
+    ros.run(exercise, "--near-distance-m", ".6", "--far-distance-m", "3",
+            "--search-half-width-m", "2",
             "--bev-height-px", "49", "--bev-width-px", "81",
             "--branch-preference", "center", *extra_args)
 
 
-@pytest.mark.parametrize("with_lidar", [False, True])
 @pytest.mark.parametrize("recover_phase", ["waiting", "scan_left", "scan_right"])
 @pytest.mark.parametrize("first_direction", ["left", "right"])
 def test_loss_retains_motion_then_stops_waits_scans_and_confirms_path(
-        monkeypatch, with_lidar, recover_phase, first_direction):
+        monkeypatch, recover_phase, first_direction):
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION", first_direction)
     def scenario(ros, node, feed):
         assert feed()["drive_reason"] == "waiting_for_path"
@@ -135,7 +118,7 @@ def test_loss_retains_motion_then_stops_waits_scans_and_confirms_path(
         assert not ros.metrics()["path_recovery"]["active"]
         assert node.last_valid_forward_mps is None
 
-    run_recovery(monkeypatch, scenario, with_lidar=with_lidar)
+    run_recovery(monkeypatch, scenario)
 
 
 @pytest.mark.parametrize("first_direction", ["left", "right"])
@@ -168,10 +151,9 @@ def test_unsuccessful_search_returns_to_center_and_remains_stopped(monkeypatch, 
     run_recovery(monkeypatch, scenario)
 
 
-@pytest.mark.parametrize("with_lidar", [False, True])
 @pytest.mark.parametrize("recover_at", [2, 3])
 def test_path_found_before_loss_stop_resumes_tracking_without_wait_or_scan(
-        monkeypatch, with_lidar, recover_at):
+        monkeypatch, recover_at):
     def scenario(ros, node, feed):
         feed(visible=True)
         for _ in range(recover_at-1):
@@ -183,7 +165,7 @@ def test_path_found_before_loss_stop_resumes_tracking_without_wait_or_scan(
         assert not result["path_recovery"]["active"]
         assert json.loads(ros.published[SPORT][-1].parameter)["x"] > 0
 
-    run_recovery(monkeypatch, scenario, with_lidar=with_lidar)
+    run_recovery(monkeypatch, scenario)
 
 
 def test_rotation_wait_is_one_second_from_actual_stop_not_initial_loss(monkeypatch):
@@ -221,27 +203,6 @@ def test_failed_confirmation_during_search_does_not_restore_initial_forward_reco
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
 
     run_recovery(monkeypatch, scenario)
-
-
-def test_search_sensor_failure_and_height_exclusion_never_revive_saved_command(monkeypatch):
-    def scenario(ros, node, feed):
-        feed(visible=True)
-        for _ in range(25):
-            result = feed()
-        assert result["drive_reason"] == "path_recovery_scan_left"
-        assert feed(bad_cloud=True)["drive_reason"].startswith("lidar_")
-        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
-        paused_angle = node.path_search.angle_rad
-        for _ in range(5):
-            feed(bad_cloud=True)
-        assert node.path_search.angle_rad == paused_angle
-        assert feed()["drive_reason"] == "path_recovery_scan_left"
-        blocked = points_scene()
-        blocked[(blocked[:, 0] > .9) & (blocked[:, 0] < 1.2), 2] += .15
-        assert feed(visible=True, points=blocked)["drive_reason"] == "lidar_path_unavailable"
-        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
-
-    run_recovery(monkeypatch, scenario, with_lidar=True)
 
 
 def test_search_stops_on_stale_inference_even_when_optional_stops_are_disabled(monkeypatch):

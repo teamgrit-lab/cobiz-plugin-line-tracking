@@ -46,11 +46,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="default: a new folder in rosbag-results/swin-l-tests",
     )
     parser.add_argument("--image-topic", default=DEFAULT_IMAGE_TOPIC)
-    parser.add_argument("--lidar-height-enabled", action=argparse.BooleanOptionalAction,
-                        default=None, help="default: use Livox ground-height fusion")
+    parser.add_argument("--avoidance-enabled", action=argparse.BooleanOptionalAction,
+                        default=None, help="replay independent Livox obstacle avoidance")
     for name in ("lidar-topic", "lidar-imu-topic", "camera-info-topic", "lidar-frame-id",
-                 "lidar-to-base-transform", "base-to-camera-transform", "lidar-calibration-profile", "lidar-imu-accel-unit",
-                 "lidar-ground-reference-mode", "lidar-base-to-ground-m"):
+                 "lidar-to-base-transform", "base-to-camera-transform", "lidar-calibration-profile", "obstacle-imu-accel-unit",
+                 "obstacle-height-reference", "obstacle-min-height-m", "obstacle-max-height-m",
+                 "obstacle-horizontal-range-m", "obstacle-fov-deg", "avoidance-preference"):
         parser.add_argument("--" + name, default=None)
     parser.add_argument("--device", default="auto", help="auto, mps, cuda or cpu")
     parser.add_argument(
@@ -148,12 +149,13 @@ def build_debug_arguments(
         "--inference-hz",
         str(args.inference_hz),
     ]
-    if args.lidar_height_enabled is not None:
-        arguments.append("--lidar-height-enabled" if args.lidar_height_enabled
-                         else "--no-lidar-height-enabled")
+    if args.avoidance_enabled is not None:
+        arguments.append("--avoidance-enabled" if args.avoidance_enabled
+                         else "--no-avoidance-enabled")
     for name in ("lidar_topic", "lidar_imu_topic", "camera_info_topic", "lidar_frame_id",
-                 "lidar_to_base_transform", "base_to_camera_transform", "lidar_calibration_profile", "lidar_imu_accel_unit",
-                 "lidar_ground_reference_mode", "lidar_base_to_ground_m"):
+                 "lidar_to_base_transform", "base_to_camera_transform", "lidar_calibration_profile", "obstacle_imu_accel_unit",
+                 "obstacle_height_reference", "obstacle_min_height_m", "obstacle_max_height_m",
+                 "obstacle_horizontal_range_m", "obstacle_fov_deg", "avoidance_preference"):
         value = getattr(args, name)
         if value is not None:
             arguments.extend(("--" + name.replace("_", "-"), value))

@@ -101,7 +101,7 @@ def decide_drive(
     last_valid_yaw_rate: float | None = None,
     last_valid_forward_mps: float | None = None,
     path_unavailable_inferences: int = 0,
-    height_stop_reason: str | None = None,
+    obstacle_stop_reason: str | None = None,
     path_recovery_inferences: int | None = None,
 ) -> DriveDecision:
     """Slow forward motion when heading demand exceeds available yaw rate.
@@ -114,8 +114,8 @@ def decide_drive(
     """
 
     config.validate()
-    if height_stop_reason is not None:
-        return DriveDecision.stop(height_stop_reason)
+    if obstacle_stop_reason is not None:
+        return DriveDecision.stop(obstacle_stop_reason)
     if path is not None and path.stop_reason is not None:
         return DriveDecision.stop(path.stop_reason)
     for name, age, maximum in (

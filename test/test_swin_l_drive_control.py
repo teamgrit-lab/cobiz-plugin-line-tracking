@@ -72,12 +72,12 @@ def test_semantic_recovery_cannot_invent_initial_motion(speed):
     assert command==debug.DriveDecision.stop("waiting_for_path")
 
 
-@pytest.mark.parametrize("height_reason", ["lidar_path_unavailable", "lidar_path_blocked"])
-def test_semantic_recovery_cannot_bypass_a_height_exclusion(height_reason):
+@pytest.mark.parametrize("obstacle_reason", ["obstacle_collision", "obstacle_blocked"])
+def test_semantic_recovery_cannot_bypass_an_obstacle_stop(obstacle_reason):
     command=decide_drive(None,camera_age_sec=.1,inference_age_sec=.1,
                          config=DriveConfig(),last_valid_forward_mps=.1,
-                         path_recovery_inferences=1,height_stop_reason=height_reason)
-    assert command==debug.DriveDecision.stop(height_reason)
+                         path_recovery_inferences=1,obstacle_stop_reason=obstacle_reason)
+    assert command==debug.DriveDecision.stop(obstacle_reason)
 
 
 def test_straight_recovery_is_enabled_by_default_and_can_be_disabled(monkeypatch):

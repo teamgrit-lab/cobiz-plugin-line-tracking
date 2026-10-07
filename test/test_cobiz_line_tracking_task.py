@@ -221,7 +221,8 @@ def test_sustained_unsafe_state_aborts_but_short_blockage_pauses():
     assert stopped["reason"] == "unsafe:camera_stale"
 
 
-@pytest.mark.parametrize("reason", ["tracking_path_hold", "tracking_slow_turn", "tracking_path_recovery"])
+@pytest.mark.parametrize("reason", ["tracking_path_hold", "tracking_slow_turn", "tracking_path_recovery",
+                                    "lidar_tracking", "lidar_avoiding", "lidar_returning"])
 def test_held_or_slow_turn_remains_permitted_motion_until_task_duration_ends(reason):
     tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=10, max_duration_sec=10))
     tasks.handle_event(event(), now=0)

@@ -60,8 +60,8 @@ class FakeQoS:
 class RosHarness:
     def __init__(self, monkeypatch):
         # These scenarios isolate the original camera/task/AprilTag contract.
-        # The height-fusion suite enables and feeds the additional sensors.
-        monkeypatch.setitem(debug.ENV, "SWIN_L_LIDAR_HEIGHT_ENABLED", "false")
+        # The obstacle suite enables and feeds the additional sensors.
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false")
         # Legacy lifecycle/hold scenarios select the former policy explicitly;
         # test_path_loss_recovery_ros covers the new default recovery policy.
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "false")
@@ -824,7 +824,7 @@ def test_enabled_sensor_stops_apply_during_path_hold(ros, path_hold, monkeypatch
 
         def record(decision):
             reasons.append(decision.reason)
-            publish(decision)
+            return publish(decision)
 
         monkeypatch.setattr(node, "publish_drive", record)
         if fault == "camera_stale":

@@ -231,6 +231,31 @@ def test_held_or_slow_turn_remains_permitted_motion_until_task_duration_ends(rea
     assert tasks.tick(now=10.1, drive_reason=reason)["type"] == "TASK_COMPLETED"
 
 
+@pytest.mark.parametrize("reason", [
+    "path_recovery_waiting", "path_recovery_scan_left", "path_recovery_hold_left",
+    "path_recovery_scan_right", "path_recovery_hold_right", "path_recovery_return",
+    "path_recovery_confirming",
+])
+def test_search_can_finish_before_unsafe_timeout_but_honors_task_deadline(reason):
+    tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=50, max_duration_sec=50))
+    tasks.handle_event(event(), now=0)
+    assert tasks.tick(now=2.1, drive_reason="tracking") is None
+    for now in (3., 10., 20., 40.):
+        assert tasks.tick(now=now, drive_reason=reason) is None
+    terminal = tasks.tick(now=50.1, drive_reason=reason)
+    assert terminal["type"] == "TASK_ABORTED"
+    assert terminal["reason"] == "tracking_unavailable:" + reason
+
+
+def test_exhausted_search_still_obeys_unsafe_timeout():
+    tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=50, max_duration_sec=50))
+    tasks.handle_event(event(), now=0)
+    tasks.tick(now=2.1, drive_reason="tracking")
+    assert tasks.tick(now=3., drive_reason="path_recovery_exhausted") is None
+    terminal = tasks.tick(now=5.1, drive_reason="path_recovery_exhausted")
+    assert terminal["reason"] == "unsafe:path_recovery_exhausted"
+
+
 def test_slow_turn_can_start_tracking_after_startup_hold():
     tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=10, max_duration_sec=10))
     tasks.handle_event(event(), now=0)

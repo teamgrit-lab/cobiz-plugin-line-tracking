@@ -13,6 +13,11 @@ from typing import Any, Mapping
 ACTION_NAME = "LINE_TRACKING"
 TRACKING_REASONS = frozenset(("tracking", "tracking_slow_turn", "tracking_path_hold",
                               "tracking_path_recovery"))
+PATH_RECOVERY_REASONS = frozenset((
+    "path_recovery_waiting", "path_recovery_scan_left", "path_recovery_hold_left",
+    "path_recovery_scan_right", "path_recovery_hold_right", "path_recovery_return",
+    "path_recovery_confirming",
+))
 TASK_STOP_CHECKS = (
     "startup_hold",
     "startup_unready",
@@ -256,6 +261,10 @@ class LineTrackingTasks:
         tracked_before_this_tick = self.tracking_seen
         if drive_reason in TRACKING_REASONS:
             self.tracking_seen = True
+            self.unsafe_since = None
+        elif self.tracking_seen and drive_reason in PATH_RECOVERY_REASONS:
+            # A bounded search is intentional activity after tracking has begun.
+            # Do not let the shorter unsafe timeout abort it before the scan ends.
             self.unsafe_since = None
         elif not self.policy.stop_on_unsafe_timeout:
             self.unsafe_since = None

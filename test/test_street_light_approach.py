@@ -1,4 +1,4 @@
-"""Scenario behavior: fresh evidence, lateral preference, visits, and rearming."""
+"""Scenario behavior: fresh evidence, lateral motion, and sequential visits."""
 
 from dataclasses import replace
 from pathlib import Path
@@ -53,7 +53,7 @@ def test_control_timer_cannot_confirm_a_single_model_detection():
     assert controller.hits == 1
 
 
-def test_reached_light_resumes_cruising_and_is_not_chased_again_until_absent():
+def test_visited_light_stays_excluded_after_occlusion_until_task_reset():
     controller = StreetLightApproach(StreetLightConfig())
     confirm(controller)
     result = decide(controller, 4, distance=0.95)
@@ -68,7 +68,144 @@ def test_reached_light_resumes_cruising_and_is_not_chased_again_until_absent():
     assert controller.phase == "cruising"
     for frame in range(18, 21):
         result = decide(controller, frame)
+    assert result.reason == "street_light_cruising"
+    assert controller.metrics["visible_ids"] == controller.metrics["visited_ids"] == [1]
+    assert controller.metrics["pending_ids"] == []
+    assert controller.visits == 1
+    controller.reset()
+    assert confirm(controller).reason == "street_light_approaching"
+    assert controller.visits == 0
+    assert controller.metrics["visited_ids"] == []
+
+
+def test_continuously_visible_lights_are_visited_in_order_despite_size_and_order_changes():
+    controller = StreetLightApproach(StreetLightConfig())
+    first = replace(LIGHT, area_px=300)
+    second = StreetLightObservation(0.6, 0.65, 0.25, 100)
+    third = StreetLightObservation(0.85, 0.9, 0.25, 2000)
+    confirm(controller, observations=(second, first))
+    assert controller.target == first
+    assert controller.metrics["pending_ids"] == [2]
+    # A larger new lamp must not replace the locked target or jump the queue.
+    second = replace(second, area_px=500)
+    assert decide(controller, 4, (third, second, first), distance=0.9).reason == "street_light_reached"
+    assert controller.metrics["visited_ids"] == [1]
+    assert controller.metrics["pending_ids"] == [2, 3]
+    assert decide(controller, 4, (third, second, first)).reason == "street_light_cruising"
+    assert decide(controller, 5, (first, third, second)).reason == "street_light_approaching"
+    assert controller.target == second
+    assert controller.target_id == 2
+    assert decide(controller, 6, (first, second, third), distance=0.9).reason == "street_light_reached"
+    assert decide(controller, 7, (third, second, first)).reason == "street_light_approaching"
+    assert controller.target_id == 3
+    assert decide(controller, 8, (first, second, third), distance=0.9).reason == "street_light_reached"
+    for frame in range(9, 15):
+        assert decide(controller, frame, (third, first, second)).reason == "street_light_cruising"
+    assert controller.visits == 3
+    assert controller.metrics["visited_ids"] == [1, 2, 3]
+
+
+def test_close_lights_have_distinct_ids_and_visited_light_can_reappear_during_next_approach():
+    controller = StreetLightApproach(StreetLightConfig())
+    # Both centers lie within the old single-target matching window (0.15).
+    first = replace(LIGHT, area_px=300)
+    second = StreetLightObservation(0.4, 0.45, 0.25, 100)
+    confirm(controller, observations=(first, second))
+    decide(controller, 4, (first, second), distance=0.9)
+    for frame in range(5, 10):
+        assert decide(controller, frame, (second,)).reason == "street_light_approaching"
+        assert controller.target_id == 2
+    assert decide(controller, 10, (second, first)).reason == "street_light_approaching"
+    assert controller.target_id == 2
+    assert controller.metrics["visible_ids"] == [1, 2]
+    assert controller.metrics["visited_ids"] == [1]
+    assert len(controller.tracks) == 2
+
+
+def test_track_ids_follow_moving_lights_without_reselecting_the_largest_component():
+    controller = StreetLightApproach(StreetLightConfig())
+    first = replace(LIGHT, area_px=300)
+    second = StreetLightObservation(0.5, 0.55, 0.25, 100)
+    confirm(controller, observations=(first, second))
+    decide(controller, 4, (first, second), distance=0.9)
+    for frame in range(5, 12):
+        first = replace(first, left=first.left + 0.04, right=first.right + 0.04)
+        second = replace(second, left=second.left + 0.04, right=second.right + 0.04)
+        assert decide(controller, frame, (second, first)).reason == "street_light_approaching"
+        assert controller.target_id == 2
+        assert controller.target == second
+        assert controller.metrics["visited_ids"] == [1]
+    assert len(controller.tracks) == 2
+
+
+def test_merged_components_stop_approach_without_creating_duplicate_targets():
+    controller = StreetLightApproach(StreetLightConfig())
+    first = replace(LIGHT, area_px=300)
+    second = StreetLightObservation(0.4, 0.45, 0.25, 100)
+    confirm(controller, observations=(first, second))
+    decide(controller, 4, (first, second), distance=0.9)
+    decide(controller, 5, (first, second))
+    merged = StreetLightObservation(0.3, 0.45, 0.25, 450)
+    assert decide(controller, 6, (merged,)).reason == "street_light_target_lost"
+    for frame in range(7, 12):
+        assert decide(controller, frame, (merged,)).reason == "street_light_cruising"
+    for frame in range(12, 15):
+        result = decide(controller, frame, (second, first))
     assert result.reason == "street_light_approaching"
+    assert controller.target_id == 2
+    assert controller.metrics["visited_ids"] == [1]
+    assert len(controller.tracks) == 2
+
+
+@pytest.mark.parametrize("failure", ["loss", "timeout"])
+def test_failed_target_blocks_only_itself_and_other_visible_lights_still_run(failure):
+    controller = StreetLightApproach(StreetLightConfig(max_approach_sec=2))
+    first = replace(LIGHT, area_px=300)
+    second = StreetLightObservation(0.7, 0.75, 0.25, 100)
+    confirm(controller, observations=(first, second))
+    visible = (second,) if failure == "loss" else (first, second)
+    result = decide(controller, 4, visible, now=3.0)
+    expected = "street_light_target_lost" if failure == "loss" else "street_light_approach_timeout"
+    assert result.reason == expected
+    assert controller.metrics["visited_ids"] == []
+    assert controller.tracks[1].retry_blocked
+    assert decide(controller, 5, (first, second), now=3.1).reason == "street_light_approaching"
+    assert controller.target_id == 2
+    assert controller.visits == 0
+
+
+def test_failed_target_needs_its_own_consecutive_absence_before_retry():
+    controller = StreetLightApproach(StreetLightConfig(max_approach_sec=2))
+    confirm(controller)
+    decide(controller, 4, now=3.0)
+    for frame in range(5, 10):
+        assert decide(controller, frame, now=3 + frame / 10).reason == "street_light_cruising"
+    decide(controller, 10, ())
+    decide(controller, 12, ())  # Skipped inference restarts the absence count.
+    assert controller.tracks[1].retry_blocked
+    decide(controller, 13, ())
+    assert controller.tracks[1].retry_blocked
+    decide(controller, 14, ())
+    assert not controller.tracks[1].retry_blocked
+    for frame in range(15, 18):
+        result = decide(controller, frame)
+    assert result.reason == "street_light_approaching"
+    assert controller.target_id == 1
+
+
+def test_next_light_requires_its_own_fresh_confirmations():
+    controller = StreetLightApproach(StreetLightConfig())
+    confirm(controller)
+    second = StreetLightObservation(0.7, 0.75, 0.25, 100)
+    decide(controller, 4, (LIGHT, second), distance=0.9)
+    assert decide(controller, 5, (LIGHT, second)).reason == "street_light_cruising"
+    for _ in range(5):
+        assert decide(controller, 5, (LIGHT, second)).reason == "street_light_cruising"
+    assert decide(controller, 7, (LIGHT, second)).reason == "street_light_cruising"
+    assert controller.hits == 1
+    decide(controller, 8, (LIGHT, second))
+    assert decide(controller, 9, (LIGHT, second)).reason == "street_light_approaching"
+    assert controller.target_id == 2
 
 
 def test_target_loss_resumes_road_without_retaining_lateral_velocity():

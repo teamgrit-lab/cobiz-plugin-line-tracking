@@ -7,6 +7,7 @@ import math
 
 import cv2
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from swin_l_drive_control import DriveDecision
 
@@ -52,6 +53,17 @@ class StreetLightObservation:
         return (self.left + self.right) / 2
 
 
+@dataclass
+class _LightTrack:
+    id: int
+    observation: StreetLightObservation
+    hits: int = 1
+    misses: int = 0
+    visited: bool = False
+    retry_blocked: bool = False
+    velocity: tuple[float, float] = (0.0, 0.0)
+
+
 def street_light_observations(
     mask: np.ndarray | None, min_area_px: int,
 ) -> tuple[StreetLightObservation, ...]:
@@ -79,18 +91,104 @@ class StreetLightApproach:
     def reset(self) -> None:
         self.phase = "cruising"
         self.target = None
+        self.target_id = None
+        self.tracks: dict[int, _LightTrack] = {}
+        self.next_id = 1
         self.hits = self.clear_hits = self.visits = 0
         self.last_inference = None
         self.approach_started = None
-        self.metrics = {"state": self.phase, "visits": 0}
+        self.metrics = {}
+        self._update_metrics()
+
+    def _update_metrics(self) -> None:
+        self.clear_hits = max((t.misses for t in self.tracks.values()
+                               if t.retry_blocked), default=0)
+        self.metrics.update(
+            state=self.phase, target_id=self.target_id, confirm_hits=self.hits,
+            clear_hits=self.clear_hits, visits=self.visits,
+            visible_ids=[t.id for t in self.tracks.values() if t.misses == 0],
+            visited_ids=[t.id for t in self.tracks.values() if t.visited],
+            pending_ids=[t.id for t in self.tracks.values()
+                         if t.misses == 0 and not t.visited and not t.retry_blocked
+                         and t.id != self.target_id],
+        )
+
+    def _track(self, observations, consecutive: bool) -> None:
+        """Associate all lights one-to-one, including visited and missing IDs.
+
+        IDs are image-space tracks, not world coordinates. Keep dormant tracks
+        for this task so a brief occlusion does not erase a completed visit.
+        """
+        tracks = list(self.tracks.values())
+        # A merged semantic component must not collapse two IDs into one or
+        # become a new target. Retain both tracks until they separate again.
+        separate = []
+        for observation in observations:
+            covered = [t for t in tracks
+                       if observation.left <= t.observation.center <= observation.right
+                       and abs(observation.bottom - t.observation.bottom) <= 0.15]
+            if (len(covered) > 1 and observation.right - observation.left
+                    > 1.5 * max(t.observation.right - t.observation.left for t in covered)):
+                continue
+            separate.append(observation)
+        observations = separate
+        costs = np.full((len(tracks), len(observations)), 1e6)
+        for row, track in enumerate(tracks):
+            old = track.observation
+            steps = min(track.misses + 1, 3) if consecutive else 0
+            center = old.center + track.velocity[0] * steps
+            bottom = old.bottom + track.velocity[1] * steps
+            for column, observation in enumerate(observations):
+                dx, dy = abs(observation.center - center), abs(observation.bottom - bottom)
+                width_ratio = (observation.right - observation.left) / max(old.right - old.left, 1e-6)
+                if dx > 0.15 or dy > 0.15 or not 0.25 <= width_ratio <= 4:
+                    continue
+                costs[row, column] = (dx + 0.5 * dy + 0.03 * abs(math.log(width_ratio))
+                                      + 0.01 * abs(math.log(max(observation.area_px, 1) / max(old.area_px, 1)))
+                                      + 0.02 * min(track.misses, 3))
+        matched_tracks, matched_observations = set(), set()
+        rows, columns = linear_sum_assignment(costs)
+        for row, column in zip(rows, columns):
+            if costs[row, column] >= 1e6:
+                continue
+            track, observation = tracks[row], observations[column]
+            old = track.observation
+            track.velocity = (
+                float(np.clip(observation.center - old.center, -0.05, 0.05)),
+                float(np.clip(observation.bottom - old.bottom, -0.05, 0.05)),
+            ) if consecutive and track.misses == 0 else (0.0, 0.0)
+            track.hits = track.hits + 1 if consecutive and track.misses == 0 else 1
+            track.observation, track.misses = observation, 0
+            matched_tracks.add(track.id)
+            matched_observations.add(column)
+        for track in tracks:
+            if track.id not in matched_tracks:
+                track.hits = 0
+                track.misses = track.misses + 1 if consecutive else 1
+                if track.misses >= self.config.clear_frames:
+                    track.retry_blocked = False
+        # First seen first served; simultaneous new lights start with the
+        # largest component, with a deterministic left-to-right tie break.
+        new = (o for i, o in enumerate(observations) if i not in matched_observations)
+        for observation in sorted(new, key=lambda o: (-o.area_px, o.center, o.bottom)):
+            self.tracks[self.next_id] = _LightTrack(self.next_id, observation)
+            self.next_id += 1
 
     def _cooldown(self, reason: str) -> None:
+        track = self.tracks[self.target_id]
+        if reason == "reached":
+            track.visited = True
+            self.visits += 1
+        else:
+            # Loss/timeout is not a visit. Only this ID waits for its own
+            # absence before retry; other visible lights remain eligible.
+            track.retry_blocked = track.misses < self.config.clear_frames
         self.phase = "passing"
         self.hits = self.clear_hits = 0
-        self.target = None
+        self.target = self.target_id = None
         self.approach_started = None
-        self.metrics.update(state=self.phase, transition=reason, confirm_hits=0,
-                            clear_hits=0, visits=self.visits)
+        self.metrics.update(transition=reason, bearing_rad=None, range_m=None, range_source=None)
+        self._update_metrics()
 
     def decide(self, normal, observations, *, now, inference_id, inference_age_sec,
                locate):
@@ -106,31 +204,27 @@ class StreetLightApproach:
         if inference_id != self.last_inference:
             consecutive = self.last_inference is not None and inference_id == self.last_inference + 1
             self.last_inference = inference_id
-            if self.phase == "passing":
-                self.clear_hits = self.clear_hits + 1 if not observations else 0
-                if self.clear_hits >= c.clear_frames:
-                    self.phase = "cruising"
+            self._track(observations, consecutive)
+            track = self.tracks.get(self.target_id)
+            if track is not None and track.misses:
+                if self.phase == "approaching":
+                    self._cooldown("target_lost")
+                    return DriveDecision.stop("street_light_target_lost")
+                self.target = self.target_id = None
+                track = None
+            if track is None:
+                track = next((t for t in self.tracks.values()
+                              if t.misses == 0 and not t.visited and not t.retry_blocked), None)
+            if track is None:
+                self.target = self.target_id = None
+                self.hits, self.phase = 0, "cruising"
             else:
-                matching = [o for o in observations
-                            if self.target is None or abs(o.center - self.target.center) <= 0.15]
-                candidate = (min(matching, key=lambda o: abs(o.center - self.target.center))
-                             if matching and self.target is not None else
-                             max(matching, key=lambda o: o.area_px) if matching else None)
-                if candidate is None:
-                    if self.phase == "approaching":
-                        self._cooldown("target_lost")
-                        return DriveDecision.stop("street_light_target_lost")
-                    else:
-                        self.target, self.hits, self.phase = None, 0, "cruising"
-                else:
-                    self.hits = self.hits + 1 if consecutive and self.target is not None else 1
-                    self.target = candidate
-                    if self.hits >= c.confirm_frames and self.phase != "approaching":
-                        self.phase, self.approach_started = "approaching", now
-                    elif self.phase != "approaching":
-                        self.phase = "confirming"
-            self.metrics.update(state=self.phase, confirm_hits=self.hits,
-                                clear_hits=self.clear_hits, visits=self.visits)
+                self.target, self.target_id, self.hits = track.observation, track.id, track.hits
+                if self.hits >= c.confirm_frames and self.phase != "approaching":
+                    self.phase, self.approach_started = "approaching", now
+                elif self.phase != "approaching":
+                    self.phase = "confirming"
+            self._update_metrics()
         if self.phase != "approaching":
             return cruise
         if now - self.approach_started >= c.max_approach_sec:
@@ -146,11 +240,10 @@ class StreetLightApproach:
         self.metrics.update(bearing_rad=bearing, range_m=distance,
                             range_source="lidar_column_association" if distance is not None else None)
         if distance is not None and distance <= c.stop_distance_m:
-            self.visits += 1
             self._cooldown("reached")
-            self.metrics["visits"] = self.visits
             # One zero command ends the approach, then cruising resumes. Do not
-            # complete the Cobiz task or reacquire this still-visible light.
+            # complete the task. The next inference may select another ID even
+            # while the visited light remains visible.
             return DriveDecision.stop("street_light_reached")
         vy = float(np.clip(0.5 * bearing, -c.max_lateral_mps, c.max_lateral_mps))
         if abs(bearing) <= 0.05:

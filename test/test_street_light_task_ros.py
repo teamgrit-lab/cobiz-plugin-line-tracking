@@ -93,7 +93,9 @@ def test_task_cruises_approaches_laterally_resumes_and_does_not_complete(monkeyp
         for _ in range(4):
             metrics = tick(ros, node)
             assert metrics["drive_reason"] == "street_light_cruising"
-            assert metrics["street_light"]["state"] == "passing"
+            assert metrics["street_light"]["state"] == "cruising"
+            assert metrics["street_light"]["visited_ids"] == [1]
+            assert metrics["street_light"]["pending_ids"] == []
             command = json.loads(ros.published[SPORT][-1].parameter)
             assert command["x"] > 0 and command["y"] == command["z"] == 0
         assert not any(json.loads(m.data)["type"] == "TASK_COMPLETED"
@@ -103,6 +105,65 @@ def test_task_cruises_approaches_laterally_resumes_and_does_not_complete(monkeyp
         assert node.street_lights.phase == "cruising"
         assert node.street_lights.visits == 0
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario, "--branch-preference", "center")
+
+
+def test_task_visits_both_continuously_visible_lights_and_excludes_completed_ids(monkeypatch):
+    ros = enabled_ros(monkeypatch)
+    detection = scene()
+    detection.light[70:90, 395:415] = True
+    model(monkeypatch, detection)
+
+    def scenario(node):
+        start(ros)
+        ros.now = 2.1
+        for _ in range(3):
+            metrics = tick(ros, node)
+        assert metrics["street_light"]["target_id"] == 1
+        assert metrics["street_light"]["pending_ids"] == [2]
+        for target_id, point, sport_sign in ((1, [0.85, 0.20], -1),
+                                             (2, [0.85, -0.20], 1)):
+            ros.now += 0.05
+            node.publish_state()
+            command = json.loads(ros.published[SPORT][-1].parameter)
+            assert command["y"] * sport_sign > 0
+            assert command["z"] == 0
+            ros.now += 0.1
+            sensors(node, ros, [point])
+            info = camera_info(ros.clock_ns() / 1e9)
+            info.d = []
+            node.on_camera_info(info)
+            node.publish_state()
+            metrics = ros.metrics()
+            assert metrics["drive_reason"] == "street_light_reached"
+            assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+            assert metrics["street_light"]["visited_ids"] == list(range(1, target_id + 1))
+            # All detections stay present. No global disappearance is needed.
+            metrics = tick(ros, node)
+            if target_id == 1:
+                assert metrics["drive_reason"] == "street_light_approaching"
+                assert metrics["street_light"]["target_id"] == 2
+                assert metrics["street_light"]["visible_ids"] == [1, 2]
+        for _ in range(4):
+            metrics = tick(ros, node)
+            assert metrics["drive_reason"] == "street_light_cruising"
+            assert metrics["street_light"]["visits"] == 2
+            assert metrics["street_light"]["pending_ids"] == []
+        # Occlusion does not reset the visit ledger during the same task.
+        detection.light[:] = False
+        for _ in range(4):
+            tick(ros, node)
+        detection.light[70:90, 225:245] = True
+        detection.light[70:90, 395:415] = True
+        for _ in range(4):
+            metrics = tick(ros, node)
+            assert metrics["drive_reason"] == "street_light_cruising"
+            assert metrics["street_light"]["visited_ids"] == [1, 2]
+        assert node.tasks.active is not None
+        node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "light-3"})))
+        assert node.street_lights.metrics["visited_ids"] == []
+        assert node.street_lights.metrics["visible_ids"] == []
 
     ros.run(scenario, "--branch-preference", "center")
 

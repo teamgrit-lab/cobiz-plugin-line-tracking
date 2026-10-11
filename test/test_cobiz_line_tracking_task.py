@@ -118,7 +118,7 @@ def test_start_requires_tracking_then_completes_finite_task():
     assert tasks.active is None
 
 
-@pytest.mark.parametrize("selected_mask", [0, 1, 2])
+@pytest.mark.parametrize("selected_mask", [0, 1, 2, 3])
 @pytest.mark.parametrize("as_json", [False, True])
 def test_task_selects_surface_from_object_or_json_payload(selected_mask, as_json):
     tasks = LineTrackingTasks(_enabled_policy(default_selected_mask=2))
@@ -134,7 +134,7 @@ def test_task_selects_surface_from_object_or_json_payload(selected_mask, as_json
     assert tasks.active is None
 
 
-@pytest.mark.parametrize("selected_mask", [0, 1, 2])
+@pytest.mark.parametrize("selected_mask", [0, 1, 2, 3])
 def test_task_uses_configured_mask_when_payload_omits_it(selected_mask):
     tasks = LineTrackingTasks(_enabled_policy(default_selected_mask=selected_mask))
 
@@ -146,7 +146,7 @@ def test_task_uses_configured_mask_when_payload_omits_it(selected_mask):
     assert tasks.active.selected_mask == selected_mask
 
 
-@pytest.mark.parametrize("selected_mask", [3, -1, True, False, 0.0, 1.0, "0", "1", None, {}, []])
+@pytest.mark.parametrize("selected_mask", [4, -1, True, False, 0.0, 1.0, "0", "1", None, {}, []])
 def test_invalid_selected_mask_rejected_before_static_control_conflict(selected_mask):
     tasks = LineTrackingTasks()
 

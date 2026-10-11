@@ -66,9 +66,11 @@ from best_so_far_runtime import (
 )
 from cobiz_line_tracking_task import (
     TASK_STOP_CHECKS,
+    SELECTED_MASKS,
     ActiveTask,
     LineTrackingTasks,
     TaskPolicy,
+    requested_selected_mask,
 )
 from evaluate_mapillary_temporal import upscale_mask
 from lidar_common import (
@@ -92,6 +94,9 @@ from local_path import (
     selected_path_region,
 )
 from r50_checkpoint import validate_checkpoint
+from street_light_approach import (
+    StreetLightApproach, StreetLightConfig, street_light_observations,
+)
 from swin_l_drive_control import (
     DRIVE_STOP_CHECKS,
     MAX_PATH_UNAVAILABLE_INFERENCES,
@@ -224,7 +229,8 @@ def cuda_memory_metrics(device: torch.device) -> dict[str, float] | None:
 def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
     """Use the Cobiz task's class only for the lifetime of that task."""
 
-    return active_task.selected_mask if active_task is not None else default
+    selected = active_task.selected_mask if active_task is not None else default
+    return 1 if selected == 3 else selected
 
 
 def extract_path_estimates(selected_mask, mask_classes, config):
@@ -267,6 +273,11 @@ def _lidar_config_from_args(args):
 def _avoidance_config_from_args(args):
     return AvoidanceConfig(**{name: getattr(args, "avoidance_" + name)
                               for name in AvoidanceConfig.__dataclass_fields__})
+
+
+def _street_light_config_from_args(args):
+    return StreetLightConfig(**{name: getattr(args, "street_light_" + name)
+                                for name in StreetLightConfig.__dataclass_fields__})
 
 
 def _camera_info_topic(image_topic: str) -> str:
@@ -849,6 +860,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         "last_inference_at": None,
         "last_image_stamp_ns": None,
         "last_inference_stamp_ns": None,
+        "street_light_observations": (),
     }
     worker_error: list[BaseException] = []
 
@@ -889,6 +901,9 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.path_search = (
                 PathLossRecovery(self.drive_config, output_hz=args.output_hz)
                 if task_mode else None
+            )
+            self.street_lights = (
+                StreetLightApproach(_street_light_config_from_args(args)) if task_mode else None
             )
             self.tasks = (
                 LineTrackingTasks(
@@ -1168,6 +1183,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 }
                 state["path_recovery_inferences"] = {key: 0 for key in smoothers}
                 state["semantic_path_missing"] = {key: False for key in smoothers}
+                state["street_light_observations"] = ()
                 for key in (
                     "performance_inference_seconds", "performance_processing_seconds",
                     "performance_completion_times",
@@ -1181,6 +1197,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.path_recovery_inferences = 0
             if self.path_search is not None:
                 self.path_search.reset()
+            if self.street_lights is not None:
+                self.street_lights.reset()
 
         def release_task_control(self, reason: str) -> None:
             self.set_task_inference(False)
@@ -1207,6 +1225,8 @@ def run_ros2(args: argparse.Namespace) -> int:
         def drive_readiness(
             self, mask_class: int, now: float
         ) -> tuple[SmoothedPath | None, DriveDecision]:
+            mask_class = 1 if mask_class == 3 else mask_class
+            street_light_mode = self.tasks.active is not None and self.tasks.active.selected_mask == 3
             with state_lock:
                 last_image_at = state["last_image_at"]
                 camera_fault_reason = state["camera_fault_reason"]
@@ -1220,6 +1240,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     or self.path_recovery_inferences >= MAX_PATH_RECOVERY_INFERENCES
                 ))
                 inference_id = int(state["inference_count"])
+                light_observations = state["street_light_observations"]
                 if recovering and (path is None or path.stop_reason is None):
                     path = None
                 self.path_unavailable_inferences = state["path_unavailable_inferences"][
@@ -1242,6 +1263,20 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path_unavailable_inferences=self.path_unavailable_inferences,
                 path_recovery_inferences=self.path_recovery_inferences if recovering else None,
             )
+            if street_light_mode:
+                if path is None or path.stop_reason is not None:
+                    decision = DriveDecision.stop(
+                        path.stop_reason if path is not None and path.stop_reason
+                        else "street_light_road_unavailable"
+                    )
+                elif self.obstacles is None:
+                    decision = DriveDecision.stop("street_light_requires_avoidance")
+                else:
+                    decision = self.street_lights.decide(
+                        decision, light_observations, now=now, inference_id=inference_id,
+                        inference_age_sec=inference_age_sec,
+                        locate=lambda observation: self.obstacles.locate_street_light(
+                            observation, now, clock_now_ns))
             if self.obstacles is not None:
                 decision = self.obstacles.apply(decision, path, mask_class, now, clock_now_ns)
             if camera_fault_reason is not None and decision.reason not in (
@@ -1290,10 +1325,27 @@ def run_ros2(args: argparse.Namespace) -> int:
             except (ValueError, TypeError):
                 self.get_logger().warning("ignored malformed /task_event JSON")
                 return
+            if not isinstance(event, dict):
+                return
             now = time.monotonic()
             rejection_reason = None
             if self.command_publisher is not None and self.tasks.active is None:
                 rejection_reason = "control_release_pending"
+            if rejection_reason is None and self.tasks.active is None:
+                try:
+                    selected = requested_selected_mask(event, args.path_mask_class)
+                except ValueError:
+                    selected = None  # Task validation reports malformed payloads.
+                if selected == 3:
+                    config, obstacle = self.street_lights.config, _lidar_config_from_args(args)
+                    if self.obstacles is None:
+                        rejection_reason = "street_light_requires_avoidance"
+                    elif getattr(segmenter, "street_light_id", None) is None:
+                        rejection_reason = "street_light_label_unavailable"
+                    elif not (max(obstacle.front_m, obstacle.back_m, obstacle.robot_half_width_m)
+                              + obstacle.margin_m + obstacle.resolution_m <= config.stop_distance_m
+                              < obstacle.horizontal_range_m):
+                        rejection_reason = "street_light_stop_distance_out_of_range"
             previous_task = self.tasks.active
             body = self.tasks.handle_event(
                 event, now=now, rejection_reason=rejection_reason
@@ -1322,7 +1374,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         self.publish_zero_move("startup_hold")
                     else:
                         _, ready = self.drive_readiness(
-                            self.tasks.active.selected_mask, now
+                            active_path_mask_class(self.tasks.active, args.path_mask_class), now
                         )
                         self.publish_drive(ready)
                     # Wake only after initial control publication succeeds.
@@ -1548,6 +1600,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "camera_topic": args.image_topic,
                 "path_mask_class": mask_class,
                 "path_surface": PATH_MASK_CLASSES[mask_class],
+                "selected_mask": task_active.selected_mask if task_active is not None else args.path_mask_class,
+                "street_light": {"enabled": task_active is not None and task_active.selected_mask == 3,
+                                 **(self.street_lights.metrics if self.street_lights else {})},
                 "path_tracked": path is not None and path.stop_reason is None,
                 "branch_selection": path.branch_status if path else {
                     "preference": local_config.branch_preference, "state": "idle",
@@ -1688,9 +1743,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
-                result: BestSoFarResult = segmenter.segment(
-                    frame_rgb, color_order="rgb"
-                )
+                    detect_lights = (task_mode and node.tasks.active is not None
+                                     and node.tasks.active.selected_mask == 3)
+                segment_kwargs = {"color_order": "rgb"}
+                if detect_lights:
+                    segment_kwargs.update(detect_street_lights=True,
+                                          street_light_min_confidence=args.street_light_min_confidence)
+                result: BestSoFarResult = segmenter.segment(frame_rgb, **segment_kwargs)
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
@@ -1735,6 +1794,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                                 recovery_counts[mask_class] += 1
                             counts[mask_class] = 0 if available else counts[mask_class] + 1
                     state["header"] = packet.source_header
+                    state["street_light_observations"] = street_light_observations(
+                        getattr(result, "street_light_mask", None), args.street_light_min_area_px)
                     completed_before = int(state["inference_count"])
                     state["inference_count"] += 1
                     state["last_inference_at"] = inference_finished_at
@@ -1798,7 +1859,8 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lidar-to-base-transform", default=_env("SWIN_L_LIDAR_TO_BASE_TRANSFORM", ""))
     parser.add_argument("--base-to-camera-transform", default=_env("SWIN_L_BASE_TO_CAMERA_TRANSFORM", ""))
     for cls, prefix, env_prefix in ((ObstacleConfig, "obstacle_", "LIDAR_OBSTACLE_"),
-                                   (AvoidanceConfig, "avoidance_", "LINE_TRACKING_AVOIDANCE_")):
+                                   (AvoidanceConfig, "avoidance_", "LINE_TRACKING_AVOIDANCE_"),
+                                   (StreetLightConfig, "street_light_", "LINE_TRACKING_STREET_LIGHT_")):
         for name, value in asdict(cls()).items():
             parser.add_argument("--" + (prefix + name).replace("_", "-"), dest=prefix + name,
                 type=type(value), default=type(value)(_env(env_prefix + name.upper(), str(value))))
@@ -1852,9 +1914,9 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--path-mask-class",
         type=int,
-        choices=tuple(PATH_MASK_CLASSES),
+        choices=SELECTED_MASKS,
         default=_env("SWIN_L_PATH_MASK_CLASS", "2"),
-        help="0=road or sidewalk, 1=road, 2=sidewalk (default from SWIN_L_PATH_MASK_CLASS)",
+        help="0=road or sidewalk, 1=road, 2=sidewalk, 3=street-light scenario (task-drive only)",
     )
     parser.add_argument(
         "--near-distance-m",
@@ -2121,6 +2183,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     try:
         _lidar_config_from_args(args).validate()
         _avoidance_config_from_args(args).validate()
+        _street_light_config_from_args(args).validate()
         if args.lidar_calibration_profile not in CALIBRATION_PROFILES:
             raise ValueError("invalid lidar calibration profile")
         parse_transform(args.lidar_to_base_transform)
@@ -2138,10 +2201,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "LINE_TRACKING_STOP_ON_PATH_UNAVAILABLE / PATH_LOSS_LIMIT / "
             "LOW_CONFIDENCE / LATERAL_TARGET (true=enabled, false=disabled)"
         )
-    if args.path_mask_class not in PATH_MASK_CLASSES:
+    if args.path_mask_class not in (SELECTED_MASKS if args.mode == "task-drive" else PATH_MASK_CLASSES):
         parser.error(
             "SWIN_L_PATH_MASK_CLASS must be 0 (road or sidewalk), "
-            "1 (road), or 2 (sidewalk)"
+            "1 (road), 2 (sidewalk), or 3 (street-light scenario, task-drive only)"
         )
     if not all(
         math.isfinite(rate) and rate > 0.0

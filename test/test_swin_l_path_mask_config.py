@@ -30,6 +30,15 @@ def test_sidewalk_is_the_default_path_class(monkeypatch):
     assert debug.parse_args(["ros2"]).path_mask_class == 2
 
 
+def test_street_light_scenario_uses_road_and_is_task_drive_only():
+    assert debug.parse_args(["task-drive", "--path-mask-class", "3"]).path_mask_class == 3
+    active = ActiveTask("light", "light", None, None, 10.0, 30.0, 3)
+    assert debug.active_path_mask_class(active, 2) == 1
+    assert debug.active_path_mask_class(None, 3) == 1
+    with pytest.raises(SystemExit):
+        debug.parse_args(["ros2", "--path-mask-class", "3"])
+
+
 @pytest.mark.parametrize("mask_class", [0, 1, 2])
 def test_command_line_can_override_env_for_offline_path_preview(
     monkeypatch, tmp_path, mask_class
@@ -50,7 +59,7 @@ def test_command_line_can_override_env_for_offline_path_preview(
     assert args.path_mask_class == mask_class
 
 
-@pytest.mark.parametrize("value", ["-1", "3", "road", ""])
+@pytest.mark.parametrize("value", ["-1", "4", "road", ""])
 def test_invalid_path_class_fails_before_ros_starts(monkeypatch, value):
     monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", value)
 

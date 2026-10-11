@@ -365,3 +365,27 @@ class AvoidanceController:
             height_max_m=c.max_height_m,
         )
         return DriveDecision(vx, vy, nominal.yaw_rate, "lidar_" + state)
+
+    def apply_direct(self, nominal, scan, region, *, now, clock_ns):
+        """Check a scenario's holonomic velocity without steering away from its target."""
+        reason = fresh(scan, now, clock_ns, self.obstacles)
+        if reason:
+            return self.stop(reason)
+        a = self.config
+        target_vy = float(np.clip(nominal.vy, -a.max_lateral_mps, a.max_lateral_mps))
+        target_vx = min(nominal.vx, a.max_forward_mps)
+        if nominal.reason == "street_light_approaching" and abs(nominal.vy) > 1e-6:
+            target_vx = min(target_vx, abs(target_vy) / 3)
+        target = (target_vx, target_vy)
+        dt = (min(0.1, max(0.0, now - self.last_time))
+              if self.last_time is not None else 1 / a.control_hz)
+        self.last_time = now
+        vx, vy = self._ramp(*target, dt)
+        age = max(0.0, (clock_ns - scan.stamp_ns) / 1e9)
+        ok, _, reason = self.trajectory_check(vx, vy, 0.0, scan, region, age, target)
+        if not ok:
+            return self.stop(reason)
+        self.last_vx, self.last_vy = vx, vy
+        self.planned_velocity = ((vx, vy, 0.0), target)
+        self.metrics.update(state=nominal.reason, reason=nominal.reason, vx=vx, vy=vy)
+        return DriveDecision(vx, vy, 0.0, nominal.reason)

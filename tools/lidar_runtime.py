@@ -178,6 +178,17 @@ class LidarRuntime:
 
     def apply(self, nominal, path, mask_class, now, clock_ns):
         with self.lock:
+            if nominal.reason in ("street_light_cruising", "street_light_approaching"):
+                try:
+                    scan, region = self._context(1, now, clock_ns)
+                    if path is None or path.stop_reason is not None:
+                        raise ValueError("avoidance_path_unavailable")
+                    result = self.controller.apply_direct(
+                        nominal, scan, region, now=now, clock_ns=clock_ns)
+                except (ValueError, AttributeError, TypeError, cv2.error) as error:
+                    result = self.controller.stop(str(error))
+                self.metrics = {**self.metrics, **self.controller.metrics}
+                return result
             if nominal.reason not in ("tracking", "tracking_slow_turn"):
                 reason = nominal.reason
                 if reason in ("tracking_path_recovery", "tracking_path_hold") or reason.startswith("path_recovery_"):
@@ -185,6 +196,7 @@ class LidarRuntime:
                 result = self.controller.stop(reason)
                 self.metrics = {**self.metrics, **self.controller.metrics}
                 return result
+
             try:
                 scan, region = self._context(mask_class, now, clock_ns)
                 if self.drive_config is not None:
@@ -218,6 +230,38 @@ class LidarRuntime:
                 result = self.controller.stop(reason)
                 self.metrics = {**self.metrics, **self.controller.metrics}
                 return result
+
+    def locate_street_light(self, observation, now, clock_ns):
+        """Visual bearing and LiDAR proximity in matching image columns.
+
+        Column association is proximity evidence, not a 3-D object ID. Never
+        project the elevated lamp head onto a ground plane to invent its range.
+        """
+        with self.lock:
+            scan, _ = self._context(1, now, clock_ns)
+            _, header, shape, _ = self.reference
+            info = [i for i in self.infos if i.header.frame_id == header.frame_id
+                    and (i.height, i.width) == shape][-1]
+            k, d = np.asarray(info.k, float).reshape(3, 3), np.asarray(info.d, float)
+            pixel = np.array([[[observation.center * info.width,
+                                observation.bottom * info.height]]], dtype=float)
+            ray_xy = cv2.undistortPoints(pixel, k, d).reshape(2)
+            ray = self.camera[:3, :3].T @ np.r_[ray_xy, 1.0]
+            if not np.isfinite(ray).all() or ray[0] <= 0.01:
+                raise ValueError("street_light_geometry_invalid")
+            bearing = float(np.arctan2(ray[1], ray[0]))
+            distance = None
+            if len(scan.points):
+                points = np.column_stack((scan.points, np.zeros(len(scan.points))))
+                camera = points @ self.camera[:3, :3].T + self.camera[:3, 3]
+                uv, _ = cv2.projectPoints(camera, np.zeros(3), np.zeros(3), k, d)
+                columns = uv.reshape(-1, 2)[:, 0] / info.width
+                match = ((camera[:, 2] > 0.01) & np.isfinite(columns)
+                         & (columns >= observation.left - 0.03)
+                         & (columns <= observation.right + 0.03))
+                if np.any(match):
+                    distance = float(np.linalg.norm(scan.points[match], axis=1).min())
+            return bearing, distance
 
     def guard(self, decision, mask_class, now, clock_ns):
         """All positive commands pass here, including task acquisition paths."""

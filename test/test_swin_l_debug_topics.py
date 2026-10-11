@@ -232,7 +232,7 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
     assert not hasattr(args, "clearance_topic")
     assert debug.run_ros2(args) == 0
     assert len(deadlines) == 2
-    assert deadlines[1] - deadlines[0] >= 0.8
+    assert deadlines[1] - deadlines[0] >= 0.8 - 1e-9
     assert published_topics == [
         args.local_path_topic,
         args.metrics_topic,

@@ -9,7 +9,8 @@ accepted task, it publishes
 no Sport Move request. The default path class is sidewalk
 (`SWIN_L_PATH_MASK_CLASS=2`); a task can request road (`1`) or road/sidewalk
 combined (`0`) with
-`payload.selected_mask`.
+`payload.selected_mask`. Scenario `3` cruises straight on the road, approaches
+confirmed `Street Light` detections primarily laterally, then resumes cruising.
 Livox obstacle avoidance is enabled by default. A 20 Hz control loop combines
 the camera reference path with 10 Hz `/livox/lidar`, IMU, CameraInfo,
 and fixed measured sensor transforms in `base_link`. Odometry is not required. Ground-height estimation has been removed.
@@ -361,8 +362,8 @@ Example task payload (`duration_sec` ends the task only when `TASK_TIMEOUT=true`
 {"duration_sec": 30, "selected_mask": 2}
 ```
 
-`selected_mask` accepts `0` (road or sidewalk), `1` (road only), or `2`
-(sidewalk only). With `0`, both surface labels from the same inference form
+`selected_mask` accepts `0` (road or sidewalk), `1` (road only), `2`
+(sidewalk only), or `3` (road cruising with Street Light approach). With `0`, both surface labels from the same inference form
 one combined region for path generation and tracking. Either surface alone
 can produce a path, and adjacent road/sidewalk regions can form one wider
 region. Semantic background pixels (label `0`) are still excluded. This mode
@@ -373,6 +374,69 @@ To use this mode when a task omits `selected_mask`, set
 image. An explicit task value overrides the environment default. Metrics
 report `path_mask_class: 0` and `path_surface: "ROAD_OR_SIDEWALK"`. Existing
 stop checks still apply; no road/sidewalk region means no path.
+
+### selected_mask=3: 차도 직진 → 가로등 횡이동 접근 → 직진 재개
+
+`LINE_TRACKING` 작업 payload에 `{"selected_mask": 3}`을 지정한다.
+기본 시나리오로 사용하려면 `SWIN_L_PATH_MASK_CLASS=3`을 지정한다
+(`task-drive` 전용). 별도 검출기나 TensorRT 엔진 재빌드는 필요하지 않다.
+Swin-L/Mapillary 및 R50의 기존 65개 클래스 추론에서 `Street Light`를 추가로 읽는다.
+표면 마스크는 기존 `0/1/2`를 유지하며, `3`은 작업 시나리오 번호다.
+
+```dotenv
+LINE_TRACKING_AVOIDANCE_ENABLED=true
+# 횡이동 시 새로 차지하는 뒤쪽/옆쪽 공간도 실제 LiDAR로 관측해야 한다.
+LIDAR_OBSTACLE_FOV_DEG=360.0
+LINE_TRACKING_STREET_LIGHT_STOP_DISTANCE_M=1.0
+LINE_TRACKING_STREET_LIGHT_MAX_LATERAL_MPS=0.15
+LINE_TRACKING_STREET_LIGHT_FORWARD_MPS=0.05
+LINE_TRACKING_STREET_LIGHT_CONFIRM_FRAMES=3
+LINE_TRACKING_STREET_LIGHT_CLEAR_FRAMES=3
+LINE_TRACKING_STREET_LIGHT_MIN_AREA_PX=24
+LINE_TRACKING_STREET_LIGHT_MIN_CONFIDENCE=0.50
+LINE_TRACKING_STREET_LIGHT_MAX_AGE_SEC=1.0
+LINE_TRACKING_STREET_LIGHT_MAX_APPROACH_SEC=30.0
+```
+
+`.env`를 수정한 뒤 `docker compose up -d --build actual-activate`로 적용한다.
+기본 전방 190° 제한은 횡이동할 때 필요한 뒤쪽·옆쪽 공간을 미관측으로 남길 수
+있으므로, 위 예시는 360° LiDAR의 전체 관측을 사용한다. 미관측 공간은 통과하지 않는다.
+LiDAR 회피가 꺼져 있거나 모델에 `Street Light` 라벨이 없으면 이 시나리오의
+작업 시작을 거절한다. LiDAR·IMU·CameraInfo·카메라 보정은 기존 회피 설정을 사용한다.
+`STOP_DISTANCE_M`는 로봇 외곽+여유+격자 한 칸 이상이며 LiDAR 감지 반경보다
+작아야 한다. 기본 1m는 기본 감지 반경 1.5m 안에 있다.
+
+- **차도 직진:** 차도(`1`)의 현재 Path가 있을 때 전진하고, 회전·횡이동은 0으로
+  유지한다. 전진 상한은 기존 주행 및 회피 상한 중 작은 값(기본 0.20m/s)이다.
+- **검출 확인:** 현재 프레임에서 의미 점수 비율 0.50 이상인 `Street Light`
+  연결 영역 중 24픽셀 이상을 사용한다. 처음에는 가장 큰 영역을 선택하고,
+  이후에는 화면 가로 중심이 가까운 같은 후보를 새 추론 3회 연속 확인한다.
+  제어 타이머의 반복 호출은 확인 횟수를 늘리지 않는다. 표면 EMA의 잔상은 사용하지 않는다.
+- **접근:** 영상과 CameraInfo/고정 변환으로 좌우 방향을 구하고 회전 없이
+  횡이동한다. 횡속도는 최대 0.15m/s이며, 횡이동 중 목표 전진 속도는
+  `min(0.05m/s, |vy|/3)`이다. 정면 ±0.05rad 안에서는 0.05m/s 이하로
+  전진한다. 실제 명령은 기존 회피 속도·가속 상한을 따르므로 전환 구간에는 차이가 있다.
+- **근접 판정·재개:** 가로등 영역의 영상 열(좌우 3% 여유)과 겹치는 LiDAR
+  반사점을 카메라 보정으로 연관시켜, `base_link` 중심부터 반사점까지의 수평 거리가
+  1m 이하이면 0 명령을 한 번 보내고 다음 제어 주기에 차도 직진을 재개한다.
+  Cobiz 작업은 완료하지 않는다. 같은 가로등이 계속 보이는 동안 재접근하지 않으며,
+  가로등이 새 추론 3회 연속 사라진 후 다음 접근을 허용한다.
+- **유실·제한:** 접근 중 가로등이 사라지거나 30초 안에 근접 판정을 못 하면
+  0 명령으로 횡이동을 끝내고 다음 제어 주기에 차도 직진으로 돌아간다. 추론 원본 영상이 1초보다 오래됐거나
+  차도 Path·LiDAR·IMU·보정이 없으면 정지하며, 선택적 자동 정지 스위치로 우회하지 않는다.
+  전체 차체의 예측 이동을 차도 영역·관측 공간·장애물에 대해 검사한다.
+  충돌 없이 직진/접근할 수 없으면 정지하며 다른 방향으로 우회하지 않는다.
+
+`metrics.selected_mask=3`, `path_mask_class=1`, `path_surface="ROAD"`를 발행한다.
+`metrics.street_light`에는 `state`(`cruising/confirming/approaching/passing`),
+확인 횟수, 접근 방향, LiDAR 연관 거리, 방문 횟수와 전환 이유를 기록한다.
+작업 시작·취소·종료 시 후보와 방문 상태를 초기화한다.
+
+영상 열과 LiDAR 반사점의 연관은 가로등 인스턴스의 3차원 위치를 확정하지 않는다.
+같은 방향의 다른 물체도 근접 증거가 될 수 있으며, 반사점이 없으면 도착으로
+판정하지 않는다. 가로등 머리의 픽셀 높이를 지면에 투영해 거리를 추정하지 않는다.
+차도 밖에 있는 가로등은 차도·충돌 검사 때문에 설정 거리까지 접근하지 못할 수 있다.
+실제 장비에서는 검출 품질·보정·접근 방향과 여유 거리를 저속으로 확인해야 한다.
 
 The default duration is 500 seconds. Requests above 10000 seconds are capped at
 10000 seconds. Existing deployments with `LINE_TRACKING_MAX_DURATION_SEC=1000`
@@ -686,7 +750,10 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 | `control_publisher_error` | 새 작업의 Sport publisher 생성 또는 최초 제어 명령 처리 실패. publisher가 있으면 정지 명령 재시도 후 해제 |
 | `invalid_payload_json` | 문자열 payload의 JSON 문법 오류 |
 | `invalid_payload` | payload가 JSON 객체가 아님 (`null`/누락은 기본값 사용) |
-| `invalid_selected_mask` | 정수 `0`, `1`, `2` 이외 값. 문자열이나 bool도 거절 |
+| `invalid_selected_mask` | 정수 `0`, `1`, `2`, `3` 이외 값. 문자열이나 bool도 거절 |
+| `street_light_requires_avoidance` | 시나리오 3인데 `LINE_TRACKING_AVOIDANCE_ENABLED=false` |
+| `street_light_label_unavailable` | 시나리오 3인데 모델에 `Street Light` 라벨이 없음 |
+| `street_light_stop_distance_out_of_range` | 시나리오 3의 도착 거리가 로봇 외곽·여유보다 작거나 LiDAR 감지 반경 이상 |
 | `invalid_duration_sec` | duration이 숫자가 아님. bool도 거절 |
 | `duration_sec_out_of_range` | duration이 NaN/Inf이거나 3초 미만. 최대값 초과는 거절하지 않고 설정 최대값으로 제한 |
 

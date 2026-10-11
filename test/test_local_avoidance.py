@@ -34,6 +34,36 @@ def path(y=0):
     return SmoothedPath(np.array([[0.1, y], [3.0, y], [6.0, y]]), 1.0, 0.0, "test")
 
 
+@pytest.mark.parametrize("sign", [-1, 1])
+def test_scenario_velocity_keeps_its_target_side_and_lateral_priority_under_caps(sign):
+    config = AvoidanceConfig(max_lateral_mps=0.03)
+    controller = AvoidanceController(config, C)
+    nominal = DriveDecision(0.05, sign * 0.15, 0.0, "street_light_approaching")
+    for tick in range(20):
+        now = tick * 0.05
+        scan = replace(scene(), arrival=now, stamp_ns=100_000_000_000 + round(now * 1e9))
+        command = controller.apply_direct(nominal, scan, np.ones(C.shape, bool),
+                                          now=now, clock_ns=scan.stamp_ns)
+        assert command.reason == "street_light_approaching"
+        assert command.yaw_rate == 0
+        assert command.vy * sign > 0
+    assert abs(command.vy) == pytest.approx(0.03)
+    assert command.vx <= abs(command.vy) / 3 + 1e-8
+
+
+@pytest.mark.parametrize("fault", ["collision", "unknown", "semantic_edge"])
+def test_scenario_direct_velocity_cannot_bypass_swept_footprint_checks(fault):
+    controller = AvoidanceController(AvoidanceConfig(), C)
+    scan = scene([[0.7, 0.0]]) if fault == "collision" else scene()
+    if fault == "unknown":
+        scan = replace(scan, observed=np.zeros(C.shape, bool))
+    region = np.zeros(C.shape, bool) if fault == "semantic_edge" else np.ones(C.shape, bool)
+    command = controller.apply_direct(
+        DriveDecision(0.05, 0.15, 0.0, "street_light_approaching"), scan, region,
+        now=0.0, clock_ns=scan.stamp_ns)
+    assert command.vx == command.vy == command.yaw_rate == 0
+
+
 @pytest.mark.parametrize("preference,sign", [("right", -1), ("left", 1)])
 def test_head_on_symmetry_is_broken_by_configured_side(preference, sign):
     ctrl = AvoidanceController(AvoidanceConfig(preference=preference), C)

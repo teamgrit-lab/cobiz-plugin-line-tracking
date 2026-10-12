@@ -22,7 +22,7 @@ class ObstacleConfig:
     max_height_m: float = 0.20
     horizontal_range_m: float = 1.50
     fov_deg: float = 190.0
-    max_age_sec: float = 0.30
+    max_age_sec: float = 0.50  # Five scan periods at the expected 10 Hz publication rate.
     imu_accel_unit: str = "auto"
     forward_m: float = 6.0
     rear_m: float = 1.0

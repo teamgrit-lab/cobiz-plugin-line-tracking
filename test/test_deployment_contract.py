@@ -3,6 +3,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_vegetation_sideways_speed_reaches_both_live_services():
+    import yaml
+
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    key = "LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS"
+    for name in ("actual-activate", "debugging-swin-l"):
+        assert services[name]["environment"][key] == "${" + key + ":-0.05}"
+    assert key + "=0.05" in (ROOT / ".env.example").read_text()
+
+
 def test_street_light_configuration_reaches_the_task_container():
     import yaml
     import sys
@@ -146,7 +156,7 @@ def test_livox_obstacle_inputs_and_limits_reach_both_live_services():
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("actual-activate", "debugging-swin-l"):
         env = services[name]["environment"]
-        assert env["LINE_TRACKING_AVOIDANCE_ENABLED"].endswith(":-true}")
+        assert env["LINE_TRACKING_AVOIDANCE_ENABLED"].endswith(":-false}")
         assert env["SWIN_L_LIDAR_TOPIC"].endswith(":-/livox/lidar}")
         assert env["SWIN_L_LIDAR_IMU_TOPIC"].endswith(":-/livox/imu}")
         assert env["SWIN_L_LIDAR_TO_BASE_TRANSFORM"].endswith(":-}")
@@ -156,8 +166,10 @@ def test_livox_obstacle_inputs_and_limits_reach_both_live_services():
         assert env["LIDAR_OBSTACLE_MAX_HEIGHT_M"].endswith(":-0.2}")
         assert env["LIDAR_OBSTACLE_HORIZONTAL_RANGE_M"].endswith(":-1.5}")
         assert env["LIDAR_OBSTACLE_FOV_DEG"].endswith(":-190.0}")
+        assert env["LIDAR_OBSTACLE_MAX_AGE_SEC"].endswith(":-0.5}")
         assert not any("ODOM" in key or "CORRIDOR_MEMORY" in key for key in env)
     assert "ros-humble-tf2-ros" in (ROOT / "Dockerfile.swin-l-debug").read_text()
+    assert "LIDAR_OBSTACLE_MAX_AGE_SEC=0.5" in (ROOT / ".env.example").read_text()
 
 
 def test_automatic_stop_switches_are_forwarded_and_default_disabled():

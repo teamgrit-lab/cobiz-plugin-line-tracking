@@ -28,9 +28,10 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
         def __init__(self, config):
             configurations.append(config)
 
-        def segment(self, frame):
+        def segment(self, frame, *, detect_vegetation=False):
             # The MCAP camera is RGB; the runtime must receive unmodified BGR.
             assert frame[0, 0].tolist() == [3, 2, 1]
+            assert detect_vegetation == (mode == "local-path")
             calls.append(frame)
             return SimpleNamespace(
                 selected_mask=np.full((360, 640), 2, np.uint8), total_seconds=0.01
@@ -165,10 +166,10 @@ def test_replay_arguments_forward_obstacle_calibration_and_explicit_camera_only_
     assert forwarded[forwarded.index("--obstacle-fov-deg")+1] == "190"
 
 
-def test_active_parsers_default_to_livox_obstacle_avoidance():
+def test_active_parsers_default_to_camera_only_with_livox_settings_available():
     for argv in (["ros2"], ["task-drive"]):
         args = debug.parse_args(argv)
-        assert args.avoidance_enabled
+        assert not args.avoidance_enabled
         assert args.lidar_topic == "/livox/lidar"
         assert args.lidar_imu_topic == "/livox/imu"
         assert args.lidar_frame_id == "livox_frame"
@@ -178,6 +179,7 @@ def test_active_parsers_default_to_livox_obstacle_avoidance():
         assert args.obstacle_max_height_m == .2
         assert args.obstacle_horizontal_range_m == 1.5
         assert args.obstacle_fov_deg == 190
+        assert args.obstacle_max_age_sec == .5
         assert not hasattr(args, "clearance_topic")
 
 
@@ -210,7 +212,7 @@ def test_mcap_updates_obstacles_between_rate_limited_camera_inferences(tmp_path,
     base, _ = a2_livox_front_transforms("livox_frame", "base_link", "camera_optical_frame")
     calls = []
     monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _: SimpleNamespace(
-        segment=lambda frame: (calls.append(frame) or SimpleNamespace(
+        segment=lambda frame, **_kwargs: (calls.append(frame) or SimpleNamespace(
             selected_mask=np.full((360, 640), 2, np.uint8), total_seconds=.01)),
         metadata=lambda: {}))
     frames = []
@@ -232,7 +234,8 @@ def test_mcap_updates_obstacles_between_rate_limited_camera_inferences(tmp_path,
 
     monkeypatch.setattr(debug, "_iter_mcap_events", events)
     args = debug.parse_args(["mcap", "--input", str(source), "--output", str(tmp_path / "overlay.mp4"),
-        "--report", str(report_path), "--inference-hz", "1", "--no-unrestricted-path-mode", "--branch-preference", "center"])
+        "--report", str(report_path), "--inference-hz", "1", "--avoidance-enabled",
+        "--no-unrestricted-path-mode", "--branch-preference", "center"])
     assert debug.run_mcap(args) == 0
     report = json.loads(report_path.read_text())
     assert len(calls) == 1 and len(frames) == 3

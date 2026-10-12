@@ -1,11 +1,11 @@
 x-lidar-obstacle-environment: &lidar-obstacle-environment
-  LINE_TRACKING_AVOIDANCE_ENABLED: ${LINE_TRACKING_AVOIDANCE_ENABLED:-true}
+  LINE_TRACKING_AVOIDANCE_ENABLED: ${LINE_TRACKING_AVOIDANCE_ENABLED:-false}
   LIDAR_OBSTACLE_HEIGHT_REFERENCE: ${LIDAR_OBSTACLE_HEIGHT_REFERENCE:-base_link}
   LIDAR_OBSTACLE_MIN_HEIGHT_M: ${LIDAR_OBSTACLE_MIN_HEIGHT_M:--0.2}
   LIDAR_OBSTACLE_MAX_HEIGHT_M: ${LIDAR_OBSTACLE_MAX_HEIGHT_M:-0.2}
   LIDAR_OBSTACLE_HORIZONTAL_RANGE_M: ${LIDAR_OBSTACLE_HORIZONTAL_RANGE_M:-1.5}
   LIDAR_OBSTACLE_FOV_DEG: ${LIDAR_OBSTACLE_FOV_DEG:-190.0}
-  LIDAR_OBSTACLE_MAX_AGE_SEC: ${LIDAR_OBSTACLE_MAX_AGE_SEC:-0.3}
+  LIDAR_OBSTACLE_MAX_AGE_SEC: ${LIDAR_OBSTACLE_MAX_AGE_SEC:-0.5}
   LIDAR_OBSTACLE_IMU_ACCEL_UNIT: ${LIDAR_OBSTACLE_IMU_ACCEL_UNIT:-auto}
   LIDAR_OBSTACLE_FORWARD_M: ${LIDAR_OBSTACLE_FORWARD_M:-6.0}
   LIDAR_OBSTACLE_REAR_M: ${LIDAR_OBSTACLE_REAR_M:-1.0}
@@ -49,6 +49,12 @@ x-apriltag-environment: &apriltag-environment
   SWIN_L_APRILTAG_MAX_HAMMING: ${SWIN_L_APRILTAG_MAX_HAMMING:-0}
   SWIN_L_APRILTAG_MAX_HZ: ${SWIN_L_APRILTAG_MAX_HZ:-6.0}
 
+x-sidewalk-vegetation-environment: &sidewalk-vegetation-environment
+  LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS: ${LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS:-0.05}
+  SWIN_L_SIDEWALK_VEGETATION_BIAS_M: ${SWIN_L_SIDEWALK_VEGETATION_BIAS_M:-0.20}
+  SWIN_L_SIDEWALK_VEGETATION_MAX_GAP_M: ${SWIN_L_SIDEWALK_VEGETATION_MAX_GAP_M:-0.30}
+  SWIN_L_SIDEWALK_VEGETATION_EDGE_MARGIN_M: ${SWIN_L_SIDEWALK_VEGETATION_EDGE_MARGIN_M:-0.45}
+
 services:
   # Safe inspection-only process. It publishes local path/debug topics and
   # never publishes /api/sport/request. Start it explicitly with:
@@ -75,7 +81,7 @@ services:
       - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
       - ${SWIN_L_ENGINE_DIR:-./models}:/models:ro
     environment:
-      <<: [*lidar-obstacle-environment, *apriltag-environment]
+      <<: [*lidar-obstacle-environment, *apriltag-environment, *sidewalk-vegetation-environment]
       # Keep the inspection service from duplicating the driving detector.
       SWIN_L_APRILTAG_DETECTOR_ENABLED: ${SWIN_L_DEBUG_APRILTAG_DETECTOR_ENABLED:-false}
       SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/res_360p/image_raw}
@@ -121,7 +127,7 @@ services:
       - ${SWIN_L_ENGINE_DIR:-./models}:/models
       - ${SWIN_L_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint
     environment:
-      <<: [*lidar-obstacle-environment, *apriltag-environment]
+      <<: [*lidar-obstacle-environment, *apriltag-environment, *sidewalk-vegetation-environment]
       SWIN_L_APRILTAG_DETECTOR_ENABLED: ${SWIN_L_APRILTAG_DETECTOR_ENABLED:-true}
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}

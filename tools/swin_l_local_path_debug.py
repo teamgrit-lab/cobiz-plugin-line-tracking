@@ -94,6 +94,7 @@ from local_path import (
     selected_path_region,
 )
 from r50_checkpoint import validate_checkpoint
+from sidewalk_vegetation import bias_sidewalk_estimate
 from street_light_approach import (
     StreetLightApproach, StreetLightConfig, street_light_observations,
 )
@@ -233,10 +234,16 @@ def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
     return 1 if selected == 3 else selected
 
 
-def extract_path_estimates(selected_mask, mask_classes, config):
+def extract_path_estimates(selected_mask, mask_classes, config, vegetation_mask=None):
     """Semantic reference paths are independent of obstacle sensing."""
-    return {key: extract_sidewalk_centerline(selected_path_region(selected_mask, key), config)
-            for key in mask_classes}
+    estimates = {}
+    for key in mask_classes:
+        region = selected_path_region(selected_mask, key)
+        estimate = extract_sidewalk_centerline(region, config)
+        if key == 2:
+            estimate = bias_sidewalk_estimate(estimate, region, vegetation_mask, config)
+        estimates[key] = estimate
+    return estimates
 
 
 def update_path_smoothers(
@@ -244,10 +251,11 @@ def update_path_smoothers(
     smoothers: dict[int, LocalPathSmoother],
     config: LocalPathConfig,
     timestamp_sec: float,
+    vegetation_mask: np.ndarray | None = None,
 ) -> dict[int, LocalPathEstimate | None]:
     """Keep all configured surface candidates current from one inference."""
 
-    estimates = extract_path_estimates(selected_mask, tuple(smoothers), config)
+    estimates = extract_path_estimates(selected_mask, tuple(smoothers), config, vegetation_mask)
     for mask_class, smoother in smoothers.items():
         smoother.update(estimates[mask_class], timestamp_sec)
     return estimates
@@ -314,6 +322,9 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         branch_margin_m=args.branch_margin_m,
         branch_confirm_frames=args.branch_confirm_frames,
         branch_hold_sec=args.branch_hold_sec,
+        sidewalk_vegetation_bias_m=args.sidewalk_vegetation_bias_m,
+        sidewalk_vegetation_max_gap_m=args.sidewalk_vegetation_max_gap_m,
+        sidewalk_vegetation_edge_margin_m=args.sidewalk_vegetation_edge_margin_m,
     )
 
 
@@ -321,6 +332,7 @@ def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
     config = DriveConfig(
         max_forward_mps=args.max_forward_mps,
         max_target_heading_deg=args.max_target_heading_deg,
+        vegetation_max_lateral_mps=args.vegetation_max_lateral_mps,
         path_loss_recovery_enabled=args.path_loss_recovery_enabled,
         path_recovery_wait_sec=args.path_recovery_wait_sec,
         path_recovery_yaw_rps=args.path_recovery_yaw_rps,
@@ -612,10 +624,11 @@ def run_mcap(args):
         raise FileNotFoundError(f"MCAP input does not exist: {path}")
     with_path = args.overlay_mode == "local-path"
     local_config = _local_path_config_from_args(args) if with_path else None
+    preview_drive_config = DriveConfig(vegetation_max_lateral_mps=args.vegetation_max_lateral_mps)
     segmenter = BestSoFarSegmenter(_runtime_config(args))
     smoother = LocalPathSmoother(local_config) if with_path else None
     sensors = LidarRuntime(args, _lidar_config_from_args(args), _avoidance_config_from_args(args),
-                           drive_config=DriveConfig()) if with_path and args.avoidance_enabled else None
+                           drive_config=preview_drive_config) if with_path and args.avoidance_enabled else None
     topics = [args.image_topic]
     if sensors:
         topics += [args.lidar_topic, args.lidar_imu_topic, args.camera_info_topic]
@@ -656,9 +669,13 @@ def run_mcap(args):
                 overlay = segmenter.render_overlay(frame, result.selected_mask, frame_index=count, fps=args.output_fps)
             else:
                 if args.unrestricted_path_mode or now >= next_inference:
-                    result = segmenter.segment(frame)
+                    result = segmenter.segment(
+                        frame, detect_vegetation=(args.path_mask_class == 2
+                                                 and local_config.sidewalk_vegetation_bias_m > 0))
                     previous_mask = result.selected_mask
-                    estimate = extract_path_estimates(previous_mask, (args.path_mask_class,), local_config)[args.path_mask_class]
+                    estimate = extract_path_estimates(
+                        previous_mask, (args.path_mask_class,), local_config,
+                        getattr(result, "vegetation_mask", None))[args.path_mask_class]
                     smoother.update(estimate, now)
                     if sensors:
                         sensors.set_reference(previous_mask, decoded.header, frame.shape[:2], now)
@@ -667,7 +684,7 @@ def run_mcap(args):
                     next_inference = now + 1 / args.inference_hz
                 current = smoother.current(now)
                 if sensors:
-                    nominal = decide_drive(current, camera_age_sec=0, inference_age_sec=0, config=DriveConfig())
+                    nominal = decide_drive(current, camera_age_sec=0, inference_age_sec=0, config=preview_drive_config)
                     sensors.apply(nominal, current, args.path_mask_class, now, message.log_time)
                 overlay = render_local_path_overlay(frame, previous_mask, estimate, current, local_config,
                     frame_index=count, inference_count=updates,
@@ -881,23 +898,9 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.base_from_lidar = parse_transform(args.lidar_to_base_transform)
             self.camera_from_base = parse_transform(args.base_to_camera_transform)
             self.tf_buffer = self.tf_listener = None
-            if args.avoidance_enabled and args.lidar_calibration_profile == "tf" and (
-                self.base_from_lidar is None or self.camera_from_base is None
-            ):
-                from tf2_ros import Buffer, TransformListener
-
-                self.tf_buffer = Buffer()
-                self.tf_listener = TransformListener(self.tf_buffer, self)
             self.drive_config = _drive_config_from_args(args) if task_mode else None
-            def lookup(target, source, header):
-                from rclpy.time import Time
-                try:
-                    return transform_matrix(self.tf_buffer.lookup_transform(
-                        target, source, Time.from_msg(header.stamp)).transform)
-                except Exception as error:
-                    raise ValueError("lidar_transform_unavailable") from error
-            self.obstacles = LidarRuntime(args, _lidar_config_from_args(args),
-                _avoidance_config_from_args(args), lookup, self.drive_config or DriveConfig()) if args.avoidance_enabled else None
+            self.obstacles = None
+            self.lidar_subscriptions = []
             self.path_search = (
                 PathLossRecovery(self.drive_config, output_hz=args.output_hz)
                 if task_mode else None
@@ -978,17 +981,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.image_subscription = self.create_subscription(
                 Image, args.image_topic, self.on_image, input_qos
             )
-            if args.avoidance_enabled:
-                from sensor_msgs.msg import CameraInfo, Imu, PointCloud2
-
-                sensor_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=5,
-                                        reliability=ReliabilityPolicy.BEST_EFFORT)
-                self.lidar_subscription = self.create_subscription(
-                    PointCloud2, args.lidar_topic, self.on_lidar, sensor_qos)
-                self.imu_subscription = self.create_subscription(
-                    Imu, args.lidar_imu_topic, self.on_lidar_imu, sensor_qos)
-                self.camera_info_subscription = self.create_subscription(
-                    CameraInfo, args.camera_info_topic, self.on_camera_info, sensor_qos)
             self.path_publisher = self.create_publisher(
                 __import__("nav_msgs.msg", fromlist=["Path"]).Path,
                 args.local_path_topic,
@@ -1042,8 +1034,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                             reliability=ReliabilityPolicy.BEST_EFFORT,
                         ),
                     )
-            control_hz = args.avoidance_control_hz if args.avoidance_enabled else args.output_hz
-            self.timer = self.create_timer(1.0 / control_hz, self.publish_state)
+            self.timer = None
+            self.set_lidar_enabled(args.avoidance_enabled)
             self.started = time.monotonic()
             self.get_logger().info(
                 "Swin-L local path debug started | image=%s profile=%s "
@@ -1051,7 +1043,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 % (
                     args.image_topic,
                     args.profile,
-                    PATH_MASK_CLASSES[args.path_mask_class],
+                    PATH_MASK_CLASSES[active_path_mask_class(None, args.path_mask_class)],
                     args.inference_hz,
                     args.output_hz,
                     local_config.near_distance_m,
@@ -1070,6 +1062,56 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "Cobiz LINE_TRACKING task listener ready; model loaded, camera "
                     "inference paused until task acceptance; Sport publisher absent"
                 )
+
+        def lookup_lidar_transform(self, target, source, header):
+            from rclpy.time import Time
+            try:
+                return transform_matrix(self.tf_buffer.lookup_transform(
+                    target, source, Time.from_msg(header.stamp)).transform)
+            except Exception as error:
+                raise ValueError("lidar_transform_unavailable") from error
+
+        def set_lidar_enabled(self, enabled: bool) -> None:
+            # Share the worker's publication lock so an old frame cannot write
+            # its reference into a runtime being removed during task release.
+            with state_lock:
+                if enabled == (self.obstacles is not None) and self.timer is not None:
+                    return
+                if enabled:
+                    self.obstacles = LidarRuntime(
+                        args, _lidar_config_from_args(args), _avoidance_config_from_args(args),
+                        self.lookup_lidar_transform, self.drive_config or DriveConfig(
+                            vegetation_max_lateral_mps=args.vegetation_max_lateral_mps))
+                    if args.lidar_calibration_profile == "tf" and (
+                        self.base_from_lidar is None or self.camera_from_base is None
+                    ):
+                        from tf2_ros import Buffer, TransformListener
+
+                        self.tf_buffer = Buffer()
+                        self.tf_listener = TransformListener(self.tf_buffer, self)
+                    from sensor_msgs.msg import CameraInfo, Imu, PointCloud2
+
+                    sensor_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=5,
+                                            reliability=ReliabilityPolicy.BEST_EFFORT)
+                    for message_type, topic, callback in (
+                        (PointCloud2, args.lidar_topic, self.on_lidar),
+                        (Imu, args.lidar_imu_topic, self.on_lidar_imu),
+                        (CameraInfo, args.camera_info_topic, self.on_camera_info),
+                    ):
+                        self.lidar_subscriptions.append(self.create_subscription(
+                            message_type, topic, callback, sensor_qos))
+                else:
+                    self.obstacles = None
+                    for subscription in self.lidar_subscriptions:
+                        self.destroy_subscription(subscription)
+                    self.lidar_subscriptions.clear()
+                    if self.tf_listener is not None:
+                        self.tf_listener.unregister()
+                    self.tf_buffer = self.tf_listener = None
+                if self.timer is not None:
+                    self.destroy_timer(self.timer)
+                control_hz = args.avoidance_control_hz if enabled else args.output_hz
+                self.timer = self.create_timer(1.0 / control_hz, self.publish_state)
 
         def publish_task_state(self, body: dict[str, Any]) -> None:
             if self.task_state_publisher is not None:
@@ -1111,6 +1153,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             body = self.tasks.finish("TASK_COMPLETED", reason)
             self.set_task_inference(False)
+            self.set_lidar_enabled(args.avoidance_enabled)
             self.last_valid_yaw_rate = None
             self.last_valid_forward_mps = None
             if body is not None:
@@ -1207,6 +1250,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if self.command_publisher is not None:
                 self.publish_hard_stop(reason)
                 self.stop_until = time.monotonic() + 1.0
+            self.set_lidar_enabled(args.avoidance_enabled)
 
         def abort_active_task(self, reason: str) -> None:
             if self.tasks is None:
@@ -1338,9 +1382,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     selected = None  # Task validation reports malformed payloads.
                 if selected == 3:
                     config, obstacle = self.street_lights.config, _lidar_config_from_args(args)
-                    if self.obstacles is None:
-                        rejection_reason = "street_light_requires_avoidance"
-                    elif getattr(segmenter, "street_light_id", None) is None:
+                    if getattr(segmenter, "street_light_id", None) is None:
                         rejection_reason = "street_light_label_unavailable"
                     elif not (max(obstacle.front_m, obstacle.back_m, obstacle.robot_half_width_m)
                               + obstacle.margin_m + obstacle.resolution_m <= config.stop_distance_m
@@ -1358,6 +1400,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.apriltag_confirmed_range_m = None
                 self.apriltag_window_resolved_at = None
                 try:
+                    self.set_lidar_enabled(
+                        args.avoidance_enabled or self.tasks.active.selected_mask == 3)
                     assert Request is not None
                     self.command_publisher = self.create_publisher(
                         Request, args.sport_request_topic, self.command_qos
@@ -1467,13 +1511,19 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.camera_conversion_failed(error)
 
         def on_lidar(self, message):
-            self.obstacles.on_cloud(message, time.monotonic(), self.get_clock().now().nanoseconds)
+            obstacles = self.obstacles
+            if obstacles is not None:
+                obstacles.on_cloud(message, time.monotonic(), self.get_clock().now().nanoseconds)
 
         def on_lidar_imu(self, message):
-            self.obstacles.on_imu(message, time.monotonic())
+            obstacles = self.obstacles
+            if obstacles is not None:
+                obstacles.on_imu(message, time.monotonic())
 
         def on_camera_info(self, message):
-            self.obstacles.on_info(message)
+            obstacles = self.obstacles
+            if obstacles is not None:
+                obstacles.on_info(message)
 
         def camera_conversion_failed(
             self, error: Exception, *, packet: FramePacket | None = None
@@ -1585,14 +1635,15 @@ def run_ros2(args: argparse.Namespace) -> int:
             else:
                 path = smoothers[mask_class].current(now)
                 if self.obstacles is not None:
-                    preview = decide_drive(path, camera_age_sec=0., inference_age_sec=0., config=DriveConfig())
+                    preview = decide_drive(path, camera_age_sec=0., inference_age_sec=0., config=DriveConfig(
+                        vegetation_max_lateral_mps=args.vegetation_max_lateral_mps))
                     self.obstacles.apply(preview, path, mask_class, now, self.get_clock().now().nanoseconds)
             # Real callbacks keep refreshing liveness after completion. Retain
             # the terminal display independently until control is released.
             if self.terminal_apriltag_status is not None:
                 tag_status = self.terminal_apriltag_status
             metrics = {
-                "lidar_obstacles": {"enabled": args.avoidance_enabled,
+                "lidar_obstacles": {"enabled": self.obstacles is not None,
                     "topic": args.lidar_topic, "expected_hz": 10,
                     "control_hz": args.avoidance_control_hz,
                     **(self.obstacles.metrics if self.obstacles else {})},
@@ -1612,6 +1663,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_age_sec": float(path.age_sec) if path else None,
                 "path_duration_sec": local_config.path_duration_sec,
                 "unrestricted_path_mode": args.unrestricted_path_mode,
+                "vegetation_bias_control": {
+                    "active": path is not None and path.vegetation_bias_active,
+                    "max_lateral_mps": args.vegetation_max_lateral_mps,
+                    "command_lateral_mps": drive_decision.vy if drive_decision else None,
+                },
                 "inference_target_hz": args.inference_hz,
                 "inference_enabled": latest.enabled,
                 "near_distance_m": local_config.near_distance_m,
@@ -1745,7 +1801,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                         continue
                     detect_lights = (task_mode and node.tasks.active is not None
                                      and node.tasks.active.selected_mask == 3)
+                    detect_vegetation = (
+                        2 in smoothers and local_config.sidewalk_vegetation_bias_m > 0
+                        and (not task_mode or (node.tasks.active is not None
+                                               and node.tasks.active.selected_mask == 2)))
                 segment_kwargs = {"color_order": "rgb"}
+                if detect_vegetation:
+                    segment_kwargs["detect_vegetation"] = True
                 if detect_lights:
                     segment_kwargs.update(detect_street_lights=True,
                                           street_light_min_confidence=args.street_light_min_confidence)
@@ -1757,7 +1819,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 # the camera-arrival timestamp here can expire a path before it
                 # is ever published when inference or rate limiting is slow.
                 path_updated_at = time.monotonic()
-                estimates = extract_path_estimates(result.selected_mask, tuple(smoothers), local_config)
+                estimates = extract_path_estimates(
+                    result.selected_mask, tuple(smoothers), local_config,
+                    getattr(result, "vegetation_mask", None))
                 recovery_enabled = task_mode and node.drive_config.path_loss_recovery_enabled
                 semantic_missing = {key: recovery_enabled and estimates[key] is None for key in smoothers}
                 with state_lock:
@@ -1848,8 +1912,14 @@ def run_ros2(args: argparse.Namespace) -> int:
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--path-frame-id", default=_env("SWIN_L_PATH_FRAME_ID", "base_link"))
+    parser.add_argument(
+        "--vegetation-max-lateral-mps", type=float,
+        default=_env_float("LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS", 0.05),
+        help="maximum sideways speed while following a vegetation-biased sidewalk path (yaw=0)",
+    )
     parser.add_argument("--avoidance-enabled", action=argparse.BooleanOptionalAction,
-                        default=_env_bool("LINE_TRACKING_AVOIDANCE_ENABLED", True))
+                        default=_env_bool("LINE_TRACKING_AVOIDANCE_ENABLED", False),
+                        help="enable LiDAR for normal paths; selected_mask=3 enables it automatically")
     parser.add_argument("--lidar-topic", default=_env("SWIN_L_LIDAR_TOPIC", DEFAULT_LIDAR_TOPIC))
     parser.add_argument("--lidar-imu-topic", default=_env("SWIN_L_LIDAR_IMU_TOPIC", DEFAULT_IMU_TOPIC))
     parser.add_argument("--camera-info-topic", default=_env("SWIN_L_CAMERA_INFO_TOPIC", ""))
@@ -1957,6 +2027,21 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--close-kernel-px", type=int, default=_env_int("SWIN_L_CLOSE_KERNEL_PX", 5)
+    )
+    parser.add_argument(
+        "--sidewalk-vegetation-bias-m", type=float,
+        default=_env_float("SWIN_L_SIDEWALK_VEGETATION_BIAS_M", 0.20),
+        help="maximum in-sidewalk offset toward adjacent Vegetation; 0 disables",
+    )
+    parser.add_argument(
+        "--sidewalk-vegetation-max-gap-m", type=float,
+        default=_env_float("SWIN_L_SIDEWALK_VEGETATION_MAX_GAP_M", 0.30),
+        help="maximum ground-grid gap from the sidewalk edge to Vegetation",
+    )
+    parser.add_argument(
+        "--sidewalk-vegetation-edge-margin-m", type=float,
+        default=_env_float("SWIN_L_SIDEWALK_VEGETATION_EDGE_MARGIN_M", 0.45),
+        help="minimum path-center clearance from the observed sidewalk edge",
     )
     parser.add_argument(
         "--smoothing-time-constant-sec",
@@ -2184,6 +2269,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         _lidar_config_from_args(args).validate()
         _avoidance_config_from_args(args).validate()
         _street_light_config_from_args(args).validate()
+        DriveConfig(vegetation_max_lateral_mps=args.vegetation_max_lateral_mps).validate()
         if args.lidar_calibration_profile not in CALIBRATION_PROFILES:
             raise ValueError("invalid lidar calibration profile")
         parse_transform(args.lidar_to_base_transform)

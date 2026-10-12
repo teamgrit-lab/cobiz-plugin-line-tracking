@@ -32,6 +32,7 @@ def make_segmenter(device, *, margin=0.07, expansion=0, action="drop"):
     segmenter.road_ids = [1, 4]
     segmenter.sidewalk_ids = [2, 3, 4]
     segmenter.pedestrian_area_id = 3
+    segmenter.vegetation_id = None
     segmenter.pedestrian_area_road_expansion = expansion
     segmenter.maximum_road_island_area = 100 if action == "reassign-sidewalk" else 0
     segmenter.minimum_sidewalk_ring_ratio = 0.1

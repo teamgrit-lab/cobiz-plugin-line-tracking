@@ -8,13 +8,13 @@ import pytest
 
 from test_apriltag_task_stop_ros import Message, SPORT, ZERO, RosHarness, debug
 from test_lidar_obstacles_ros import complete_inference, enabled_ros, sensors
-from sensor_fixtures import camera_info
+from sensor_fixtures import camera_info, cloud
 
 
-def start(ros, task_id="light-3"):
+def start(ros, task_id="light-3", *, duration=30):
     ros.node.on_task_event(Message(json.dumps({
         "type": "TASK_REGISTERED", "action_name": "LINE_TRACKING", "task_id": task_id,
-        "payload": {"selected_mask": 3, "duration_sec": 30},
+        "payload": {"selected_mask": 3, "duration_sec": duration},
     })))
 
 
@@ -47,8 +47,10 @@ def tick(ros, node):
     return complete_inference(node, ros)
 
 
-def test_task_cruises_approaches_laterally_resumes_and_does_not_complete(monkeypatch):
+@pytest.mark.parametrize("configured_enabled", [False, True])
+def test_task_cruises_approaches_laterally_resumes_and_does_not_complete(monkeypatch, configured_enabled):
     ros = enabled_ros(monkeypatch)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", str(configured_enabled).lower())
     detection = scene()
     calls = model(monkeypatch, detection)
 
@@ -58,11 +60,13 @@ def test_task_cruises_approaches_laterally_resumes_and_does_not_complete(monkeyp
         assert node.command_publisher is None
         start(ros)
         assert ros.task_state()["type"] == "TASK_STARTED"
+        assert node.obstacles is not None
         assert node.tasks.active.selected_mask == 3
         ros.now = 2.1
         detection.light[:] = False
         metrics = tick(ros, node)
         assert metrics["selected_mask"] == 3
+        assert metrics["lidar_obstacles"]["enabled"] is True
         assert metrics["path_mask_class"] == 1
         assert metrics["path_surface"] == "ROAD"
         command = json.loads(ros.published[SPORT][-1].parameter)
@@ -105,6 +109,7 @@ def test_task_cruises_approaches_laterally_resumes_and_does_not_complete(monkeyp
         assert node.street_lights.phase == "cruising"
         assert node.street_lights.visits == 0
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        assert (node.obstacles is not None) == configured_enabled
 
     ros.run(scenario, "--branch-preference", "center")
 
@@ -168,6 +173,193 @@ def test_task_visits_both_continuously_visible_lights_and_excludes_completed_ids
     ros.run(scenario, "--branch-preference", "center")
 
 
+@pytest.mark.parametrize("selected_mask", [0, 1, 2])
+@pytest.mark.parametrize("terminal", ["server", "timeout", "apriltag"])
+def test_automatic_lidar_is_released_before_camera_only_tasks(monkeypatch, selected_mask, terminal):
+    ros = enabled_ros(monkeypatch)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false")
+    if terminal == "timeout":
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_TASK_TIMEOUT", "true")
+    if terminal == "apriltag":
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_APRILTAG", "true")
+    detection = scene()
+    detection.light[:] = False
+    model(monkeypatch, detection)
+    sensor_topics = ("/livox/lidar", "/livox/imu", "/a2/front_camera/res_360p/camera_info")
+
+    def scenario(node):
+        assert node.obstacles is None
+        assert not set(sensor_topics) & ros.subscriptions.keys()
+        assert node.timer.period == pytest.approx(0.1)
+        start(ros, duration=3)
+        assert ros.task_state()["type"] == "TASK_STARTED"
+        first_runtime, lidar_timer = node.obstacles, node.timer
+        assert first_runtime is not None
+        assert all(topic in ros.subscriptions for topic in sensor_topics)
+        late_callbacks = [ros.subscriptions[topic] for topic in sensor_topics]
+        assert lidar_timer.period == pytest.approx(0.05)
+        ros.now = 2.1
+        ros.detect()  # Keep the AprilTag heartbeat live for that completion case.
+        metrics = complete_inference(node, ros)  # Camera alone cannot start scenario 3.
+        assert metrics["lidar_obstacles"]["enabled"] is True
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        metrics = tick(ros, node)
+        assert metrics["drive_reason"] == "street_light_cruising"
+        assert json.loads(ros.published[SPORT][-1].parameter)["x"] > 0
+
+        if terminal == "server":
+            node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "light-3"})))
+        elif terminal == "timeout":
+            ros.now = 3.01
+            sensors(node, ros)
+            node.publish_state()
+            assert ros.task_state()["type"] == "TASK_COMPLETED"
+        else:
+            node.complete_apriltag_task(7)
+            assert ros.task_state()["type"] == "TASK_COMPLETED"
+        assert node.tasks.active is None
+        assert node.obstacles is None
+        assert not set(sensor_topics) & ros.subscriptions.keys()
+        assert lidar_timer.destroyed
+        assert node.timer.period == pytest.approx(0.1)
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        for callback in late_callbacks:
+            callback(Message())  # A queued sensor callback after unsubscribe is harmless.
+        node.publish_state()
+        assert ros.metrics()["lidar_obstacles"]["enabled"] is False
+
+        ros.now += 1.1
+        node.publish_state()  # Finish the Sport publisher release window.
+        detection.road[:] = 2 if selected_mask == 2 else 1
+        node.on_task_event(Message(json.dumps({
+            "type": "TASK_REGISTERED", "action_name": "LINE_TRACKING", "task_id": "camera-only",
+            "payload": {"selected_mask": selected_mask},
+        })))
+        assert ros.task_state()["type"] == "TASK_STARTED"
+        ros.detect(frame=2)
+        metrics = complete_inference(node, ros)
+        assert metrics["selected_mask"] == selected_mask
+        assert metrics["lidar_obstacles"]["enabled"] is False
+        assert metrics["drive_reason"] == "tracking"
+        assert json.loads(ros.published[SPORT][-1].parameter)["x"] > 0
+        assert node.obstacles is None
+        start(ros, task_id="busy-request")
+        assert ros.task_state()["reason"] == "another_line_tracking_task_active"
+        assert node.obstacles is None  # A rejected 3 request must not enable LiDAR.
+
+        node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "camera-only"})))
+        ros.now += 1.1
+        node.publish_state()
+        start(ros, task_id="light-3-again")
+        assert ros.task_state()["type"] == "TASK_STARTED"
+        assert node.obstacles is not first_runtime
+        assert node.obstacles.scan is None  # Previous sensor data must not survive reactivation.
+        assert node.timer.period == pytest.approx(0.05)
+        assert all(topic in ros.subscriptions for topic in sensor_topics)
+
+    ros.run(scenario, "--branch-preference", "center")
+
+
+@pytest.mark.parametrize("profile", ["livox-a2-front", "tf"])
+def test_default_scenario_three_automatically_enables_lidar_despite_cli_disable(monkeypatch, profile):
+    import sys
+
+    ros = RosHarness(monkeypatch)
+    model(monkeypatch, scene())
+    listeners = []
+
+    class Listener:
+        def __init__(self, _buffer, _node):
+            self.unregistered = False
+            listeners.append(self)
+
+        def unregister(self):
+            self.unregistered = True
+
+    monkeypatch.setitem(sys.modules, "tf2_ros", NS(Buffer=object, TransformListener=Listener))
+
+    def scenario(node):
+        assert node.obstacles is None
+        assert not listeners
+        ros.start()  # No selected_mask in the payload: use SWIN_L_PATH_MASK_CLASS / CLI default.
+        assert node.tasks.active.selected_mask == 3
+        assert node.obstacles is not None
+        assert "/livox/lidar" in ros.subscriptions
+        node.publish_state()
+        assert ros.metrics()["lidar_obstacles"]["enabled"] is True
+        assert bool(listeners) == (profile == "tf")
+        node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "tag-stop-1"})))
+        assert node.obstacles is None
+        assert node.tf_listener is node.tf_buffer is None
+        assert all(listener.unregistered for listener in listeners)
+
+    ros.run(scenario, "--path-mask-class", "3", "--no-avoidance-enabled",
+            "--lidar-calibration-profile", profile)
+
+
+@pytest.mark.parametrize("approaching", [False, True])
+def test_ten_hz_lidar_with_twenty_hz_control_tolerates_short_gaps_stops_and_resumes(monkeypatch, approaching):
+    ros = enabled_ros(monkeypatch)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false")
+    detection = scene()
+    if not approaching:
+        detection.light[:] = False
+    model(monkeypatch, detection)
+    expected_reason = "street_light_approaching" if approaching else "street_light_cruising"
+
+    def assert_moving(metrics):
+        assert metrics["drive_reason"] == expected_reason
+        command = json.loads(ros.published[SPORT][-1].parameter)
+        assert command["x"] > 0 and command["z"] == 0
+        if approaching:
+            assert command["y"] < 0
+
+    def scenario(node):
+        start(ros)
+        ros.now = 2.1
+        for _ in range(3):
+            metrics = tick(ros, node)
+        assert metrics["drive_reason"] == expected_reason
+        assert node.obstacles.config.max_age_sec == .5
+        assert node.timer.period == pytest.approx(.05)
+
+        # The 20 Hz control tick between 10 Hz clouds reuses a valid scan.
+        control_started = ros.now
+        for step in range(1, 11):
+            ros.now = control_started + step * .05
+            if step % 2 == 0:
+                sensors(node, ros)
+                metrics = complete_inference(node, ros)
+            else:
+                node.publish_state()
+                metrics = ros.metrics()
+            assert_moving(metrics)
+
+        last_scan = node.obstacles.scan
+        # Camera updates continue while several LiDAR publications are missed.
+        for age in (.15, .25, .35, .45):
+            ros.now = last_scan.arrival + age
+            assert_moving(complete_inference(node, ros))
+        ros.now = last_scan.arrival + .55
+        metrics = complete_inference(node, ros)
+        assert metrics["drive_reason"] == "lidar_stale"
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        assert node.tasks.active is not None
+
+        # Receiving an old stamped packet cannot refresh the scan's lifetime.
+        node.on_lidar(cloud([[1, 0, 0]], last_scan.stamp_ns / 1e9))
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "lidar_stale"
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+        ros.now += .1
+        sensors(node, ros)
+        assert_moving(complete_inference(node, ros))
+        assert node.obstacles.scan.stamp_ns > last_scan.stamp_ns
+
+    ros.run(scenario, "--branch-preference", "center")
+
+
 @pytest.mark.parametrize("fault", ["cloud_stale", "road_lost", "inference_stale", "collision", "target_lost"])
 def test_scenario_cannot_bypass_sensors_road_or_collision_gates(monkeypatch, fault):
     ros = enabled_ros(monkeypatch)
@@ -181,8 +373,9 @@ def test_scenario_cannot_bypass_sensors_road_or_collision_gates(monkeypatch, fau
             metrics = tick(ros, node)
         assert metrics["drive_reason"] == "street_light_approaching"
         if fault == "cloud_stale":
-            ros.now += 0.31
+            ros.now += node.obstacles.config.max_age_sec + .01
             node.publish_state()
+            assert ros.metrics()["drive_reason"] == "lidar_stale"
         elif fault == "road_lost":
             detection.road[:] = 2  # A sidewalk must not satisfy scenario 3.
             tick(ros, node)
@@ -205,13 +398,11 @@ def test_scenario_cannot_bypass_sensors_road_or_collision_gates(monkeypatch, fau
 
 
 @pytest.mark.parametrize("fault,reason", [
-    ("disabled", "street_light_requires_avoidance"),
     ("label", "street_light_label_unavailable"),
     ("distance", "street_light_stop_distance_out_of_range"),
 ])
 def test_unusable_scenario_is_rejected_before_creating_control(monkeypatch, fault, reason):
     ros = RosHarness(monkeypatch)
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false" if fault == "disabled" else "true")
     if fault == "distance":
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STREET_LIGHT_STOP_DISTANCE_M", "0.5")
     model(monkeypatch, scene(), label=None if fault == "label" else 5)
@@ -222,6 +413,8 @@ def test_unusable_scenario_is_rejected_before_creating_control(monkeypatch, faul
         assert ros.task_state()["reason"] == reason
         assert node.tasks.active is None
         assert node.command_publisher is None
+        assert node.obstacles is None
+        assert "/livox/lidar" not in ros.subscriptions
         assert SPORT not in ros.published
 
     ros.run(scenario)

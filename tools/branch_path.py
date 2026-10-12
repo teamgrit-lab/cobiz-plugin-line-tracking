@@ -38,6 +38,7 @@ class BranchPath:
     centers: np.ndarray
     points: np.ndarray
     min_width_m: float
+    vegetation_bias_active: bool = False
 
     @property
     def usable(self) -> bool:
@@ -308,6 +309,7 @@ class BranchSelector:
                 points_xy=path.points,
                 raw_points_xy=path.centers,
                 branch_observation=None,
+                vegetation_bias_active=path.vegetation_bias_active,
             )
             self._status.update(
                 state="locked", reason=reason, confirmation_hits=self._hits

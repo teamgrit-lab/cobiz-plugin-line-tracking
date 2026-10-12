@@ -159,3 +159,62 @@ def test_invalid_branch_environment_is_rejected_before_startup(monkeypatch, name
     monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_" + name, value)
     with pytest.raises(SystemExit):
         debug.parse_args(["task-drive"])
+
+
+@pytest.mark.parametrize("mode", ["ros2", "task-drive", "mcap"])
+def test_vegetation_bias_settings_reach_all_path_modes(monkeypatch, tmp_path, mode):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_SIDEWALK_VEGETATION_BIAS_M", "0.15")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_SIDEWALK_VEGETATION_MAX_GAP_M", "0.25")
+    monkeypatch.setitem(debug.ENV, "SWIN_L_SIDEWALK_VEGETATION_EDGE_MARGIN_M", "0.50")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS", "0.03")
+    arguments = [mode, "--sidewalk-vegetation-bias-m", "0.10"]
+    if mode == "mcap":
+        arguments += ["--input", str(tmp_path / "input.mcap"), "--output", str(tmp_path / "output.mp4")]
+    args = debug.parse_args(arguments)
+    cfg = debug._local_path_config_from_args(args)
+    assert args.vegetation_max_lateral_mps == 0.03
+    if mode == "task-drive":
+        assert debug._drive_config_from_args(args).vegetation_max_lateral_mps == 0.03
+    assert cfg.sidewalk_vegetation_bias_m == 0.10
+    assert cfg.sidewalk_vegetation_max_gap_m == 0.25
+    assert cfg.sidewalk_vegetation_edge_margin_m == 0.50
+
+
+@pytest.mark.parametrize("value", ["0", "-0.01", "nan", "0.16"])
+def test_invalid_vegetation_speed_environment_is_rejected(monkeypatch, value):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS", value)
+    with pytest.raises(SystemExit):
+        debug.parse_args(["task-drive"])
+
+
+@pytest.mark.parametrize("name,value", [
+    ("BIAS_M", "nan"), ("BIAS_M", "-0.1"), ("MAX_GAP_M", "inf"),
+    ("EDGE_MARGIN_M", "0"),
+])
+def test_invalid_vegetation_environment_is_rejected(monkeypatch, name, value):
+    monkeypatch.setitem(debug.ENV, "SWIN_L_SIDEWALK_VEGETATION_" + name, value)
+    with pytest.raises(SystemExit):
+        debug.parse_args(["task-drive"])
+
+
+def test_image_projection_biases_only_sidewalk_and_returns_to_center_without_vegetation():
+    mask = np.zeros((360, 640), np.uint8)
+    mask[:, :320] = 2
+    vegetation = mask == 0  # Image-right is robot-right (negative y).
+    cfg = LocalPathConfig(unrestricted_path_mode=True)
+    smoothers = {key: LocalPathSmoother(cfg) for key in (0, 1, 2)}
+    baseline = debug.extract_path_estimates(mask, tuple(smoothers), cfg)
+    biased = debug.update_path_smoothers(mask, smoothers, cfg, 1.0, vegetation)
+    np.testing.assert_allclose(biased[2].points_xy[:, 1],
+                               baseline[2].points_xy[:, 1] - 0.20, atol=1e-6)
+    np.testing.assert_array_equal(biased[0].points_xy, baseline[0].points_xy)
+    assert biased[1] is None
+    returned = debug.update_path_smoothers(mask, smoothers, cfg, 2.0, np.zeros_like(mask))
+    np.testing.assert_array_equal(smoothers[2].current(2.0).points_xy, baseline[2].points_xy)
+    np.testing.assert_array_equal(returned[2].points_xy, baseline[2].points_xy)
+    road_mask = np.where(mask == 2, 1, 0).astype(np.uint8)
+    road_baseline = debug.extract_path_estimates(road_mask, (0, 1, 2), cfg)
+    road_biased = debug.extract_path_estimates(road_mask, (0, 1, 2), cfg, vegetation)
+    for key in (0, 1):
+        np.testing.assert_array_equal(road_biased[key].points_xy, road_baseline[key].points_xy)
+    assert road_biased[2] is None

@@ -84,6 +84,9 @@ class LocalPathConfig:
     branch_margin_m: float = 0.10
     branch_confirm_frames: int = 2
     branch_hold_sec: float = 1.50
+    sidewalk_vegetation_bias_m: float = 0.20
+    sidewalk_vegetation_max_gap_m: float = 0.30
+    sidewalk_vegetation_edge_margin_m: float = 0.45
 
     def validate(self) -> None:
         if self.near_distance_m <= 0.0:
@@ -126,6 +129,13 @@ class LocalPathConfig:
             raise ValueError("branch dimensions/hold must be positive; width must exceed twice the margin")
         if type(self.branch_confirm_frames) is not int or self.branch_confirm_frames < 2:
             raise ValueError("branch_confirm_frames must be an integer of at least 2")
+        for name in ("sidewalk_vegetation_bias_m", "sidewalk_vegetation_max_gap_m"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        if (not math.isfinite(self.sidewalk_vegetation_edge_margin_m)
+                or self.sidewalk_vegetation_edge_margin_m <= 0):
+            raise ValueError("sidewalk_vegetation_edge_margin_m must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -138,6 +148,7 @@ class LocalPathEstimate:
     mean_sidewalk_width_m: float
     raw_points_xy: np.ndarray
     branch_observation: BranchObservation | None = None
+    vegetation_bias_active: bool = False
 
     @property
     def is_valid(self) -> bool:
@@ -154,6 +165,7 @@ class SmoothedPath:
     source: str
     stop_reason: str | None = None
     branch_status: dict | None = None
+    vegetation_bias_active: bool = False
 
 
 def normalized_polygon_pixels(
@@ -430,6 +442,7 @@ class LocalPathSmoother:
         self._branch_selector = BranchSelector(config)
         self._stop_reason: str | None = None
         self._constrained_branch = False
+        self._vegetation_bias_active = False
 
     def reset(self, *, preserve_branch: bool = False) -> None:
         """Discard path history, retaining a committed fork on sensor loss if requested."""
@@ -441,6 +454,7 @@ class LocalPathSmoother:
                 self._branch_selector.reset()
             self._stop_reason = None
             self._constrained_branch = False
+            self._vegetation_bias_active = False
 
     def update(
         self, estimate: LocalPathEstimate | None, timestamp_sec: float
@@ -455,6 +469,7 @@ class LocalPathSmoother:
                 self._points = np.empty((0, 2), dtype=np.float32)
                 self._confidence = 0.0
                 self._last_update = timestamp_sec
+                self._vegetation_bias_active = False
                 return self._current_unlocked(timestamp_sec)
             if choice.constrained and estimate is not None:
                 # An EMA across branches can cross the non-drivable fork gap.
@@ -462,18 +477,22 @@ class LocalPathSmoother:
                 self._points = estimate.points_xy.copy()
                 self._confidence = estimate.confidence
                 self._last_update = timestamp_sec
+                self._vegetation_bias_active = estimate.vegetation_bias_active
                 return self._current_unlocked(timestamp_sec)
             if self.config.unrestricted_path_mode:
                 if estimate is None or not estimate.is_valid:
                     self._points = None
                     self._confidence = 0.0
                     self._last_update = None
+                    self._vegetation_bias_active = False
                     return None
                 self._points = np.asarray(estimate.points_xy, dtype=np.float32).copy()
                 self._confidence = estimate.confidence
                 self._last_update = timestamp_sec
+                self._vegetation_bias_active = estimate.vegetation_bias_active
                 return self._current_unlocked(timestamp_sec)
             if estimate is not None and estimate.is_valid:
+                self._vegetation_bias_active = estimate.vegetation_bias_active
                 target = np.asarray(estimate.points_xy, dtype=np.float32)
                 if self._points is None or self._points.shape != target.shape:
                     self._points = target.copy()
@@ -524,4 +543,5 @@ class LocalPathSmoother:
             ),
             stop_reason=self._stop_reason,
             branch_status=self._branch_selector.metrics(),
+            vegetation_bias_active=self._vegetation_bias_active,
         )

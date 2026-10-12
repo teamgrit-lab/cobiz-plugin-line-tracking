@@ -35,6 +35,21 @@ def path(y=0):
 
 
 @pytest.mark.parametrize("sign", [-1, 1])
+def test_clear_space_preserves_small_vegetation_velocity_and_zero_yaw(sign):
+    ctrl = AvoidanceController(AvoidanceConfig(), C)
+    biased = replace(path(sign * 0.7), vegetation_bias_active=True)
+    nominal = DriveDecision(0.5, sign * 0.04, 0.0, "tracking")
+    for tick in range(12):
+        now = tick * 0.05
+        scan = replace(scene(), arrival=now, stamp_ns=100_000_000_000 + round(now * 1e9))
+        command = ctrl.apply(nominal, biased, scan, np.ones(C.shape, bool),
+                             now=now, clock_ns=scan.stamp_ns)
+        assert command.vx > 0 and command.yaw_rate == 0
+        assert 0 < sign * command.vy <= 0.04 + 1e-8
+    assert command.vy == pytest.approx(sign * 0.04)
+
+
+@pytest.mark.parametrize("sign", [-1, 1])
 def test_scenario_velocity_keeps_its_target_side_and_lateral_priority_under_caps(sign):
     config = AvoidanceConfig(max_lateral_mps=0.03)
     controller = AvoidanceController(config, C)
@@ -98,7 +113,7 @@ def test_unsafe_conditions_cannot_emit_a_positive_command(fault):
     )
     if fault == "unknown":
         scan = replace(scan, observed=np.zeros(C.shape, bool))
-    now = 0.4 if fault == "stale" else 0.0
+    now = C.max_age_sec + .1 if fault == "stale" else 0.0
     result = ctrl.apply(
         NOMINAL,
         path(),
@@ -108,6 +123,8 @@ def test_unsafe_conditions_cannot_emit_a_positive_command(fault):
         clock_ns=100_000_000_000 + round(now * 1e9),
     )
     assert result.vx == result.vy == result.yaw_rate == 0
+    if fault == "stale":
+        assert result.reason == "lidar_stale"
 
 
 def test_lateral_return_tracks_original_path_after_obstacle_clears():

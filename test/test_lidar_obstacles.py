@@ -155,7 +155,18 @@ def test_empty_invalid_and_repeated_scans_are_faults_but_filtered_floor_is_valid
     assert not len(floor.points)
     with pytest.raises(ValueError, match="timestamp_invalid"):
         detector.update(cloud([[2, 0, 0]]), imu(), np.eye(4), 0.1)
-    assert fresh(floor, 0.31, 100_310_000_000, detector.config) == "lidar_stale"
+    assert fresh(floor, 0.51, 100_510_000_000, detector.config) == "lidar_stale"
+
+
+@pytest.mark.parametrize("arrival_age,source_age,reason", [
+    (.05, .05, None), (.1, .1, None), (.2, .2, None), (.3, .3, None),
+    (.49, .49, None), (.5, .5, None),
+    (.51, .1, "lidar_stale"), (.1, .51, "lidar_stale"),
+])
+def test_ten_hz_scan_freshness_allows_short_gaps_but_bounds_both_clocks(arrival_age, source_age, reason):
+    config = ObstacleConfig()
+    scan = ObstacleDetector(config).update(cloud([[1, 0, 0]]), imu(), np.eye(4), 0.0)
+    assert fresh(scan, arrival_age, 100_000_000_000 + round(source_age * 1e9), config) == reason
 
 
 def test_latest_body_frame_returns_replace_previous_scan_without_pose():

@@ -54,6 +54,40 @@ def test_fresh_path_generates_capped_a2_command():
     assert 0.0 < command.yaw_rate <= 0.18
 
 
+@pytest.mark.parametrize("error,expected_vy", [
+    (0.20, 0.05), (-0.20, -0.05), (0.06, 0.03), (-0.06, -0.03),
+    (0.015, 0.0), (-0.015, 0.0), (0.0, 0.0),
+])
+def test_vegetation_bias_translates_without_yaw_and_slows_near_target(error, expected_vy):
+    reference = _path(lateral=error)
+    biased = replace(reference, vegetation_bias_active=True)
+    command = _decide(biased)
+    assert command.vx == _decide(reference).vx
+    assert command.vy == pytest.approx(expected_vy)
+    assert command.yaw_rate == 0.0
+
+
+def test_vegetation_bias_obeys_lateral_speed_setting_and_existing_stops():
+    path = replace(_path(), vegetation_bias_active=True)
+    command = _decide(path, config=_enabled_config(vegetation_max_lateral_mps=0.025))
+    assert command.vy == 0.025 and command.yaw_rate == 0.0
+    assert _decide(path, obstacle_stop_reason="obstacle_collision").vx == 0.0
+    assert _decide(path, camera_age_sec=10.0).reason == "camera_stale"
+    assert _decide(replace(path, stop_reason="branch_confirming")).reason == "branch_confirming"
+    assert _decide(replace(path, confidence=0.1)).reason == "path_low_confidence"
+    # Recovery/hold keeps no sideways command after losing the semantic path.
+    lost = decide_drive(None, camera_age_sec=0.1, inference_age_sec=0.1,
+                        config=DriveConfig(), last_valid_forward_mps=command.vx,
+                        last_valid_yaw_rate=command.yaw_rate, path_recovery_inferences=1)
+    assert lost.vx > 0.0 and lost.vy == lost.yaw_rate == 0.0
+
+
+@pytest.mark.parametrize("value", [0, -0.01, 0.16, float("nan"), float("inf")])
+def test_invalid_vegetation_lateral_speed_is_rejected(value):
+    with pytest.raises(ValueError, match="vegetation_max_lateral_mps"):
+        DriveConfig(vegetation_max_lateral_mps=value).validate()
+
+
 @pytest.mark.parametrize("count", [1, 2, 3, 8])
 def test_semantic_loss_retains_straight_recovery_and_stops_on_third_failure(count):
     command=decide_drive(None,camera_age_sec=.1,inference_age_sec=.1,

@@ -80,6 +80,7 @@ class RosHarness:
         self.subscriptions = {}
         self.subscription_types = {}
         self.subscription_qos = {}
+        self.subscription_handles = {}
         self.errors = []
         self.running = True
         self.reliable, self.volatile, self.keep_last = object(), object(), object()
@@ -96,7 +97,15 @@ class RosHarness:
                 harness.subscriptions[topic] = callback
                 harness.subscription_types[topic] = message_type
                 harness.subscription_qos[topic] = qos
-                return object()
+                subscription = object()
+                harness.subscription_handles[subscription] = topic
+                return subscription
+
+            def destroy_subscription(self, subscription):
+                topic = harness.subscription_handles.pop(subscription)
+                harness.subscriptions.pop(topic)
+                harness.subscription_types.pop(topic)
+                harness.subscription_qos.pop(topic)
 
             def create_publisher(self, _message_type, topic, _qos):
                 messages = harness.published.setdefault(topic, [])
@@ -113,8 +122,11 @@ class RosHarness:
                     self.command_publisher is not None
                 )
 
-            def create_timer(self, *_args):
-                return object()
+            def create_timer(self, period, _callback):
+                return SimpleNamespace(period=period, destroyed=False)
+
+            def destroy_timer(self, timer):
+                timer.destroyed = True
 
             def get_logger(self):
                 return SimpleNamespace(
@@ -395,9 +407,10 @@ def test_r50_task_drive_accepts_720p_rgb_and_keeps_camera_stop(ros, monkeypatch)
     configurations = []
     frames = []
 
-    def segment(frame, *, color_order):
+    def segment(frame, *, color_order, detect_vegetation=False):
         assert frame.shape == (720, 1280, 3)
         assert color_order == "rgb"
+        assert detect_vegetation is False  # This scenario requests the union (0).
         assert frame[0, 0].tolist() == [20, 30, 40]
         frames.append(frame)
         return SimpleNamespace(

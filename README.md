@@ -23,7 +23,7 @@ cancellation, image/model/publish errors, and handled shutdown still stop motion
 No accepted task means no motion command, and speed limits remain enforced.
 When left/right fork selection is enabled, its confirmation, ambiguity and selected-
 branch-loss guards also stop motion independently of these switches.
-With `LINE_TRACKING_AVOIDANCE_ENABLED=true`, missing/stale LiDAR, IMU,
+With `LINE_TRACKING_AVOIDANCE_ENABLED=true` or an active `selected_mask=3` task, missing/stale LiDAR, IMU,
 calibration, or reference-path evidence stops motion independently of
 `LINE_TRACKING_STOP_ON_*`. A saved command or the camera-only straight recovery
 window cannot bypass these gates. The camera Path remains a reference; obstacle
@@ -245,7 +245,8 @@ LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 | `UNSAFE_TIMEOUT` | 추종할 수 없는 상태가 연속 2초 지속되면 작업 중단 |
 | `TASK_TIMEOUT` | 요청한 작업 시간 도달 시 정지·종료. 기본 500초, 최대 10000초 |
 
-이 직진·좌우 탐색 복구는 `LINE_TRACKING_AVOIDANCE_ENABLED=false`일 때 사용한다.
+이 직진·좌우 탐색 복구는 `selected_mask=0/1/2`에서
+`LINE_TRACKING_AVOIDANCE_ENABLED=false`일 때 사용한다. 3번 작업은 LiDAR를 사용한다.
 LiDAR 회피가 켜져 있으면 유효한 시각 경로가 사라지는 즉시 정지하며 자동 탐색은 하지 않는다.
 
 `LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED=true`가 기본값이다. 주행 중 영상 검출에서
@@ -384,7 +385,8 @@ Swin-L/Mapillary 및 R50의 기존 65개 클래스 추론에서 `Street Light`�
 표면 마스크는 기존 `0/1/2`를 유지하며, `3`은 작업 시나리오 번호다.
 
 ```dotenv
-LINE_TRACKING_AVOIDANCE_ENABLED=true
+# 0/1/2는 카메라 주행, 3번 작업에서는 false여도 LiDAR 자동 활성화.
+LINE_TRACKING_AVOIDANCE_ENABLED=false
 # 횡이동 시 새로 차지하는 뒤쪽/옆쪽 공간도 실제 LiDAR로 관측해야 한다.
 LIDAR_OBSTACLE_FOV_DEG=360.0
 LINE_TRACKING_STREET_LIGHT_STOP_DISTANCE_M=1.0
@@ -401,8 +403,11 @@ LINE_TRACKING_STREET_LIGHT_MAX_APPROACH_SEC=30.0
 `.env`를 수정한 뒤 `docker compose up -d --build actual-activate`로 적용한다.
 기본 전방 190° 제한은 횡이동할 때 필요한 뒤쪽·옆쪽 공간을 미관측으로 남길 수
 있으므로, 위 예시는 360° LiDAR의 전체 관측을 사용한다. 미관측 공간은 통과하지 않는다.
-LiDAR 회피가 꺼져 있거나 모델에 `Street Light` 라벨이 없으면 이 시나리오의
-작업 시작을 거절한다. LiDAR·IMU·CameraInfo·카메라 보정은 기존 회피 설정을 사용한다.
+`LINE_TRACKING_AVOIDANCE_ENABLED=false`여도 3번 작업이 시작되면 LiDAR·IMU·CameraInfo
+구독과 LiDAR 처리를 자동으로 켠다. 작업 취소·종료 후에는 설정값을 다시 따르므로,
+`false`라면 센서 구독을 해제하고 카메라 주행 제어 주기로 복귀한다.
+모델에 `Street Light` 라벨이 없으면 이 시나리오의 작업 시작을 거절한다.
+LiDAR·IMU·CameraInfo·카메라 보정은 기존 회피 설정을 사용한다.
 `STOP_DISTANCE_M`는 로봇 외곽+여유+격자 한 칸 이상이며 LiDAR 감지 반경보다
 작아야 한다. 기본 1m는 기본 감지 반경 1.5m 안에 있다.
 
@@ -541,6 +546,11 @@ ID 목록으로 제한하지 않는다. 원본 광각 영상에서는 ID·2D 모
 
 ## Livox 장애물 거리 추정과 주행 회피
 
+LiDAR 사용은 기본적으로 꺼져 있다(`LINE_TRACKING_AVOIDANCE_ENABLED=false`).
+`selected_mask=0/1/2`는 기본 설정으로 카메라 Path만 사용한다. 이 모드에서 LiDAR 회피가
+필요하면 아래처럼 `true`로 명시한다. `selected_mask=3` 작업은 설정값에 관계없이
+LiDAR를 자동으로 사용한다. 센서 데이터가 없거나 오래됐으면 기존 조건대로 정지한다.
+
 높이 추정·RANSAC·높이에 따른 차도/인도 Path 제한은 제거했다. `PointCloud2`를
 보정 변환으로 `base_link`에 옮긴 뒤 다음 조건을 모두 만족하는 점만 장애물로 사용한다.
 
@@ -563,6 +573,7 @@ LIDAR_OBSTACLE_MIN_HEIGHT_M=-0.2
 LIDAR_OBSTACLE_MAX_HEIGHT_M=0.2
 LIDAR_OBSTACLE_HORIZONTAL_RANGE_M=1.5
 LIDAR_OBSTACLE_FOV_DEG=190.0
+LIDAR_OBSTACLE_MAX_AGE_SEC=0.5
 SWIN_L_LIDAR_TOPIC=/livox/lidar
 SWIN_L_LIDAR_IMU_TOPIC=/livox/imu
 SWIN_L_LIDAR_FRAME_ID=livox_frame
@@ -610,7 +621,13 @@ LiDAR–로봇과 카메라–로봇 변환은 고정 extrinsic으로 사용하�
   차도/인도 안에 있어야 하며, 카메라 시야 밖 측면은 LiDAR 관측과 외곽 충돌로 검사한다.
   시야 밖의 지면 종류까지 확인한 것은 아니다. 과거 영상 영역을 옆·뒤로 옮기거나
   누적하지 않으며, 작업 종료·재시작 때 최신 참조도 초기화한다.
-- 스캔/IMU는 기본 0.30초, 영상 기준 Path는 2초를 넘기면 정지한다.
+- LiDAR는 기본 10Hz(스캔 간격 0.10초)이며, `LIDAR_OBSTACLE_MAX_AGE_SEC=0.5`로
+  5주기까지 지연·일시 누락 여유를 둔다. 20Hz 제어는 스캔 사이에도 최신 유효 스캔을
+  검사하며, 새 스캔이 없다는 이유만으로 매 제어 주기에 정지하지 않는다.
+  스캔 수신 후 시간 또는 메시지 시각의 나이가 0.50초를 넘으면 다음 제어 검사에서
+  전진·횡이동·회전 명령을 모두 0으로 보낸다. 처음부터 스캔이 없으면 정지 대기한다.
+  작업이 유지되고 다른 입력도 정상이면 새 유효 스캔 수신 후 자동 재개한다.
+  IMU 수신 유효 시간도 같은 설정을 사용하며, 영상 기준 Path는 2초를 넘기면 정지한다.
   odom 없는 상태의 최신 영상·스캔 좌표를 근사적으로 사용하므로, 센서 지연과
   급회전에서 투영 오차가 커질 수 있다. 카메라 참조의 사용 시간은
   `LINE_TRACKING_AVOIDANCE_MAX_PATH_AGE_SEC`로 줄일 수 있다.
@@ -645,8 +662,10 @@ CameraInfo 크기와 frame_id는 원본 이미지와 일치해야 하며 `plumb_
 사용하지만, IMU 유효성 검사와 카메라 영역 투영에는 기존 중력 방향을 계속 사용한다.
 보행 진동·급가감속에서 카메라 영역 투영 오차와 자체 반사 제거 범위를 실물에서 확인해야 한다.
 
-영상 전용 동작은 `LINE_TRACKING_AVOIDANCE_ENABLED=false` 또는
-`--no-avoidance-enabled`로 선택한다. 이전 `SWIN_L_LIDAR_HEIGHT_*` 및 지면 추정
+영상 전용 동작이 기본값이며, `LINE_TRACKING_AVOIDANCE_ENABLED=true` 또는
+`--avoidance-enabled`로 일반 모드에서도 LiDAR를 켤 수 있다. 3번 작업은
+`--no-avoidance-enabled`를 지정해도 LiDAR를 자동 사용한다.
+이전 `SWIN_L_LIDAR_HEIGHT_*` 및 지면 추정
 설정은 제거했다. `.env` 변경은 프로세스 재시작 또는 컨테이너 재생성 후 적용된다.
 실물 동작은 아직 검증하지 않았으며, 저속·정적 장애물부터 별도로 검증해야 한다.
 
@@ -659,6 +678,42 @@ A 5-by-5 morphological closing fills small mask gaps. Each forward-distance
 row selects a contiguous region at least 0.12 m wide, favoring width and
 continuity with the preceding row. Its center contributes to a quadratic fit,
 which is sampled into 20 path points and clipped to +/-3.5 m laterally.
+
+인도 전용 주행(`selected_mask=2`)에서는 가까운 식생 쪽으로 Path 중심을 기본 최대
+0.20 m 편향한다. 현재 모델의 `Vegetation` 라벨을 사용하므로 풀밭만 따로 구분하지는
+못하며 수풀·나무도 포함한다. 추가 모델 추론 없이 현재 프레임의 우승 클래스와
+정규화한 semantic score 0.5 이상인 픽셀만 별도 마스크로 전달한다. 식생을 주행 가능
+영역에 합치지는 않는다. 차도(`1`), 차도+인도(`0`), 가로등 시나리오(`3`)는 기존
+경로를 사용한다.
+
+식생과 인도는 같은 지면 격자로 투영하며, closing 이전의 인도 경계를 기준으로
+좌우를 비교한다. 경계에서 0.30 m 이내에 폭 0.15 m 이상의 식생이 있어야 근접
+증거로 사용한다. 전체 경로점 대비 한쪽의 순 지지율이 30% 이상일 때 그 방향으로
+이동량을 적용하며, 양쪽에 식생이 있으면 해당 점은 편향하지 않는다. 경계 구간의
+이동량은 공간적으로 완화하고, 각 점은 감지된 인도 경계에서 중심 기준 0.45 m 여유를
+유지하도록 제한한다. 이미 이 여유가 없는 점이나 인도가 관측되지 않은 점은 그대로
+둔다. 좁은 인도에서는 이동량이 줄어들거나 0이 된다. 식생이 사라지면 새 추정은
+기존 중심 경로로 돌아오며, 일반 평활화 모드에서는 기존 EMA를 따른다.
+
+편향이 적용된 경로를 추종하는 동안은 전진 속도를 유지하면서 회전 명령을 `0`으로
+두고 횡이동한다. 이 동안에는 곡선·분기에서도 몸체를 회전하지 않는다. 4 m 목표점의
+현재 로봇 기준 횡오차에 `0.5`를 곱한 횡속도를 사용하고, 기본 최대 `0.05 m/s`로
+제한한다. 횡오차가 `0.02 m` 이내이면 횡속도는 `0`이다. 계속 갱신되는 카메라 경로로
+오차를 계산하므로 목표에 도달한 뒤에도 일정 속도로 옆으로 밀지 않는다. 전진 속도는
+기존 목표각에 따른 감속·상한을 유지한다. 편향이 적용되지 않으면 기존 전진·회전
+추종으로 돌아간다. `LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS`(기본 `0.05`,
+허용 범위 `0` 초과~`0.15`) 또는 `--vegetation-max-lateral-mps`로 횡속도를 조절한다.
+LiDAR 회피가 활성화되어 있으면 회피·외곽 충돌·미관측 공간 검사가 계속 우선하며,
+장애물 회피에 필요한 횡속도는 회피 설정의 별도 제한을 사용한다.
+
+확인된 분기는 기존 좌우 선택과 식별을 유지한 채 선택한 인도 구간 안에서만 편향한다.
+분기 경로의 기울기·구간 내부 검사를 통과하지 못하면 원래 분기 경로를 사용한다.
+`SWIN_L_SIDEWALK_VEGETATION_BIAS_M`(기본 `0.20`, `0`이면 해제),
+`SWIN_L_SIDEWALK_VEGETATION_MAX_GAP_M`(기본 `0.30`),
+`SWIN_L_SIDEWALK_VEGETATION_EDGE_MARGIN_M`(기본 `0.45`)으로 조정한다.
+오프라인 `mcap --overlay-mode local-path --path-mask-class 2`에도 동일하게 적용된다.
+설정 변경은 프로세스 재시작 또는 컨테이너 재생성 후 적용된다. 거리와 여유는 기존
+카메라 지면 투영 보정에 의존하며, 실물 주행은 아직 검증하지 않았다.
 
 With the deployed default `SWIN_L_UNRESTRICTED_PATH_MODE=true`, at least two
 usable rows are sufficient. No path is produced when fewer than two rows have
@@ -687,7 +742,8 @@ path at 10 Hz never resets them. Their stop flags determine whether stale values
 block motion. The heading calculation uses the 4 m lookahead; when enabled,
 the default 60° target-angle limit corresponds to about ±6.93 m laterally.
 Tracking sends heading-regulated forward speed (default ceiling 0.50 m/s),
-zero lateral velocity, and yaw capped at ±0.18 rad/s. Disabling angle stopping
+zero lateral velocity except during the vegetation bias described above, and
+yaw capped at ±0.18 rad/s. Disabling angle stopping
 does not repair an inaccurate path or guarantee a sharp bend can be followed.
 
 ## 정지·작업 중단·시작 거절 사유
@@ -765,7 +821,6 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 | `invalid_payload_json` | 문자열 payload의 JSON 문법 오류 |
 | `invalid_payload` | payload가 JSON 객체가 아님 (`null`/누락은 기본값 사용) |
 | `invalid_selected_mask` | 정수 `0`, `1`, `2`, `3` 이외 값. 문자열이나 bool도 거절 |
-| `street_light_requires_avoidance` | 시나리오 3인데 `LINE_TRACKING_AVOIDANCE_ENABLED=false` |
 | `street_light_label_unavailable` | 시나리오 3인데 모델에 `Street Light` 라벨이 없음 |
 | `street_light_stop_distance_out_of_range` | 시나리오 3의 도착 거리가 로봇 외곽·여유보다 작거나 LiDAR 감지 반경 이상 |
 | `invalid_duration_sec` | duration이 숫자가 아님. bool도 거절 |
@@ -947,7 +1002,7 @@ longer inserts zero commands between valid results. The live inference target
 remains 4 Hz. Missing paths and stale camera/inference inputs stop motion only
 when the corresponding automatic flags are enabled. In restricted
 path mode, the smoother's separate 0.90-second hold expiry can still make the
-path unavailable. Enabled obstacle avoidance separately stops on a 0.30 s
+path unavailable. Enabled obstacle avoidance separately stops on a 0.50 s
 LiDAR/IMU timeout or a 2.0 s reference-path timeout; it never retains a moving
 command through these failures.
 

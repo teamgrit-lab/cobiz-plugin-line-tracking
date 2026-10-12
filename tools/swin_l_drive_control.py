@@ -17,6 +17,8 @@ from local_path import SmoothedPath
 MAX_FORWARD_MPS_HARD_LIMIT = 1.00
 MAX_PATH_UNAVAILABLE_INFERENCES = 5
 MAX_PATH_RECOVERY_INFERENCES = 3
+VEGETATION_LATERAL_GAIN = 0.5
+VEGETATION_LATERAL_DEADBAND_M = 0.02
 DRIVE_STOP_CHECKS = (
     "camera_stale",
     "inference_stale",
@@ -50,6 +52,7 @@ class DriveConfig:
     path_recovery_yaw_rps: float = 0.18
     path_recovery_confirm_frames: int = 2
     path_recovery_first_direction: str = "left"
+    vegetation_max_lateral_mps: float = 0.05
 
     def validate(self) -> None:
         positive = (
@@ -67,6 +70,9 @@ class DriveConfig:
             raise ValueError("drive limits must be finite and positive")
         if self.max_forward_mps > MAX_FORWARD_MPS_HARD_LIMIT:
             raise ValueError("max_forward_mps must be at most 1.0 m/s")
+        if (not math.isfinite(self.vegetation_max_lateral_mps)
+                or not 0 < self.vegetation_max_lateral_mps <= 0.15):
+            raise ValueError("vegetation_max_lateral_mps must be finite and in (0, 0.15]")
         if self.max_target_heading_deg >= 90.0:
             raise ValueError("max_target_heading_deg must be in (0, 90)")
         if not 0.0 <= self.min_confidence <= 1.0:
@@ -337,12 +343,23 @@ def decide_drive(
     yaw_rate = float(
         np.clip(requested_yaw, -config.max_yaw_rps, config.max_yaw_rps)
     )
-    # Once yaw saturates, scale forward speed by the same ratio. This preserves
-    # the requested yaw/speed ratio instead of widening the commanded turn.
+    # Preserve the existing target-angle speed reduction, including while a
+    # vegetation bias uses sideways translation in place of body rotation.
     speed_scale = config.max_yaw_rps / max(config.max_yaw_rps, abs(requested_yaw))
+    lateral_speed = 0.0
+    if path.vegetation_bias_active:
+        # Use current robot-relative path error, not a constant sideways push:
+        # a translated camera path reduces/stops vy as the robot reaches it.
+        # Do not rotate the body while shifting toward the vegetation target.
+        yaw_rate = 0.0
+        if abs(lateral) > VEGETATION_LATERAL_DEADBAND_M:
+            lateral_speed = float(np.clip(
+                VEGETATION_LATERAL_GAIN * lateral,
+                -config.vegetation_max_lateral_mps,
+                config.vegetation_max_lateral_mps))
     return DriveDecision(
         config.max_forward_mps * speed_scale,
-        0.0,
+        lateral_speed,
         yaw_rate,
         "tracking_slow_turn" if speed_scale < 1.0 else "tracking",
     )

@@ -229,7 +229,9 @@ class AvoidanceController:
         # camera regions and paths are not warped or accumulated without odom.
         usable = pts[np.isfinite(pts).all(axis=1) & (pts[:, 0] > 0)]
         return_vy = 0.0
-        if len(usable):
+        if path.vegetation_bias_active:
+            return_vy = float(np.clip(nominal.vy, -a.max_lateral_mps, a.max_lateral_mps))
+        elif len(usable):
             target = usable[np.argmin(np.abs(usable[:, 0] - 1.0))]
             return_vy = float(
                 np.clip(

@@ -189,7 +189,7 @@ def test_sensor_and_path_faults_override_retained_commands(monkeypatch, fault):
         sensors(node, ros)
         assert complete_inference(node, ros)["drive_reason"] == "lidar_tracking"
         if fault == "cloud_stale":
-            ros.now += 0.31
+            ros.now += node.obstacles.config.max_age_sec + .01
         elif fault == "path_stale":
             ros.now += 2.1
             sensors(node, ros)

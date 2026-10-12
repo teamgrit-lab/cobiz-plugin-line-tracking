@@ -56,7 +56,7 @@ def test_swin_l_aspect_fp16_changes_only_name_and_precision():
     assert fp16.temporal_hysteresis_margin == fp32.temporal_hysteresis_margin
 
 
-def test_realtime_r50_uses_swin_aligned_surface_mapping_and_cleanup():
+def test_realtime_r50_surface_mapping_and_cleanup():
     assert "Bike Lane" not in R50_ROAD_LABELS
     assert "Parking" not in R50_ROAD_LABELS
     assert "Service Lane" not in R50_ROAD_LABELS

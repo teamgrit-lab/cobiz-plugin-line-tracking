@@ -299,7 +299,7 @@ def test_local_load_rejects_incomplete_or_incompatible_weights(
         (runtime.R50_PROFILE, 2),
     ],
 )
-def test_manhole_mapping_and_other_r50_groups(
+def test_r50_surface_mapping_keeps_crosswalks_with_sidewalk(
     monkeypatch, checkpoint, profile, manhole_surface
 ):
     _fake_hf_loaders(monkeypatch, checkpoint)
@@ -311,13 +311,16 @@ def test_manhole_mapping_and_other_r50_groups(
         )
     )
     labels = segmenter.model.config.id2label
-    names = ["Manhole", "Road", "Sidewalk", "Bike Lane", "Parking", "Service Lane"]
+    names = [
+        "Manhole", "Road", "Sidewalk", "Bike Lane", "Parking", "Service Lane",
+        "Crosswalk - Plain", "Lane Marking - Crosswalk", "Lane Marking - General",
+    ]
     scores = torch.zeros((65, 1, len(names)))
     for column, name in enumerate(names):
         scores[
             next(key for key, value in labels.items() if value == name), 0, column
         ] = 1
-    expected = np.array([[manhole_surface, 1, 2, 2, 0, 0]], dtype=np.uint8)
+    expected = np.array([[manhole_surface, 1, 2, 2, 0, 0, 2, 2, 1]], dtype=np.uint8)
     np.testing.assert_array_equal(segmenter._cpu_selected_mask(scores)[0], expected)
     np.testing.assert_array_equal(
         segmenter._accelerator_selected_mask(scores)[0], expected

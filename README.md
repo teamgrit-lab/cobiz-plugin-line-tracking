@@ -917,9 +917,12 @@ BEV caching, task-selected masks 0/1/2, and Sport control use the shared pipelin
 CUDA, checkpoint pinning, camera freshness, task lifecycle, and control checks
 still apply. The live inference target remains `SWIN_L_INFERENCE_HZ` (default 4).
 
-R50 retains its existing label aggregation and cleanup: Bike Lane and Manhole
-join the sidewalk group, while Parking and Service Lane are excluded from the
-road group. Its temporal hysteresis margin defaults to zero. This can change
+Both R50 profiles map `Crosswalk - Plain` (class 8) and
+`Lane Marking - Crosswalk` (class 23) to the sidewalk group (`selected_mask=2`).
+Bike Lane also joins the sidewalk group, while Parking and Service Lane are
+excluded from the road group. Manhole joins the sidewalk group in the original
+R50 profile and the road group in the fine-tuned profile. R50's temporal
+hysteresis margin defaults to zero. This can change
 the resulting Path, including the union selected by mask 0; changing models
 does not establish equivalent segmentation quality or a Jetson speedup.
 

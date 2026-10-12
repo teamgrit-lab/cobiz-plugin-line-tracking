@@ -14,8 +14,8 @@ Named profiles are intentionally kept here:
 * ``swin-l-aspect-448x768`` is a slower, quality-first experimental profile
   validated on the two test-one videos; it retains the same Swin-L contract.
 * ``r50-fp16-640x360`` is the previous realtime candidate. It uses MaskFormer R50 at
-  the native 640x360 camera size, FP16 on MPS/CUDA, Swin-aligned surface label
-  aggregation, and a zero-cost temporal margin selected by direct comparison.
+  the native 640x360 camera size, FP16 on MPS/CUDA, crosswalks in the sidewalk
+  group, and a zero-cost temporal margin selected by direct comparison.
 * ``r50-finetuned-fp16-640x360`` loads a validated local R50 checkpoint with
   operational road labels including manholes and the same R50 cleanup.
 
@@ -62,12 +62,13 @@ R50_PROFILE = "r50-fp16-640x360"
 R50_PROFILES = (R50_PROFILE, FINETUNED_PROFILE)
 DEFAULT_PROFILE = SWIN_L_ASPECT_FP16_PROFILE
 DEFAULT_EVALUATION_SIZE = (360, 640)
+R50_CROSSWALK_LABELS = ("Crosswalk - Plain", "Lane Marking - Crosswalk")
 R50_ROAD_LABELS = tuple(
     label
     for label in ROAD_LABELS
-    if label not in {"Bike Lane", "Parking", "Service Lane"}
+    if label not in {"Bike Lane", "Parking", "Service Lane", *R50_CROSSWALK_LABELS}
 )
-R50_SIDEWALK_LABELS = SIDEWALK_LABELS + ("Bike Lane", "Manhole")
+R50_SIDEWALK_LABELS = SIDEWALK_LABELS + R50_CROSSWALK_LABELS + ("Bike Lane", "Manhole")
 R50_FINETUNED_ROAD_LABELS = R50_ROAD_LABELS + ("Manhole",)
 R50_FINETUNED_SIDEWALK_LABELS = tuple(
     label for label in R50_SIDEWALK_LABELS if label != "Manhole"

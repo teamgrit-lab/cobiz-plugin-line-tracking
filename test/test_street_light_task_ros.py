@@ -90,13 +90,13 @@ def test_task_cruises_approaches_laterally_resumes_and_does_not_complete(monkeyp
         node.on_camera_info(info)
         node.publish_state()
         metrics = ros.metrics()
-        assert metrics["drive_reason"] == "street_light_reached"
-        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        assert metrics["street_light"]["transition"] == "reached"
+        assert metrics["street_light"]["bias_active"] is False
         assert metrics["street_light"]["visits"] == 1
         assert node.tasks.active is not None
         for _ in range(4):
             metrics = tick(ros, node)
-            assert metrics["drive_reason"] == "street_light_cruising"
+            assert metrics["drive_reason"] == "lidar_tracking"
             assert metrics["street_light"]["state"] == "cruising"
             assert metrics["street_light"]["visited_ids"] == [1]
             assert metrics["street_light"]["pending_ids"] == []
@@ -141,8 +141,8 @@ def test_task_visits_both_continuously_visible_lights_and_excludes_completed_ids
             node.on_camera_info(info)
             node.publish_state()
             metrics = ros.metrics()
-            assert metrics["drive_reason"] == "street_light_reached"
-            assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+            assert metrics["street_light"]["transition"] == "reached"
+            assert metrics["street_light"]["bias_active"] is False
             assert metrics["street_light"]["visited_ids"] == list(range(1, target_id + 1))
             # All detections stay present. No global disappearance is needed.
             metrics = tick(ros, node)
@@ -152,7 +152,7 @@ def test_task_visits_both_continuously_visible_lights_and_excludes_completed_ids
                 assert metrics["street_light"]["visible_ids"] == [1, 2]
         for _ in range(4):
             metrics = tick(ros, node)
-            assert metrics["drive_reason"] == "street_light_cruising"
+            assert metrics["drive_reason"] == "lidar_tracking"
             assert metrics["street_light"]["visits"] == 2
             assert metrics["street_light"]["pending_ids"] == []
         # Occlusion does not reset the visit ledger during the same task.
@@ -163,7 +163,7 @@ def test_task_visits_both_continuously_visible_lights_and_excludes_completed_ids
         detection.light[70:90, 395:415] = True
         for _ in range(4):
             metrics = tick(ros, node)
-            assert metrics["drive_reason"] == "street_light_cruising"
+            assert metrics["drive_reason"] == "lidar_tracking"
             assert metrics["street_light"]["visited_ids"] == [1, 2]
         assert node.tasks.active is not None
         node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "light-3"})))
@@ -204,7 +204,7 @@ def test_automatic_lidar_is_released_before_camera_only_tasks(monkeypatch, selec
         assert metrics["lidar_obstacles"]["enabled"] is True
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
         metrics = tick(ros, node)
-        assert metrics["drive_reason"] == "street_light_cruising"
+        assert metrics["drive_reason"] == "lidar_tracking"
         assert json.loads(ros.published[SPORT][-1].parameter)["x"] > 0
 
         if terminal == "server":
@@ -305,7 +305,7 @@ def test_ten_hz_lidar_with_twenty_hz_control_tolerates_short_gaps_stops_and_resu
     if not approaching:
         detection.light[:] = False
     model(monkeypatch, detection)
-    expected_reason = "street_light_approaching" if approaching else "street_light_cruising"
+    expected_reason = "street_light_approaching" if approaching else "lidar_tracking"
 
     def assert_moving(metrics):
         assert metrics["drive_reason"] == expected_reason
@@ -360,7 +360,7 @@ def test_ten_hz_lidar_with_twenty_hz_control_tolerates_short_gaps_stops_and_resu
     ros.run(scenario, "--branch-preference", "center")
 
 
-@pytest.mark.parametrize("fault", ["cloud_stale", "road_lost", "inference_stale", "collision", "target_lost"])
+@pytest.mark.parametrize("fault", ["cloud_stale", "road_lost", "collision"])
 def test_scenario_cannot_bypass_sensors_road_or_collision_gates(monkeypatch, fault):
     ros = enabled_ros(monkeypatch)
     detection = scene()
@@ -379,20 +379,128 @@ def test_scenario_cannot_bypass_sensors_road_or_collision_gates(monkeypatch, fau
         elif fault == "road_lost":
             detection.road[:] = 2  # A sidewalk must not satisfy scenario 3.
             tick(ros, node)
-        elif fault == "inference_stale":
-            ros.now += 1.1
-            sensors(node, ros)
-            node.publish_state()
-        elif fault == "target_lost":
-            detection.light[:] = False
-            tick(ros, node)
-            assert ros.metrics()["drive_reason"] == "street_light_target_lost"
         else:
             ros.now += 0.1
             sensors(node, ros, [[0.6, 0.0]])
             node.publish_state()
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
         assert node.tasks.active is not None
+
+    ros.run(scenario, "--branch-preference", "center")
+
+
+@pytest.mark.parametrize("fault", ["inference_delayed", "target_lost", "geometry"])
+def test_light_bias_failure_resumes_road_without_stopping_or_retaining_lateral(monkeypatch, fault):
+    ros = enabled_ros(monkeypatch)
+    detection = scene()
+    model(monkeypatch, detection)
+
+    def scenario(node):
+        start(ros)
+        ros.now = 2.1
+        for _ in range(3):
+            metrics = tick(ros, node)
+        assert metrics["drive_reason"] == "street_light_approaching"
+        if fault == "inference_delayed":
+            ros.now += 1.1
+            sensors(node, ros)
+            node.publish_state()
+            metrics = ros.metrics()
+            assert metrics["street_light"]["bias_reason"] == "observations_stale"
+        elif fault == "target_lost":
+            detection.light[:] = False
+            metrics = tick(ros, node)
+            assert metrics["street_light"]["transition"] == "target_lost"
+        else:
+            def invalid(_observation, _now, _clock):
+                raise ValueError("street_light_geometry_invalid")
+            monkeypatch.setattr(node.obstacles, "locate_street_light", invalid)
+            metrics = tick(ros, node)
+        assert metrics["drive_reason"] in ("lidar_tracking", "lidar_returning")
+        assert metrics["street_light"]["bias_active"] is False
+        command = json.loads(ros.published[SPORT][-1].parameter)
+        assert command["x"] > 0 and command["z"] == 0
+        assert node.obstacles.controller.target_velocity[1] == 0
+        # Deceleration still obeys the shared lateral acceleration limit.
+        for _ in range(3):
+            ros.now += .05
+            sensors(node, ros)
+            node.publish_state()
+        command = json.loads(ros.published[SPORT][-1].parameter)
+        assert command["x"] > 0 and command["y"] == command["z"] == 0
+        assert node.tasks.active is not None
+
+    ros.run(scenario, "--branch-preference", "center")
+
+
+def test_blocked_light_bias_keeps_safe_road_tracking_without_repeated_speed_resets(monkeypatch):
+    ros = enabled_ros(monkeypatch)
+    model(monkeypatch, scene())
+
+    def scenario(node):
+        start(ros)
+        original_context = node.obstacles._context
+
+        def corridor(mask_class, now, clock_ns):
+            scan, _ = original_context(mask_class, now, clock_ns)
+            config = node.obstacles.config
+            region = np.abs(config.centers()[..., 1]) <= config.robot_half_width_m + config.margin_m
+            return scan, region
+
+        monkeypatch.setattr(node.obstacles, "_context", corridor)
+        ros.now = 2.1
+        previous_speed = 0.0
+        for _ in range(10):
+            metrics = tick(ros, node)
+            command = json.loads(ros.published[SPORT][-1].parameter)
+            assert command["x"] >= previous_speed
+            assert command["y"] == command["z"] == 0
+            previous_speed = command["x"]
+        assert metrics["lidar_obstacles"]["street_light_bias_blocked_reason"] == "avoidance_space_unobserved"
+        assert metrics["drive_reason"] == "lidar_tracking"
+        assert metrics["street_light"]["bias_active"] is False
+        assert previous_speed == pytest.approx(node.obstacles.avoidance.max_forward_mps)
+
+    ros.run(scenario, "--branch-preference", "center")
+
+
+def test_general_inference_stop_still_overrides_optional_light_bias(monkeypatch):
+    ros = enabled_ros(monkeypatch)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_INFERENCE_STALE", "true")
+    model(monkeypatch, scene())
+
+    def scenario(node):
+        start(ros)
+        ros.now = 2.1
+        for _ in range(3):
+            tick(ros, node)
+        ros.now += node.drive_config.max_inference_age_sec + .1
+        sensors(node, ros)
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "inference_stale"
+        assert ros.metrics()["street_light"]["bias_active"] is False
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+
+    ros.run(scenario, "--branch-preference", "center")
+
+
+def test_delayed_light_evidence_does_not_abort_a_normally_tracking_task_at_its_deadline(monkeypatch):
+    ros = enabled_ros(monkeypatch)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_TASK_TIMEOUT", "true")
+    model(monkeypatch, scene())
+
+    def scenario(node):
+        start(ros, duration=4)
+        ros.now = 2.8
+        for _ in range(3):
+            metrics = tick(ros, node)
+        assert metrics["drive_reason"] == "street_light_approaching"
+        ros.now += 1.1
+        sensors(node, ros)
+        node.publish_state()
+        assert ros.task_state()["type"] == "TASK_COMPLETED"
+        assert node.tasks.active is None
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
 
     ros.run(scenario, "--branch-preference", "center")
 

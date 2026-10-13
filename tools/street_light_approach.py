@@ -1,4 +1,4 @@
-"""Road cruising and lateral-first Street Light approach, without ROS state."""
+"""Optional Street Light lateral bias on top of normal road tracking."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from swin_l_drive_control import DriveDecision
 class StreetLightConfig:
     stop_distance_m: float = 1.0
     max_lateral_mps: float = 0.15
-    forward_mps: float = 0.05
+    forward_mps: float = 0.05  # Legacy configuration; road tracking sets forward speed.
     confirm_frames: int = 3
     clear_frames: int = 3
     min_area_px: int = 24
@@ -97,7 +97,7 @@ class StreetLightApproach:
         self.hits = self.clear_hits = self.visits = 0
         self.last_inference = None
         self.approach_started = None
-        self.metrics = {}
+        self.metrics = {"bias_active": False, "bias_reason": "no_confirmed_light"}
         self._update_metrics()
 
     def _update_metrics(self) -> None:
@@ -193,14 +193,22 @@ class StreetLightApproach:
     def decide(self, normal, observations, *, now, inference_id, inference_age_sec,
                locate):
         c = self.config
-        # No retained lateral command, stale image, or path-search rotation may
-        # bypass the scenario's observation and road-path requirements.
+        self.metrics.update(bias_active=False, bias_reason="road_tracking")
+        # Road tracking owns motion and its sensor guards. A stale or missing
+        # light observation disables only this optional lateral bias.
+        if normal.reason not in ("tracking", "tracking_slow_turn") or normal.vx <= 0:
+            self.metrics["bias_reason"] = "road_not_tracking"
+            return normal
         if (inference_age_sec is None or not math.isfinite(inference_age_sec)
                 or not 0 <= inference_age_sec <= c.max_age_sec):
-            return DriveDecision.stop("street_light_inference_stale")
-        if normal.reason not in ("tracking", "tracking_slow_turn"):
+            self.phase = "cruising"
+            self.target = self.target_id = None
+            self.hits = 0
+            self.approach_started = self.last_inference = None
+            self.metrics.update(bias_reason="observations_stale", bearing_rad=None,
+                                range_m=None, range_source=None)
+            self._update_metrics()
             return normal
-        cruise = DriveDecision(normal.vx, 0.0, 0.0, "street_light_cruising")
         if inference_id != self.last_inference:
             consecutive = self.last_inference is not None and inference_id == self.last_inference + 1
             self.last_inference = inference_id
@@ -209,7 +217,8 @@ class StreetLightApproach:
             if track is not None and track.misses:
                 if self.phase == "approaching":
                     self._cooldown("target_lost")
-                    return DriveDecision.stop("street_light_target_lost")
+                    self.metrics["bias_reason"] = "target_lost"
+                    return normal
                 self.target = self.target_id = None
                 track = None
             if track is None:
@@ -226,28 +235,30 @@ class StreetLightApproach:
                     self.phase = "confirming"
             self._update_metrics()
         if self.phase != "approaching":
-            return cruise
+            self.metrics["bias_reason"] = "no_confirmed_light"
+            return normal
         if now - self.approach_started >= c.max_approach_sec:
             self._cooldown("approach_timeout")
-            return DriveDecision.stop("street_light_approach_timeout")
+            self.metrics["bias_reason"] = "approach_timeout"
+            return normal
         try:
             bearing, distance = locate(self.target)
         except ValueError as error:
-            return DriveDecision.stop(str(error))
+            self.metrics["bias_reason"] = str(error)
+            return normal
         if not math.isfinite(bearing) or (distance is not None and
                 (not math.isfinite(distance) or distance <= 0)):
-            return DriveDecision.stop("street_light_geometry_invalid")
+            self.metrics["bias_reason"] = "street_light_geometry_invalid"
+            return normal
         self.metrics.update(bearing_rad=bearing, range_m=distance,
                             range_source="lidar_column_association" if distance is not None else None)
         if distance is not None and distance <= c.stop_distance_m:
             self._cooldown("reached")
-            # One zero command ends the approach, then cruising resumes. Do not
-            # complete the task. The next inference may select another ID even
-            # while the visited light remains visible.
-            return DriveDecision.stop("street_light_reached")
+            self.metrics["bias_reason"] = "reached"
+            return normal
         vy = float(np.clip(0.5 * bearing, -c.max_lateral_mps, c.max_lateral_mps))
         if abs(bearing) <= 0.05:
-            vy = 0.0
-        vx = min(normal.vx, c.forward_mps,
-                 abs(vy) / 3 if vy else c.forward_mps)
-        return DriveDecision(vx, vy, 0.0, "street_light_approaching")
+            self.metrics["bias_reason"] = "bearing_aligned"
+            return normal
+        self.metrics.update(bias_active=True, bias_reason="approaching")
+        return DriveDecision(normal.vx, vy, 0.0, "street_light_approaching")

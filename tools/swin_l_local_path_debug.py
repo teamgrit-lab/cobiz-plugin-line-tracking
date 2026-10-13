@@ -1308,12 +1308,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path_recovery_inferences=self.path_recovery_inferences if recovering else None,
             )
             if street_light_mode:
-                if path is None or path.stop_reason is not None:
-                    decision = DriveDecision.stop(
-                        path.stop_reason if path is not None and path.stop_reason
-                        else "street_light_road_unavailable"
-                    )
-                elif self.obstacles is None:
+                if self.obstacles is None:
                     decision = DriveDecision.stop("street_light_requires_avoidance")
                 else:
                     decision = self.street_lights.decide(
@@ -1359,6 +1354,9 @@ def run_ros2(args: argparse.Namespace) -> int:
             ):
                 self.last_valid_yaw_rate = decision.yaw_rate
                 self.last_valid_forward_mps = decision.vx
+            if street_light_mode:
+                self.street_lights.metrics["bias_active"] = (
+                    decision.reason == "street_light_approaching" and abs(decision.vy) > 1e-6)
             return path, decision
 
         def on_task_event(self, message: Any) -> None:

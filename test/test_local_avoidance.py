@@ -50,7 +50,7 @@ def test_clear_space_preserves_small_vegetation_velocity_and_zero_yaw(sign):
 
 
 @pytest.mark.parametrize("sign", [-1, 1])
-def test_scenario_velocity_keeps_its_target_side_and_lateral_priority_under_caps(sign):
+def test_light_bias_preserves_forward_speed_under_lateral_caps(sign):
     config = AvoidanceConfig(max_lateral_mps=0.03)
     controller = AvoidanceController(config, C)
     nominal = DriveDecision(0.05, sign * 0.15, 0.0, "street_light_approaching")
@@ -63,7 +63,23 @@ def test_scenario_velocity_keeps_its_target_side_and_lateral_priority_under_caps
         assert command.yaw_rate == 0
         assert command.vy * sign > 0
     assert abs(command.vy) == pytest.approx(0.03)
-    assert command.vx <= abs(command.vy) / 3 + 1e-8
+    assert command.vx == pytest.approx(nominal.vx)
+
+
+def test_blocked_light_bias_falls_back_without_resetting_forward_ramp():
+    controller = AvoidanceController(AvoidanceConfig(), C)
+    region = np.abs(C.centers()[..., 1]) <= C.robot_half_width_m + C.margin_m
+    for tick in range(30):
+        now = tick * 0.05
+        scan = replace(scene(), arrival=now, stamp_ns=100_000_000_000 + round(now * 1e9))
+        command = controller.apply_direct(
+            DriveDecision(0.2, 0.15, 0.0, "street_light_approaching"), scan, region,
+            now=now, clock_ns=scan.stamp_ns,
+            fallback=lambda _reason: controller.apply(
+                NOMINAL, path(), scan, region, now=now, clock_ns=scan.stamp_ns))
+        assert command.reason == "lidar_tracking"
+        assert command.vx > 0 and command.vy == 0
+    assert command.vx == pytest.approx(NOMINAL.vx)
 
 
 @pytest.mark.parametrize("fault", ["collision", "unknown", "semantic_edge"])

@@ -9,9 +9,9 @@ accepted task, it publishes
 no Sport Move request. The default path class is sidewalk
 (`SWIN_L_PATH_MASK_CLASS=2`); a task can request road (`1`) or road/sidewalk
 combined (`0`) with
-`payload.selected_mask`. Scenario `3` cruises straight on the road, approaches
-confirmed `Street Light` detections primarily laterally, then resumes cruising.
-Livox obstacle avoidance is enabled by default. A 20 Hz control loop combines
+`payload.selected_mask`. Scenario `3` follows the normal road path and adds lateral bias toward
+confirmed `Street Light` detections while preserving road-tracking forward speed.
+Livox obstacle avoidance defaults to disabled for modes 0/1/2 and is automatically enabled for mode 3. A 20 Hz control loop combines
 the camera reference path with 10 Hz `/livox/lidar`, IMU, CameraInfo,
 and fixed measured sensor transforms in `base_link`. Odometry is not required. Ground-height estimation has been removed.
 
@@ -376,7 +376,7 @@ image. An explicit task value overrides the environment default. Metrics
 report `path_mask_class: 0` and `path_surface: "ROAD_OR_SIDEWALK"`. Existing
 stop checks still apply; no road/sidewalk region means no path.
 
-### selected_mask=3: 차도 직진 → 가로등 횡이동 접근 → 직진 재개
+### selected_mask=3: 차도 추종 + 가로등 방향 횡이동 편향
 
 `LINE_TRACKING` 작업 payload에 `{"selected_mask": 3}`을 지정한다.
 기본 시나리오로 사용하려면 `SWIN_L_PATH_MASK_CLASS=3`을 지정한다
@@ -391,6 +391,7 @@ LINE_TRACKING_AVOIDANCE_ENABLED=false
 LIDAR_OBSTACLE_FOV_DEG=360.0
 LINE_TRACKING_STREET_LIGHT_STOP_DISTANCE_M=1.0
 LINE_TRACKING_STREET_LIGHT_MAX_LATERAL_MPS=0.15
+# 기존 설정 호환용이며, 전진 속도를 제한하지 않는다.
 LINE_TRACKING_STREET_LIGHT_FORWARD_MPS=0.05
 LINE_TRACKING_STREET_LIGHT_CONFIRM_FRAMES=3
 LINE_TRACKING_STREET_LIGHT_CLEAR_FRAMES=3
@@ -411,39 +412,42 @@ LiDAR·IMU·CameraInfo·카메라 보정은 기존 회피 설정을 사용한다
 `STOP_DISTANCE_M`는 로봇 외곽+여유+격자 한 칸 이상이며 LiDAR 감지 반경보다
 작아야 한다. 기본 1m는 기본 감지 반경 1.5m 안에 있다.
 
-- **차도 직진:** 차도(`1`)의 현재 Path가 있을 때 전진하고, 회전·횡이동은 0으로
-  유지한다. 전진 상한은 기존 주행 및 회피 상한 중 작은 값(기본 0.20m/s)이다.
+- **차도 추종:** 차도(`1`)와 동일한 Path·전진 속도·조향을 사용한다. 가로등이
+  없거나 아직 확인 중이면 이 주행 명령을 그대로 따른다. 전진 및 가속 상한은
+  기존 주행·LiDAR 회피 설정을 따른다.
 - **검출 확인:** 현재 프레임에서 의미 점수 비율 0.50 이상인 `Street Light`
   연결 영역 중 24픽셀 이상을 사용한다. 각 영역에 작업 내 ID를 부여하고,
-  화면 중심·하단·폭·면적과 직전 이동량으로 모든 후보를 일대일 대응시킨다.
-  먼저 등록된 미방문 ID부터 하나씩 접근한다. 동시에 처음 보인 후보는 면적이 큰
-  순서로 등록하고, 면적이 같으면 왼쪽부터 등록한다. 접근 중에는 목표 ID를 유지한다.
-  각 후보를 새 추론 3회 연속 확인하며, 대기 중인 후보의 확인 횟수도 따로 누적한다.
-  제어 타이머의 반복 호출은 확인 횟수를 늘리지 않는다. 표면 EMA의 잔상은 사용하지 않는다.
-- **접근:** 영상과 CameraInfo/고정 변환으로 좌우 방향을 구하고 회전 없이
-  횡이동한다. 횡속도는 최대 0.15m/s이며, 횡이동 중 목표 전진 속도는
-  `min(0.05m/s, |vy|/3)`이다. 정면 ±0.05rad 안에서는 0.05m/s 이하로
-  전진한다. 실제 명령은 기존 회피 속도·가속 상한을 따르므로 전환 구간에는 차이가 있다.
-- **근접 판정·재개:** 가로등 영역의 영상 열(좌우 3% 여유)과 겹치는 LiDAR
-  반사점을 카메라 보정으로 연관시켜, `base_link` 중심부터 반사점까지의 수평 거리가
-  1m 이하이면 방문 완료 ID로 기록하고 0 명령을 한 번 보낸다. 이후 차도 직진을
-  재개하며, 다음 새 추론에서 확인 조건을 충족한 다음 미방문 ID가 있으면 접근한다.
-  Cobiz 작업은 완료하지 않는다. 방문한 ID는 같은 작업 동안 제외하며, 잠시 가려졌다
-  다시 매칭되어도 방문 상태를 유지한다. 다른 가로등이 계속 보여도 다음 목표로 잡는다.
-- **유실·제한:** 접근 중 가로등이 사라지거나 30초 안에 근접 판정을 못 하면
-  0 명령으로 횡이동을 끝내고 다음 제어 주기에 차도 직진으로 돌아간다. 이 ID는 방문으로
-  기록하지 않고, 해당 ID가 새 추론 `CLEAR_FRAMES`회 연속 사라져야 재시도한다.
-  다른 미방문 ID는 기다리지 않고 다음 목표가 될 수 있다. 여러 기존 ID가 하나의 큰
-  연결 영역으로 합쳐지면 새 목표로 만들지 않고 분리될 때까지 접근을 보류한다.
-  추론 원본 영상이 1초보다 오래됐거나
-  차도 Path·LiDAR·IMU·보정이 없으면 정지하며, 선택적 자동 정지 스위치로 우회하지 않는다.
-  전체 차체의 예측 이동을 차도 영역·관측 공간·장애물에 대해 검사한다.
-  충돌 없이 직진/접근할 수 없으면 정지하며 다른 방향으로 우회하지 않는다.
+  화면 중심·하단·폭·면적과 직전 이동량으로 후보를 일대일 대응시킨다.
+  먼저 등록된 미방문 ID부터 하나씩 선택한다. 각 후보는 새 추론 3회 연속으로
+  확인해야 하며 제어 타이머 반복은 확인 횟수를 늘리지 않는다. 표면 EMA의 잔상은
+  사용하지 않고, 방문한 ID는 같은 작업 동안 제외한다.
+- **횡이동 편향:** 확인된 가로등 방향으로 최대 0.15m/s의 횡속도를 더한다.
+  편향 중에는 회전을 0으로 하고 차도 추종의 전진 속도를 유지한다.
+  `LINE_TRACKING_STREET_LIGHT_FORWARD_MPS`는 기존 설정 호환용으로만 읽으며,
+  전진 속도를 0.05m/s 또는 `|vy|/3`으로 낮추지 않는다. 가로등이 정면 ±0.05rad
+  안에 있으면 횡이동을 더하지 않고 일반 차도 조향을 사용한다.
+- **근접 판정:** 가로등 영역의 영상 열(좌우 3% 여유)과 겹치는 LiDAR 반사점을
+  카메라 보정으로 연관시킨다. `base_link` 중심부터 반사점까지의 수평 거리가
+  1m 이하이면 방문 완료 ID로 기록하고 즉시 차도 추종으로 복귀한다. 가로등 도착을
+  이유로 0 명령을 보내거나 Cobiz 작업을 완료하지 않는다. 확인된 다음 미방문 ID는
+  다음 새 추론에서 편향 목표가 될 수 있다.
+- **편향 해제:** 가로등이 사라지거나, 관측 원본 영상이 `MAX_AGE_SEC`(기본 1초)를
+  넘거나, 방향 계산이 실패하거나, `MAX_APPROACH_SEC`(기본 30초)를 넘으면
+  편향만 해제하고 차도 추종으로 복귀한다. 오래된 관측 뒤에는 새 추론의 연속 확인을
+  다시 요구한다. 유실·접근 시간 초과한 ID는 방문으로 기록하지 않고, 해당 ID가
+  `CLEAR_FRAMES`회 연속 사라진 뒤 재시도한다. 다른 ID는 다음 목표가 될 수 있다.
+- **주행 검사:** 가로등 쪽으로 편향된 차체 이동이 차도 경계·관측 공간·장애물
+  검사를 통과하지 못하면 일반 차도 회피 제어로 복귀한다. 일반 경로도 안전하게
+  주행할 수 없거나 LiDAR·IMU·CameraInfo·차도 참조가 없거나 오래됐으면 기존
+  검사에 따라 정지한다. 가로등 관측의 1초 제한은 편향에만 적용하고, 일반 카메라·
+  추론 신선도 정지 조건은 `LINE_TRACKING_STOP_ON_*` 설정을 따른다.
 
 `metrics.selected_mask=3`, `path_mask_class=1`, `path_surface="ROAD"`를 발행한다.
 `metrics.street_light`에는 `state`(`cruising/confirming/approaching/passing`),
 `target_id`, `visible_ids`, `pending_ids`, `visited_ids`, 확인 횟수, 접근 방향,
-LiDAR 연관 거리, 방문 횟수와 전환 이유를 기록한다. `passing`은 접근 종료 후
+`bias_active`, `bias_reason`, LiDAR 연관 거리, 방문 횟수와 전환 이유를 기록한다.
+`metrics.lidar_obstacles.street_light_bias_blocked_reason`은 편향 경로가 거절된 이유다.
+`passing`은 편향 종료 후
 다음 새 추론까지의 상태이며, 모든 가로등이 사라지기를 기다리는 상태가 아니다.
 작업 시작·취소·종료 시 후보와 방문 상태를 초기화한다.
 

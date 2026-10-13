@@ -178,13 +178,24 @@ class LidarRuntime:
 
     def apply(self, nominal, path, mask_class, now, clock_ns):
         with self.lock:
-            if nominal.reason in ("street_light_cruising", "street_light_approaching"):
+            self.metrics["street_light_bias_blocked_reason"] = None
+            if nominal.reason == "street_light_approaching":
                 try:
                     scan, region = self._context(1, now, clock_ns)
                     if path is None or path.stop_reason is not None:
                         raise ValueError("avoidance_path_unavailable")
+                    fallback = None
+                    if self.drive_config is not None:
+                        road = decide_drive(path, camera_age_sec=0.0, inference_age_sec=0.0,
+                                            config=self.drive_config)
+
+                        def fallback(reason):
+                            self.metrics["street_light_bias_blocked_reason"] = reason
+                            return self.controller.apply(
+                                road, path, scan, region, now=now, clock_ns=clock_ns)
+
                     result = self.controller.apply_direct(
-                        nominal, scan, region, now=now, clock_ns=clock_ns)
+                        nominal, scan, region, now=now, clock_ns=clock_ns, fallback=fallback)
                 except (ValueError, AttributeError, TypeError, cv2.error) as error:
                     result = self.controller.stop(str(error))
                 self.metrics = {**self.metrics, **self.controller.metrics}

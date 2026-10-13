@@ -1,4 +1,7 @@
-"""Latest-frame LiDAR avoidance or optional Street Light corroboration."""
+"""Latest-frame LiDAR avoidance or optional Pole corroboration.
+
+StreetLight names remain for compatibility with existing settings and telemetry.
+"""
 
 from __future__ import annotations
 
@@ -276,10 +279,10 @@ class LidarRuntime:
                 return result
 
     def locate_street_light(self, observation, now, clock_ns):
-        """Visual bearing and LiDAR proximity in matching image columns.
+        """Visual target bearing and LiDAR proximity in matching image columns.
 
         Column association is proximity evidence, not a 3-D object ID. Never
-        project the elevated lamp head onto a ground plane to invent its range.
+        project an elevated target onto a ground plane to invent its range.
         """
         if self.confirmation_only:
             return self._confirm_street_light(observation, now, clock_ns)

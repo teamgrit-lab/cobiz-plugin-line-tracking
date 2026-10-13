@@ -10,9 +10,9 @@ no Sport Move request. The default path class is sidewalk
 (`SWIN_L_PATH_MASK_CLASS=2`); a task can request road (`1`) or road/sidewalk
 combined (`0`) with
 `payload.selected_mask`. Scenario `3` follows the normal road path and adds lateral bias toward
-confirmed `Street Light` detections while preserving road-tracking forward speed.
+confirmed `Pole` detections while preserving road-tracking forward speed.
 Livox obstacle avoidance defaults to disabled for modes 0/1/2. Mode 3 uses LiDAR
-only to corroborate visual street-light detections; LiDAR cannot stop its road tracking.
+only to corroborate visual pole detections; LiDAR cannot stop its road tracking.
 When avoidance is explicitly enabled in modes 0/1/2, a 20 Hz control loop combines
 the camera reference path with 10 Hz `/livox/lidar`, IMU, CameraInfo,
 and fixed measured sensor transforms in `base_link`. Odometry is not required. Ground-height estimation has been removed.
@@ -370,7 +370,7 @@ Example task payload (`duration_sec` ends the task only when `TASK_TIMEOUT=true`
 ```
 
 `selected_mask` accepts `0` (road or sidewalk), `1` (road only), `2`
-(sidewalk only), or `3` (road cruising with Street Light approach). With `0`, both surface labels from the same inference form
+(sidewalk only), or `3` (road cruising with Pole approach). With `0`, both surface labels from the same inference form
 one combined region for path generation and tracking. Either surface alone
 can produce a path, and adjacent road/sidewalk regions can form one wider
 region. Semantic background pixels (label `0`) are still excluded. This mode
@@ -382,16 +382,21 @@ image. An explicit task value overrides the environment default. Metrics
 report `path_mask_class: 0` and `path_surface: "ROAD_OR_SIDEWALK"`. Existing
 stop checks still apply; no road/sidewalk region means no path.
 
-### selected_mask=3: 차도 추종 + 가로등 방향 횡이동 편향
+### selected_mask=3: 차도 추종 + Pole 기둥 방향 횡이동 편향
 
 `LINE_TRACKING` 작업 payload에 `{"selected_mask": 3}`을 지정한다.
 기본 시나리오로 사용하려면 `SWIN_L_PATH_MASK_CLASS=3`을 지정한다
 (`task-drive` 전용). 별도 검출기나 TensorRT 엔진 재빌드는 필요하지 않다.
-Swin-L/Mapillary 및 R50의 기존 65개 클래스 추론에서 `Street Light`를 추가로 읽는다.
+Swin-L/Mapillary 및 R50의 기존 65개 클래스 추론에서 `Pole`(클래스 ID `45`)을 추가로 읽는다.
+램프 `Street Light`(`44`)와 전봇대 `Utility Pole`(`47`)는 편향 대상으로 사용하지 않는다.
+가로등과의 연결 여부를 요구하지 않으므로 표지판 등을 지지하는 `Pole`도 대상이 된다.
 표면 마스크는 기존 `0/1/2`를 유지하며, `3`은 작업 시나리오 번호다.
+기존 `.env`와 상태 소비자의 호환을 위해 `LINE_TRACKING_STREET_LIGHT_*`,
+`metrics.street_light`, `street_light_approaching` 등 기존 설정·상태 이름을 유지한다.
+이 설정들은 이제 `Pole` 검출·확인·편향에 적용한다.
 
 ```dotenv
-# 0/1/2에서는 장애물 회피 설정. 3번은 true/false 모두 가로등 확인용으로만 사용.
+# 0/1/2에서는 장애물 회피 설정. 3번은 true/false 모두 Pole 확인용으로만 사용.
 LINE_TRACKING_AVOIDANCE_ENABLED=false
 LINE_TRACKING_STREET_LIGHT_STOP_DISTANCE_M=1.0
 LINE_TRACKING_STREET_LIGHT_MAX_LATERAL_MPS=0.15
@@ -409,38 +414,38 @@ LINE_TRACKING_STREET_LIGHT_LIDAR_MAX_RANGE_M=15.0
 
 `.env`를 수정한 뒤 `docker compose up -d --build actual-activate`로 적용한다.
 3번 작업에서는 `LINE_TRACKING_AVOIDANCE_ENABLED`가 `true`이든 `false`이든
-LiDAR를 가로등 확인용으로만 켠다. PointCloud2와 CameraInfo를 구독하고, 주행 제어는
+LiDAR를 기둥 확인용으로만 켠다. PointCloud2와 CameraInfo를 구독하고, 주행 제어는
 일반 카메라 출력 주기(`SWIN_L_OUTPUT_HZ`)를 사용한다. IMU는 요구하지 않는다.
 작업 취소·종료 후 0/1/2 모드에서는 원래 회피 설정을 다시 따른다.
-모델에 `Street Light` 라벨이 없으면 작업 시작을 거절한다.
+모델에 `Pole` 라벨이 없으면 작업 시작을 거절한다.
 
-- **차도 추종:** 차도(`1`)와 동일한 Path·전진 속도·조향을 사용한다. 가로등이
+- **차도 추종:** 차도(`1`)와 동일한 Path·전진 속도·조향을 사용한다. 기둥이
   없거나 아직 확인 중이면 이 주행 명령을 그대로 따른다. 전진 속도 상한은
   일반 카메라 주행 설정을 따른다.
-- **검출 확인:** 현재 프레임에서 의미 점수 비율 0.50 이상인 `Street Light`
+- **검출 확인:** 현재 프레임에서 의미 점수 비율 0.50 이상인 `Pole`
   연결 영역 중 24픽셀 이상을 사용한다. 각 영역에 작업 내 ID를 부여하고,
   화면 중심·하단·폭·면적과 직전 이동량으로 후보를 일대일 대응시킨다.
   먼저 등록된 미방문 ID부터 하나씩 선택한다. 각 후보는 새 추론 3회 연속으로
   확인해야 하며 제어 타이머 반복은 확인 횟수를 늘리지 않는다. 표면 EMA의 잔상은
   사용하지 않고, 방문한 ID는 같은 작업 동안 제외한다.
 - **LiDAR 확인:** 보정된 LiDAR→base_link→카메라 변환과 CameraInfo로 실제 3D
-  포인트를 영상에 투영한다. 가로등 검출 영역의 상하좌우 3% 여유 안에 최소 3개
+  포인트를 영상에 투영한다. 기둥 검출 영역의 상하좌우 3% 여유 안에 최소 3개
   포인트가 겹쳐야 편향을 허용한다. 같은 영상 열에 있어도 높이가 다른 물체는
   확인에 사용하지 않는다. 최대 확인 수평 거리는 15m이며 기존 장애물 높이 범위·
   1.5m 반경·관측 공간 조건을 적용하지 않는다. 포인트와 영상 시각 차이는 최대
   0.5초이며, 오래되거나 누락된 LiDAR·CameraInfo·보정은 편향만 해제한다.
-- **횡이동 편향:** 확인된 가로등 방향으로 최대 0.15m/s의 횡속도를 더한다.
+- **횡이동 편향:** 확인된 기둥 방향으로 최대 0.15m/s의 횡속도를 더한다.
   편향 중에는 회전을 0으로 하고 차도 추종의 전진 속도를 유지한다.
   `LINE_TRACKING_STREET_LIGHT_FORWARD_MPS`는 기존 설정 호환용으로만 읽으며,
-  전진 속도를 0.05m/s 또는 `|vy|/3`으로 낮추지 않는다. 가로등이 정면 ±0.05rad
+  전진 속도를 0.05m/s 또는 `|vy|/3`으로 낮추지 않는다. 기둥이 정면 ±0.05rad
   안에 있으면 횡이동을 더하지 않고 일반 차도 조향을 사용한다.
-- **근접 판정:** 가로등 검출 영역(상하좌우 3% 여유)에 겹치는 LiDAR 포인트를
+- **근접 판정:** 기둥 검출 영역(상하좌우 3% 여유)에 겹치는 LiDAR 포인트를
   카메라 보정으로 연관시킨다. 일치 포인트의 중앙값 위치에서 방향과 수평 거리를
   계산한다. `base_link` 중심부터 이 위치까지의 수평 거리가
-  1m 이하이면 방문 완료 ID로 기록하고 즉시 차도 추종으로 복귀한다. 가로등 도착을
+  1m 이하이면 방문 완료 ID로 기록하고 즉시 차도 추종으로 복귀한다. 기둥 도착을
   이유로 0 명령을 보내거나 Cobiz 작업을 완료하지 않는다. 확인된 다음 미방문 ID는
   다음 새 추론에서 편향 목표가 될 수 있다.
-- **편향 해제:** 가로등이 사라지거나, 관측 원본 영상이 `MAX_AGE_SEC`(기본 1초)를
+- **편향 해제:** 기둥이 사라지거나, 관측 원본 영상이 `MAX_AGE_SEC`(기본 1초)를
   넘거나, 방향 계산이 실패하거나, `MAX_APPROACH_SEC`(기본 30초)를 넘으면
   편향만 해제하고 차도 추종으로 복귀한다. 오래된 관측 뒤에는 새 추론의 연속 확인을
   다시 요구한다. 유실·접근 시간 초과한 ID는 방문으로 기록하지 않고, 해당 ID가
@@ -455,20 +460,21 @@ LiDAR를 가로등 확인용으로만 켠다. PointCloud2와 CameraInfo를 구�
 `target_id`, `visible_ids`, `pending_ids`, `visited_ids`, 확인 횟수, 접근 방향,
 `bias_active`, `bias_reason`, LiDAR 연관 거리, 방문 횟수와 전환 이유를 기록한다.
 `metrics.street_light.lidar_confirmed`는 두 센서의 결합 확인 여부다.
+`metrics.street_light.target_class="Pole"`, `target_class_id=45`로 추종 클래스를 확인한다.
 `metrics.lidar_obstacles.mode="street_light_confirmation"`, `stops_enabled=false`,
 `lidar_match_count`로 LiDAR의 역할과 일치 포인트 수를 확인할 수 있다.
 `passing`은 편향 종료 후
-다음 새 추론까지의 상태이며, 모든 가로등이 사라지기를 기다리는 상태가 아니다.
+다음 새 추론까지의 상태이며, 모든 기둥이 사라지기를 기다리는 상태가 아니다.
 작업 시작·취소·종료 시 후보와 방문 상태를 초기화한다.
 
 ID는 영상 기반 추적이며 위치 추정·지도에 고정된 물리적 ID가 아니다. 장시간 화면 밖으로
 나갔다가 크게 다른 위치나 크기로 재등장하거나 영역이 분할되면 새 ID로 인식할 수 있다.
-반대로 비슷한 위치의 다른 가로등을 이전 ID로 매칭할 수도 있다. 이런 조건에서 물리적
-가로등의 재방문을 확실하게 막으려면 추가 위치 추정·인스턴스 재식별이 필요하다.
-영상 열과 LiDAR 반사점의 연관은 가로등 인스턴스의 3차원 위치를 확정하지 않는다.
+반대로 비슷한 위치의 다른 기둥을 이전 ID로 매칭할 수도 있다. 이런 조건에서 물리적
+기둥의 재방문을 확실하게 막으려면 추가 위치 추정·인스턴스 재식별이 필요하다.
+영상 영역과 LiDAR 반사점의 연관은 기둥 인스턴스의 3차원 위치를 확정하지 않는다.
 검출 영역에 겹치는 다른 물체도 근접 증거가 될 수 있으며, 일치 포인트가 없으면 도착으로
-판정하지 않는다. 가로등 머리의 픽셀 높이를 지면에 투영해 거리를 추정하지 않는다.
-차도 밖에 있는 가로등은 차도·충돌 검사 때문에 설정 거리까지 접근하지 못할 수 있다.
+판정하지 않는다. 기둥의 픽셀 높이를 지면에 투영해 거리를 추정하지 않는다.
+일반 카메라·Path 유실 조건이 발생하면 기둥의 설정 거리까지 접근하지 못할 수 있다.
 실제 장비에서는 검출 품질·보정·접근 방향과 여유 거리를 저속으로 확인해야 한다.
 
 The default duration is 500 seconds. Requests above 10000 seconds are capped at
@@ -563,7 +569,7 @@ ID 목록으로 제한하지 않는다. 원본 광각 영상에서는 ID·2D 모
 LiDAR 사용은 기본적으로 꺼져 있다(`LINE_TRACKING_AVOIDANCE_ENABLED=false`).
 `selected_mask=0/1/2`는 기본 설정으로 카메라 Path만 사용한다. 이 모드에서 LiDAR 회피가
 필요하면 아래처럼 `true`로 명시한다. `selected_mask=3` 작업은 설정값에 관계없이
-LiDAR를 가로등 확인에만 사용하며, 없거나 오래되면 편향만 해제한다. 아래 장애물
+LiDAR를 기둥 확인에만 사용하며, 없거나 오래되면 편향만 해제한다. 아래 장애물
 회피·LiDAR 정지 조건은 회피를 켠 0/1/2 모드에 적용한다.
 
 높이 추정·RANSAC·높이에 따른 차도/인도 Path 제한은 제거했다. `PointCloud2`를
@@ -679,7 +685,7 @@ CameraInfo 크기와 frame_id는 원본 이미지와 일치해야 하며 `plumb_
 
 영상 전용 동작이 기본값이며, `LINE_TRACKING_AVOIDANCE_ENABLED=true` 또는
 `--avoidance-enabled`로 일반 모드에서도 LiDAR를 켤 수 있다. 3번 작업은
-`--no-avoidance-enabled`를 지정해도 가로등 확인용 LiDAR를 자동 사용한다.
+`--no-avoidance-enabled`를 지정해도 기둥 확인용 LiDAR를 자동 사용한다.
 이전 `SWIN_L_LIDAR_HEIGHT_*` 및 지면 추정
 설정은 제거했다. `.env` 변경은 프로세스 재시작 또는 컨테이너 재생성 후 적용된다.
 실물 동작은 아직 검증하지 않았으며, 저속·정적 장애물부터 별도로 검증해야 한다.
@@ -698,7 +704,7 @@ which is sampled into 20 path points and clipped to +/-3.5 m laterally.
 0.20 m 편향한다. 현재 모델의 `Vegetation` 라벨을 사용하므로 풀밭만 따로 구분하지는
 못하며 수풀·나무도 포함한다. 추가 모델 추론 없이 현재 프레임의 우승 클래스와
 정규화한 semantic score 0.5 이상인 픽셀만 별도 마스크로 전달한다. 식생을 주행 가능
-영역에 합치지는 않는다. 차도(`1`), 차도+인도(`0`), 가로등 시나리오(`3`)는 기존
+영역에 합치지는 않는다. 차도(`1`), 차도+인도(`0`), 기둥 시나리오(`3`)는 기존
 경로를 사용한다.
 
 식생과 인도는 같은 지면 격자로 투영하며, closing 이전의 인도 경계를 기준으로
@@ -836,7 +842,7 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 | `invalid_payload_json` | 문자열 payload의 JSON 문법 오류 |
 | `invalid_payload` | payload가 JSON 객체가 아님 (`null`/누락은 기본값 사용) |
 | `invalid_selected_mask` | 정수 `0`, `1`, `2`, `3` 이외 값. 문자열이나 bool도 거절 |
-| `street_light_label_unavailable` | 시나리오 3인데 모델에 `Street Light` 라벨이 없음 |
+| `pole_label_unavailable` | 시나리오 3인데 모델에 `Pole` 라벨이 없음 |
 | `invalid_duration_sec` | duration이 숫자가 아님. bool도 거절 |
 | `duration_sec_out_of_range` | duration이 NaN/Inf이거나 3초 미만. 최대값 초과는 거절하지 않고 설정 최대값으로 제한 |
 

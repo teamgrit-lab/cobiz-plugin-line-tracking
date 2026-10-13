@@ -877,7 +877,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         "last_inference_at": None,
         "last_image_stamp_ns": None,
         "last_inference_stamp_ns": None,
-        "street_light_observations": (),
+        "pole_observations": (),
     }
     worker_error: list[BaseException] = []
 
@@ -1230,7 +1230,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 }
                 state["path_recovery_inferences"] = {key: 0 for key in smoothers}
                 state["semantic_path_missing"] = {key: False for key in smoothers}
-                state["street_light_observations"] = ()
+                state["pole_observations"] = ()
                 for key in (
                     "performance_inference_seconds", "performance_processing_seconds",
                     "performance_completion_times",
@@ -1289,7 +1289,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     or self.path_recovery_inferences >= MAX_PATH_RECOVERY_INFERENCES
                 ))
                 inference_id = int(state["inference_count"])
-                light_observations = state["street_light_observations"]
+                pole_observations = state["pole_observations"]
                 if recovering and (path is None or path.stop_reason is None):
                     path = None
                 self.path_unavailable_inferences = state["path_unavailable_inferences"][
@@ -1344,7 +1344,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     with self.obstacles.lock:
                         self.obstacles.metrics.update(lidar_confirmed=False, lidar_match_count=0)
                 decision = self.street_lights.decide(
-                    decision, light_observations, now=now, inference_id=inference_id,
+                    decision, pole_observations, now=now, inference_id=inference_id,
                     inference_age_sec=inference_age_sec,
                     locate=lambda observation: self.obstacles.locate_street_light(
                         observation, now, clock_now_ns) if self.obstacles is not None else (0.0, None))
@@ -1384,8 +1384,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 except ValueError:
                     selected = None  # Task validation reports malformed payloads.
                 if selected == 3:
-                    if getattr(segmenter, "street_light_id", None) is None:
-                        rejection_reason = "street_light_label_unavailable"
+                    if getattr(segmenter, "pole_id", None) is None:
+                        rejection_reason = "pole_label_unavailable"
             previous_task = self.tasks.active
             body = self.tasks.handle_event(
                 event, now=now, rejection_reason=rejection_reason
@@ -1653,6 +1653,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_surface": PATH_MASK_CLASSES[mask_class],
                 "selected_mask": task_active.selected_mask if task_active is not None else args.path_mask_class,
                 "street_light": {"enabled": task_active is not None and task_active.selected_mask == 3,
+                                 "target_class": "Pole", "target_class_id": getattr(segmenter, "pole_id", None),
                                  **(self.street_lights.metrics if self.street_lights else {})},
                 "path_tracked": path is not None and path.stop_reason is None,
                 "branch_selection": path.branch_status if path else {
@@ -1799,8 +1800,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
-                    detect_lights = (task_mode and node.tasks.active is not None
-                                     and node.tasks.active.selected_mask == 3)
+                    detect_poles = (task_mode and node.tasks.active is not None
+                                    and node.tasks.active.selected_mask == 3)
                     detect_vegetation = (
                         2 in smoothers and local_config.sidewalk_vegetation_bias_m > 0
                         and (not task_mode or (node.tasks.active is not None
@@ -1808,9 +1809,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 segment_kwargs = {"color_order": "rgb"}
                 if detect_vegetation:
                     segment_kwargs["detect_vegetation"] = True
-                if detect_lights:
-                    segment_kwargs.update(detect_street_lights=True,
-                                          street_light_min_confidence=args.street_light_min_confidence)
+                if detect_poles:
+                    segment_kwargs.update(detect_poles=True,
+                                          pole_min_confidence=args.street_light_min_confidence)
                 result: BestSoFarResult = segmenter.segment(frame_rgb, **segment_kwargs)
                 with state_lock:
                     if not latest.is_current(packet):
@@ -1858,8 +1859,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                                 recovery_counts[mask_class] += 1
                             counts[mask_class] = 0 if available else counts[mask_class] + 1
                     state["header"] = packet.source_header
-                    state["street_light_observations"] = street_light_observations(
-                        getattr(result, "street_light_mask", None), args.street_light_min_area_px)
+                    state["pole_observations"] = street_light_observations(
+                        getattr(result, "pole_mask", None), args.street_light_min_area_px)
                     completed_before = int(state["inference_count"])
                     state["inference_count"] += 1
                     state["last_inference_at"] = inference_finished_at

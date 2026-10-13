@@ -18,32 +18,34 @@ def start(ros, task_id="light-3", *, duration=30):
     })))
 
 
-def model(monkeypatch, detection, *, label=5):
+def model(monkeypatch, detection, *, label=45, lamp_label=None):
     calls = []
 
     def segment(_frame, **kwargs):
         calls.append(kwargs)
-        return NS(selected_mask=detection.road.copy(), street_light_mask=detection.light.copy(),
+        return NS(selected_mask=detection.road.copy(), pole_mask=detection.pole.copy(),
+                  street_light_mask=np.ones_like(detection.pole),  # Lamp evidence must be ignored.
                   inference_seconds=0.01)
 
     monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _: NS(
-        device=NS(type="cuda"), reset=lambda: None, street_light_id=label, segment=segment))
+        device=NS(type="cuda"), reset=lambda: None, pole_id=label,
+        street_light_id=lamp_label, segment=segment))
     return calls
 
 
 def scene():
-    light = np.zeros((360, 640), bool)
-    light[70:90, 225:245] = True
-    return NS(road=np.ones((360, 640), np.uint8), light=light)
+    pole = np.zeros((360, 640), bool)
+    pole[70:90, 225:245] = True
+    return NS(road=np.ones((360, 640), np.uint8), pole=pole)
 
 
-def confirmed_points(node, ros, *, centers=(235, 405), distance=5., count=3):
+def confirmed_points(node, ros, *, centers=(235, 405), distance=5., count=3, image_row=80.):
     info = camera_info(ros.clock_ns() / 1e9)
     info.d = []
     node.on_camera_info(info)
     k = np.asarray(info.k).reshape(3, 3)
     camera = node.obstacles.camera
-    pixels = np.array([[u + offset, 80., 1.] for u in centers
+    pixels = np.array([[u + offset, image_row, 1.] for u in centers
                        for offset in range(-(count // 2), count - count // 2)])
     depth = max(.1, distance - .3381)
     camera_points = (pixels @ np.linalg.inv(k).T) * depth
@@ -76,15 +78,17 @@ def test_task_cruises_approaches_laterally_resumes_and_does_not_complete(monkeyp
         assert node.obstacles is not None
         assert node.tasks.active.selected_mask == 3
         ros.now = 2.1
-        detection.light[:] = False
+        detection.pole[:] = False
         metrics = tick(ros, node)
         assert metrics["selected_mask"] == 3
         assert metrics["lidar_obstacles"]["enabled"] is True
         assert metrics["path_mask_class"] == 1
         assert metrics["path_surface"] == "ROAD"
+        assert metrics["street_light"]["target_class"] == "Pole"
+        assert metrics["street_light"]["target_class_id"] == 45
         command = json.loads(ros.published[SPORT][-1].parameter)
         assert command["x"] > 0 and command["y"] == command["z"] == 0
-        detection.light[70:90, 225:245] = True
+        detection.pole[70:90, 225:245] = True
         for _ in range(3):
             metrics = tick(ros, node)
         assert metrics["drive_reason"] == "street_light_approaching"
@@ -96,8 +100,9 @@ def test_task_cruises_approaches_laterally_resumes_and_does_not_complete(monkeyp
         command = json.loads(ros.published[SPORT][-1].parameter)
         assert command["y"] < 0  # Visual left -> internal +vy -> Sport -y.
         assert command["z"] == 0
-        assert calls[-1]["detect_street_lights"] is True
-        # A current LiDAR return in the lamp's image columns supplies proximity.
+        assert calls[-1]["detect_poles"] is True
+        assert "detect_street_lights" not in calls[-1]
+        # A current LiDAR return in the pole's visual box supplies proximity.
         ros.now += 0.1
         confirmed_points(node, ros, centers=(235,), distance=.85)
         info = camera_info(ros.clock_ns() / 1e9)
@@ -132,7 +137,7 @@ def test_task_cruises_approaches_laterally_resumes_and_does_not_complete(monkeyp
 def test_task_visits_both_continuously_visible_lights_and_excludes_completed_ids(monkeypatch):
     ros = enabled_ros(monkeypatch)
     detection = scene()
-    detection.light[70:90, 395:415] = True
+    detection.pole[70:90, 395:415] = True
     model(monkeypatch, detection)
 
     def scenario(node):
@@ -171,11 +176,11 @@ def test_task_visits_both_continuously_visible_lights_and_excludes_completed_ids
             assert metrics["street_light"]["visits"] == 2
             assert metrics["street_light"]["pending_ids"] == []
         # Occlusion does not reset the visit ledger during the same task.
-        detection.light[:] = False
+        detection.pole[:] = False
         for _ in range(4):
             tick(ros, node)
-        detection.light[70:90, 225:245] = True
-        detection.light[70:90, 395:415] = True
+        detection.pole[70:90, 225:245] = True
+        detection.pole[70:90, 395:415] = True
         for _ in range(4):
             metrics = tick(ros, node)
             assert metrics["drive_reason"] == "tracking"
@@ -198,7 +203,7 @@ def test_automatic_lidar_is_released_before_camera_only_tasks(monkeypatch, selec
     if terminal == "apriltag":
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_APRILTAG", "true")
     detection = scene()
-    detection.light[:] = False
+    detection.pole[:] = False
     model(monkeypatch, detection)
     sensor_topics = ("/livox/lidar", "/a2/front_camera/res_360p/camera_info")
 
@@ -407,7 +412,7 @@ def test_light_bias_failure_resumes_road_without_stopping_or_retaining_lateral(m
             metrics = ros.metrics()
             assert metrics["street_light"]["bias_reason"] == "observations_stale"
         elif fault == "target_lost":
-            detection.light[:] = False
+            detection.pole[:] = False
             metrics = tick(ros, node)
             assert metrics["street_light"]["transition"] == "target_lost"
         else:
@@ -527,14 +532,14 @@ def test_delayed_light_evidence_does_not_abort_a_normally_tracking_task_at_its_d
     ros.run(scenario, "--branch-preference", "center")
 
 
-def test_missing_street_light_model_label_rejects_before_creating_control(monkeypatch):
+def test_missing_pole_model_label_rejects_even_with_a_lamp_label(monkeypatch):
     ros = RosHarness(monkeypatch)
-    model(monkeypatch, scene(), label=None)
+    model(monkeypatch, scene(), label=None, lamp_label=44)
 
     def scenario(node):
         start(ros)
         assert ros.task_state()["type"] == "TASK_REJECTED"
-        assert ros.task_state()["reason"] == "street_light_label_unavailable"
+        assert ros.task_state()["reason"] == "pole_label_unavailable"
         assert node.tasks.active is None
         assert node.command_publisher is None
         assert node.obstacles is None
@@ -542,6 +547,53 @@ def test_missing_street_light_model_label_rejects_before_creating_control(monkey
         assert SPORT not in ros.published
 
     ros.run(scenario)
+
+
+def test_lamp_only_evidence_does_not_bias_without_a_pole(monkeypatch):
+    ros = enabled_ros(monkeypatch)
+    detection = scene()
+    detection.pole[:] = False
+    calls = model(monkeypatch, detection, lamp_label=44)
+
+    def scenario(node):
+        start(ros)
+        ros.now = 2.1
+        for _ in range(5):
+            metrics = tick(ros, node)
+            assert metrics["drive_reason"] == "tracking"
+            assert metrics["street_light"]["visible_ids"] == []
+            assert metrics["street_light"]["bias_active"] is False
+            command = json.loads(ros.published[SPORT][-1].parameter)
+            assert command["x"] > 0 and command["y"] == command["z"] == 0
+        assert calls[-1]["detect_poles"] is True
+
+    ros.run(scenario, "--branch-preference", "center")
+
+
+def test_pole_body_returns_confirm_bias_without_a_lamp_label_or_top_returns(monkeypatch):
+    ros = enabled_ros(monkeypatch)
+    detection = scene()
+    detection.pole[70:250, 225:245] = True
+    model(monkeypatch, detection)  # Model has Pole, without a Street Light label.
+
+    def scenario(node):
+        start(ros)
+        ros.now = 2.1
+        for _ in range(3):
+            ros.now += .1
+            confirmed_points(node, ros, centers=(235,), image_row=220.)
+            metrics = complete_inference(node, ros)
+        assert metrics["street_light"]["lidar_confirmed"] is True
+        assert metrics["lidar_obstacles"]["lidar_match_count"] == 3
+        assert metrics["street_light"]["bias_active"] is True
+        assert metrics["drive_reason"] == "street_light_approaching"
+        ros.now += .05
+        node.publish_state()
+        command = json.loads(ros.published[SPORT][-1].parameter)
+        assert command["x"] == pytest.approx(node.drive_config.max_forward_mps)
+        assert command["y"] < 0 and command["z"] == 0
+
+    ros.run(scenario, "--branch-preference", "center")
 
 
 def test_bias_release_distance_is_independent_of_obstacle_footprint_and_radius(monkeypatch):

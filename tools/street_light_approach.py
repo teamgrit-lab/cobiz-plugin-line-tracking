@@ -1,4 +1,7 @@
-"""Optional Street Light lateral bias on top of normal road tracking."""
+"""Optional Pole lateral bias on top of normal road tracking.
+
+StreetLight names remain for compatibility with existing settings and telemetry.
+"""
 
 from __future__ import annotations
 
@@ -70,12 +73,12 @@ class _LightTrack:
 def street_light_observations(
     mask: np.ndarray | None, min_area_px: int,
 ) -> tuple[StreetLightObservation, ...]:
-    """Keep separate lights; coordinates are normalized to the score-map size."""
+    """Keep separate poles; coordinates are normalized to the score-map size."""
     if mask is None:
         return ()
     mask = np.asarray(mask, dtype=np.uint8)
     if mask.ndim != 2 or not mask.size:
-        raise ValueError("invalid Street Light mask")
+        raise ValueError("invalid Pole mask")
     count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     height, width = mask.shape
     return tuple(
@@ -118,7 +121,7 @@ class StreetLightApproach:
         )
 
     def _track(self, observations, consecutive: bool) -> None:
-        """Associate all lights one-to-one, including visited and missing IDs.
+        """Associate all poles one-to-one, including visited and missing IDs.
 
         IDs are image-space tracks, not world coordinates. Keep dormant tracks
         for this task so a brief occlusion does not erase a completed visit.

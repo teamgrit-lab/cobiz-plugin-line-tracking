@@ -272,7 +272,7 @@ class BestSoFarResult:
     hysteresis_hold_ratio: float
     road_area_ratio: float
     sidewalk_area_ratio: float
-    street_light_mask: np.ndarray | None = None
+    pole_mask: np.ndarray | None = None
     vegetation_mask: np.ndarray | None = None
 
 
@@ -421,8 +421,8 @@ class BestSoFarSegmenter:
         self.road_ids = resolve_ids(id2label, self.road_labels)
         self.sidewalk_ids = resolve_ids(id2label, self.sidewalk_labels)
         self.pedestrian_area_id = resolve_ids(id2label, ("Pedestrian Area",))[0]
-        self.street_light_id = next((int(key) for key, name in id2label.items()
-                                     if str(name).strip().lower() == "street light"), None)
+        self.pole_id = next((int(key) for key, name in id2label.items()
+                             if str(name).strip().lower() == "pole"), None)
         self.vegetation_id = next((int(key) for key, name in id2label.items()
                                   if str(name).strip().lower() == "vegetation"), None)
         self.model_load_seconds = time.perf_counter() - load_started
@@ -676,7 +676,7 @@ class BestSoFarSegmenter:
     @torch.inference_mode()
     def segment(
         self, frame: np.ndarray, *, color_order: str = "bgr",
-        detect_street_lights: bool = False, street_light_min_confidence: float = 0.5,
+        detect_poles: bool = False, pole_min_confidence: float = 0.5,
         detect_vegetation: bool = False,
     ) -> BestSoFarResult:
         """Segment a BGR image, or native RGB from the live camera worker."""
@@ -694,7 +694,7 @@ class BestSoFarSegmenter:
         self._synchronize()
         inference_finished = time.perf_counter()
 
-        street_light_mask = None
+        pole_mask = None
         vegetation_mask = None
         if detect_vegetation and self.vegetation_id is not None:
             # Current-frame evidence avoids steering toward vanished vegetation
@@ -704,16 +704,16 @@ class BestSoFarSegmenter:
             ).clamp_min(1e-8)
             vegetation_mask = ((scores.argmax(dim=0) == self.vegetation_id)
                                & (confidence >= 0.5)).cpu().numpy()
-        if detect_street_lights:
-            if self.street_light_id is None:
-                raise RuntimeError("model is missing Street Light label")
-            if not 0 < street_light_min_confidence <= 1:
-                raise ValueError("Street Light confidence must be in (0, 1]")
-            # Use current-frame scores, not the surface EMA: a vanished light
+        if detect_poles:
+            if self.pole_id is None:
+                raise RuntimeError("model is missing Pole label")
+            if not 0 < pole_min_confidence <= 1:
+                raise ValueError("Pole confidence must be in (0, 1]")
+            # Use current-frame scores, not the surface EMA: a vanished pole
             # must never leave a ghost target commanding lateral motion.
-            confidence = scores[self.street_light_id].float() / scores.sum(dim=0, dtype=torch.float32).clamp_min(1e-8)
-            street_light_mask = ((scores.argmax(dim=0) == self.street_light_id)
-                                 & (confidence >= street_light_min_confidence)).cpu().numpy()
+            confidence = scores[self.pole_id].float() / scores.sum(dim=0, dtype=torch.float32).clamp_min(1e-8)
+            pole_mask = ((scores.argmax(dim=0) == self.pole_id)
+                         & (confidence >= pole_min_confidence)).cpu().numpy()
 
         if self._previous_scores is None:
             # TensorRT owns and reuses its output allocation. Keep temporal
@@ -751,7 +751,7 @@ class BestSoFarSegmenter:
             hysteresis_hold_ratio=hold_ratio,
             road_area_ratio=float(np.mean(selected == 1)),
             sidewalk_area_ratio=float(np.mean(selected == 2)),
-            street_light_mask=street_light_mask,
+            pole_mask=pole_mask,
             vegetation_mask=vegetation_mask,
         )
 

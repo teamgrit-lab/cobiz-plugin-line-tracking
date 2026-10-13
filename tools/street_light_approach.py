@@ -23,16 +23,18 @@ class StreetLightConfig:
     min_confidence: float = 0.50
     max_age_sec: float = 1.0
     max_approach_sec: float = 30.0
+    lidar_min_points: int = 3
+    lidar_max_range_m: float = 15.0
 
     def validate(self) -> None:
         for name in ("stop_distance_m", "max_lateral_mps", "forward_mps",
-                     "max_age_sec", "max_approach_sec"):
+                     "max_age_sec", "max_approach_sec", "lidar_max_range_m"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"street light {name} must be finite and positive")
         if max(self.forward_mps, self.max_lateral_mps) > 1.0:
             raise ValueError("street light speeds must not exceed 1 m/s")
-        for name in ("confirm_frames", "clear_frames", "min_area_px"):
+        for name in ("confirm_frames", "clear_frames", "min_area_px", "lidar_min_points"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"street light {name} must be a positive integer")
         if self.confirm_frames < 2 or self.clear_frames < 2:
@@ -47,6 +49,7 @@ class StreetLightObservation:
     right: float
     bottom: float
     area_px: int
+    top: float = 0.0
 
     @property
     def center(self) -> float:
@@ -76,7 +79,7 @@ def street_light_observations(
     count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     height, width = mask.shape
     return tuple(
-        StreetLightObservation(x / width, (x + w) / width, (y + h) / height, int(area))
+        StreetLightObservation(x / width, (x + w) / width, (y + h) / height, int(area), y / height)
         for x, y, w, h, area in stats[1:count]
         if area >= min_area_px
     )
@@ -97,7 +100,8 @@ class StreetLightApproach:
         self.hits = self.clear_hits = self.visits = 0
         self.last_inference = None
         self.approach_started = None
-        self.metrics = {"bias_active": False, "bias_reason": "no_confirmed_light"}
+        self.metrics = {"bias_active": False, "bias_reason": "no_confirmed_light",
+                        "lidar_confirmed": False}
         self._update_metrics()
 
     def _update_metrics(self) -> None:
@@ -193,7 +197,7 @@ class StreetLightApproach:
     def decide(self, normal, observations, *, now, inference_id, inference_age_sec,
                locate):
         c = self.config
-        self.metrics.update(bias_active=False, bias_reason="road_tracking")
+        self.metrics.update(bias_active=False, bias_reason="road_tracking", lidar_confirmed=False)
         # Road tracking owns motion and its sensor guards. A stale or missing
         # light observation disables only this optional lateral bias.
         if normal.reason not in ("tracking", "tracking_slow_turn") or normal.vx <= 0:
@@ -229,29 +233,39 @@ class StreetLightApproach:
                 self.hits, self.phase = 0, "cruising"
             else:
                 self.target, self.target_id, self.hits = track.observation, track.id, track.hits
-                if self.hits >= c.confirm_frames and self.phase != "approaching":
-                    self.phase, self.approach_started = "approaching", now
-                elif self.phase != "approaching":
+                if self.phase != "approaching":
                     self.phase = "confirming"
             self._update_metrics()
-        if self.phase != "approaching":
+        if self.target is None or self.hits < c.confirm_frames:
             self.metrics["bias_reason"] = "no_confirmed_light"
             return normal
-        if now - self.approach_started >= c.max_approach_sec:
+        if self.approach_started is not None and now - self.approach_started >= c.max_approach_sec:
             self._cooldown("approach_timeout")
             self.metrics["bias_reason"] = "approach_timeout"
             return normal
         try:
             bearing, distance = locate(self.target)
-        except ValueError as error:
+        except (ValueError, cv2.error) as error:
+            self.phase, self.approach_started = "confirming", None
             self.metrics["bias_reason"] = str(error)
+            self._update_metrics()
             return normal
         if not math.isfinite(bearing) or (distance is not None and
                 (not math.isfinite(distance) or distance <= 0)):
             self.metrics["bias_reason"] = "street_light_geometry_invalid"
             return normal
+        if distance is None:
+            self.phase, self.approach_started = "confirming", None
+            self.metrics.update(bias_reason="lidar_unconfirmed", bearing_rad=None,
+                                range_m=None, range_source=None)
+            self._update_metrics()
+            return normal
+        if self.phase != "approaching":
+            self.phase, self.approach_started = "approaching", now
+        self.metrics["lidar_confirmed"] = True
+        self._update_metrics()
         self.metrics.update(bearing_rad=bearing, range_m=distance,
-                            range_source="lidar_column_association" if distance is not None else None)
+                            range_source="lidar_visual_box_association")
         if distance is not None and distance <= c.stop_distance_m:
             self._cooldown("reached")
             self.metrics["bias_reason"] = "reached"

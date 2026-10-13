@@ -11,7 +11,9 @@ no Sport Move request. The default path class is sidewalk
 combined (`0`) with
 `payload.selected_mask`. Scenario `3` follows the normal road path and adds lateral bias toward
 confirmed `Street Light` detections while preserving road-tracking forward speed.
-Livox obstacle avoidance defaults to disabled for modes 0/1/2 and is automatically enabled for mode 3. A 20 Hz control loop combines
+Livox obstacle avoidance defaults to disabled for modes 0/1/2. Mode 3 uses LiDAR
+only to corroborate visual street-light detections; LiDAR cannot stop its road tracking.
+When avoidance is explicitly enabled in modes 0/1/2, a 20 Hz control loop combines
 the camera reference path with 10 Hz `/livox/lidar`, IMU, CameraInfo,
 and fixed measured sensor transforms in `base_link`. Odometry is not required. Ground-height estimation has been removed.
 
@@ -23,11 +25,13 @@ cancellation, image/model/publish errors, and handled shutdown still stop motion
 No accepted task means no motion command, and speed limits remain enforced.
 When left/right fork selection is enabled, its confirmation, ambiguity and selected-
 branch-loss guards also stop motion independently of these switches.
-With `LINE_TRACKING_AVOIDANCE_ENABLED=true` or an active `selected_mask=3` task, missing/stale LiDAR, IMU,
+In modes 0/1/2 with `LINE_TRACKING_AVOIDANCE_ENABLED=true`, missing/stale LiDAR, IMU,
 calibration, or reference-path evidence stops motion independently of
 `LINE_TRACKING_STOP_ON_*`. A saved command or the camera-only straight recovery
 window cannot bypass these gates. The camera Path remains a reference; obstacle
 avoidance adjusts forward/lateral velocity and checks the swept robot footprint.
+Mode 3 overrides the avoidance setting: LiDAR is confirmation-only, so missing, stale,
+unmatched or nearby points disable light bias rather than stopping road tracking.
 
 - There is no startup hold or automatic task timeout by default.
 - `actual-activate` loads the model once and keeps it in memory. With no
@@ -246,7 +250,8 @@ LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 | `TASK_TIMEOUT` | 요청한 작업 시간 도달 시 정지·종료. 기본 500초, 최대 10000초 |
 
 이 직진·좌우 탐색 복구는 `selected_mask=0/1/2`에서
-`LINE_TRACKING_AVOIDANCE_ENABLED=false`일 때 사용한다. 3번 작업은 LiDAR를 사용한다.
+`LINE_TRACKING_AVOIDANCE_ENABLED=false`인 일반 모드와, LiDAR를 확인용으로만 쓰는
+3번 작업에서 사용한다.
 LiDAR 회피가 켜져 있으면 유효한 시각 경로가 사라지는 즉시 정지하며 자동 탐색은 하지 않는다.
 
 `LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED=true`가 기본값이다. 주행 중 영상 검출에서
@@ -293,7 +298,8 @@ LiDAR 회피가 켜져 있으면 유효한 시각 경로가 사라지는 즉시 
 마지막 전진·회전 명령을 유지하고 5회째 정지한다. 둘 다 `false`이면 그 명령을 유지한다.
 `PATH_UNAVAILABLE=true`는 자동 탐색보다 우선하여 즉시 정지하고 탐색을 시작하지 않는다.
 복구가 활성화된 영상 경로 소실에는 3회 실패 정지 후 위 탐색 절차를 적용한다.
-LiDAR 장애물·센서 오류, 확정한 분기 경로의 소실, 명시적 취소 및 처리 오류의 정지 조건도
+LiDAR 회피를 켠 0/1/2 모드의 장애물·센서 오류, 확정한 분기 경로의 소실,
+명시적 취소 및 처리 오류의 정지 조건도
 유지한다. 탐색 도중 카메라·추론 입력이 오래되거나 센서 오류가 있으면 자동
 정지한다. 이 탐색 정지는 일반 주행의 센서 정지 스위치와 독립적이다. 센서 오류는 영상
 검출 실패 횟수를 증가시키지 않으며, 탐색이 진행 중이거나 실패한 뒤에는 저장된 전진
@@ -385,10 +391,8 @@ Swin-L/Mapillary 및 R50의 기존 65개 클래스 추론에서 `Street Light`�
 표면 마스크는 기존 `0/1/2`를 유지하며, `3`은 작업 시나리오 번호다.
 
 ```dotenv
-# 0/1/2는 카메라 주행, 3번 작업에서는 false여도 LiDAR 자동 활성화.
+# 0/1/2에서는 장애물 회피 설정. 3번은 true/false 모두 가로등 확인용으로만 사용.
 LINE_TRACKING_AVOIDANCE_ENABLED=false
-# 횡이동 시 새로 차지하는 뒤쪽/옆쪽 공간도 실제 LiDAR로 관측해야 한다.
-LIDAR_OBSTACLE_FOV_DEG=360.0
 LINE_TRACKING_STREET_LIGHT_STOP_DISTANCE_M=1.0
 LINE_TRACKING_STREET_LIGHT_MAX_LATERAL_MPS=0.15
 # 기존 설정 호환용이며, 전진 속도를 제한하지 않는다.
@@ -399,35 +403,40 @@ LINE_TRACKING_STREET_LIGHT_MIN_AREA_PX=24
 LINE_TRACKING_STREET_LIGHT_MIN_CONFIDENCE=0.50
 LINE_TRACKING_STREET_LIGHT_MAX_AGE_SEC=1.0
 LINE_TRACKING_STREET_LIGHT_MAX_APPROACH_SEC=30.0
+LINE_TRACKING_STREET_LIGHT_LIDAR_MIN_POINTS=3
+LINE_TRACKING_STREET_LIGHT_LIDAR_MAX_RANGE_M=15.0
 ```
 
 `.env`를 수정한 뒤 `docker compose up -d --build actual-activate`로 적용한다.
-기본 전방 190° 제한은 횡이동할 때 필요한 뒤쪽·옆쪽 공간을 미관측으로 남길 수
-있으므로, 위 예시는 360° LiDAR의 전체 관측을 사용한다. 미관측 공간은 통과하지 않는다.
-`LINE_TRACKING_AVOIDANCE_ENABLED=false`여도 3번 작업이 시작되면 LiDAR·IMU·CameraInfo
-구독과 LiDAR 처리를 자동으로 켠다. 작업 취소·종료 후에는 설정값을 다시 따르므로,
-`false`라면 센서 구독을 해제하고 카메라 주행 제어 주기로 복귀한다.
-모델에 `Street Light` 라벨이 없으면 이 시나리오의 작업 시작을 거절한다.
-LiDAR·IMU·CameraInfo·카메라 보정은 기존 회피 설정을 사용한다.
-`STOP_DISTANCE_M`는 로봇 외곽+여유+격자 한 칸 이상이며 LiDAR 감지 반경보다
-작아야 한다. 기본 1m는 기본 감지 반경 1.5m 안에 있다.
+3번 작업에서는 `LINE_TRACKING_AVOIDANCE_ENABLED`가 `true`이든 `false`이든
+LiDAR를 가로등 확인용으로만 켠다. PointCloud2와 CameraInfo를 구독하고, 주행 제어는
+일반 카메라 출력 주기(`SWIN_L_OUTPUT_HZ`)를 사용한다. IMU는 요구하지 않는다.
+작업 취소·종료 후 0/1/2 모드에서는 원래 회피 설정을 다시 따른다.
+모델에 `Street Light` 라벨이 없으면 작업 시작을 거절한다.
 
 - **차도 추종:** 차도(`1`)와 동일한 Path·전진 속도·조향을 사용한다. 가로등이
-  없거나 아직 확인 중이면 이 주행 명령을 그대로 따른다. 전진 및 가속 상한은
-  기존 주행·LiDAR 회피 설정을 따른다.
+  없거나 아직 확인 중이면 이 주행 명령을 그대로 따른다. 전진 속도 상한은
+  일반 카메라 주행 설정을 따른다.
 - **검출 확인:** 현재 프레임에서 의미 점수 비율 0.50 이상인 `Street Light`
   연결 영역 중 24픽셀 이상을 사용한다. 각 영역에 작업 내 ID를 부여하고,
   화면 중심·하단·폭·면적과 직전 이동량으로 후보를 일대일 대응시킨다.
   먼저 등록된 미방문 ID부터 하나씩 선택한다. 각 후보는 새 추론 3회 연속으로
   확인해야 하며 제어 타이머 반복은 확인 횟수를 늘리지 않는다. 표면 EMA의 잔상은
   사용하지 않고, 방문한 ID는 같은 작업 동안 제외한다.
+- **LiDAR 확인:** 보정된 LiDAR→base_link→카메라 변환과 CameraInfo로 실제 3D
+  포인트를 영상에 투영한다. 가로등 검출 영역의 상하좌우 3% 여유 안에 최소 3개
+  포인트가 겹쳐야 편향을 허용한다. 같은 영상 열에 있어도 높이가 다른 물체는
+  확인에 사용하지 않는다. 최대 확인 수평 거리는 15m이며 기존 장애물 높이 범위·
+  1.5m 반경·관측 공간 조건을 적용하지 않는다. 포인트와 영상 시각 차이는 최대
+  0.5초이며, 오래되거나 누락된 LiDAR·CameraInfo·보정은 편향만 해제한다.
 - **횡이동 편향:** 확인된 가로등 방향으로 최대 0.15m/s의 횡속도를 더한다.
   편향 중에는 회전을 0으로 하고 차도 추종의 전진 속도를 유지한다.
   `LINE_TRACKING_STREET_LIGHT_FORWARD_MPS`는 기존 설정 호환용으로만 읽으며,
   전진 속도를 0.05m/s 또는 `|vy|/3`으로 낮추지 않는다. 가로등이 정면 ±0.05rad
   안에 있으면 횡이동을 더하지 않고 일반 차도 조향을 사용한다.
-- **근접 판정:** 가로등 영역의 영상 열(좌우 3% 여유)과 겹치는 LiDAR 반사점을
-  카메라 보정으로 연관시킨다. `base_link` 중심부터 반사점까지의 수평 거리가
+- **근접 판정:** 가로등 검출 영역(상하좌우 3% 여유)에 겹치는 LiDAR 포인트를
+  카메라 보정으로 연관시킨다. 일치 포인트의 중앙값 위치에서 방향과 수평 거리를
+  계산한다. `base_link` 중심부터 이 위치까지의 수평 거리가
   1m 이하이면 방문 완료 ID로 기록하고 즉시 차도 추종으로 복귀한다. 가로등 도착을
   이유로 0 명령을 보내거나 Cobiz 작업을 완료하지 않는다. 확인된 다음 미방문 ID는
   다음 새 추론에서 편향 목표가 될 수 있다.
@@ -436,17 +445,18 @@ LiDAR·IMU·CameraInfo·카메라 보정은 기존 회피 설정을 사용한다
   편향만 해제하고 차도 추종으로 복귀한다. 오래된 관측 뒤에는 새 추론의 연속 확인을
   다시 요구한다. 유실·접근 시간 초과한 ID는 방문으로 기록하지 않고, 해당 ID가
   `CLEAR_FRAMES`회 연속 사라진 뒤 재시도한다. 다른 ID는 다음 목표가 될 수 있다.
-- **주행 검사:** 가로등 쪽으로 편향된 차체 이동이 차도 경계·관측 공간·장애물
-  검사를 통과하지 못하면 일반 차도 회피 제어로 복귀한다. 일반 경로도 안전하게
-  주행할 수 없거나 LiDAR·IMU·CameraInfo·차도 참조가 없거나 오래됐으면 기존
-  검사에 따라 정지한다. 가로등 관측의 1초 제한은 편향에만 적용하고, 일반 카메라·
-  추론 신선도 정지 조건은 `LINE_TRACKING_STOP_ON_*` 설정을 따른다.
+- **주행 검사:** 3번 모드에서는 LiDAR 장애물 거리·충돌·미관측 공간·참조 영역
+  정지 검사를 실행하지 않는다. LiDAR가 없는 상태에서도 일반 차도 추종을 계속한다.
+  카메라·추론·Path 유실·서버 취소·AprilTag 등 일반 주행 검사는 기존 설정을 따른다.
+  영상과 LiDAR의 결합 조건이 충족되지 않으면 편향 없이 차도 추종으로 복귀한다.
 
 `metrics.selected_mask=3`, `path_mask_class=1`, `path_surface="ROAD"`를 발행한다.
 `metrics.street_light`에는 `state`(`cruising/confirming/approaching/passing`),
 `target_id`, `visible_ids`, `pending_ids`, `visited_ids`, 확인 횟수, 접근 방향,
 `bias_active`, `bias_reason`, LiDAR 연관 거리, 방문 횟수와 전환 이유를 기록한다.
-`metrics.lidar_obstacles.street_light_bias_blocked_reason`은 편향 경로가 거절된 이유다.
+`metrics.street_light.lidar_confirmed`는 두 센서의 결합 확인 여부다.
+`metrics.lidar_obstacles.mode="street_light_confirmation"`, `stops_enabled=false`,
+`lidar_match_count`로 LiDAR의 역할과 일치 포인트 수를 확인할 수 있다.
 `passing`은 편향 종료 후
 다음 새 추론까지의 상태이며, 모든 가로등이 사라지기를 기다리는 상태가 아니다.
 작업 시작·취소·종료 시 후보와 방문 상태를 초기화한다.
@@ -456,7 +466,7 @@ ID는 영상 기반 추적이며 위치 추정·지도에 고정된 물리적 ID
 반대로 비슷한 위치의 다른 가로등을 이전 ID로 매칭할 수도 있다. 이런 조건에서 물리적
 가로등의 재방문을 확실하게 막으려면 추가 위치 추정·인스턴스 재식별이 필요하다.
 영상 열과 LiDAR 반사점의 연관은 가로등 인스턴스의 3차원 위치를 확정하지 않는다.
-같은 방향의 다른 물체도 근접 증거가 될 수 있으며, 반사점이 없으면 도착으로
+검출 영역에 겹치는 다른 물체도 근접 증거가 될 수 있으며, 일치 포인트가 없으면 도착으로
 판정하지 않는다. 가로등 머리의 픽셀 높이를 지면에 투영해 거리를 추정하지 않는다.
 차도 밖에 있는 가로등은 차도·충돌 검사 때문에 설정 거리까지 접근하지 못할 수 있다.
 실제 장비에서는 검출 품질·보정·접근 방향과 여유 거리를 저속으로 확인해야 한다.
@@ -553,7 +563,8 @@ ID 목록으로 제한하지 않는다. 원본 광각 영상에서는 ID·2D 모
 LiDAR 사용은 기본적으로 꺼져 있다(`LINE_TRACKING_AVOIDANCE_ENABLED=false`).
 `selected_mask=0/1/2`는 기본 설정으로 카메라 Path만 사용한다. 이 모드에서 LiDAR 회피가
 필요하면 아래처럼 `true`로 명시한다. `selected_mask=3` 작업은 설정값에 관계없이
-LiDAR를 자동으로 사용한다. 센서 데이터가 없거나 오래됐으면 기존 조건대로 정지한다.
+LiDAR를 가로등 확인에만 사용하며, 없거나 오래되면 편향만 해제한다. 아래 장애물
+회피·LiDAR 정지 조건은 회피를 켠 0/1/2 모드에 적용한다.
 
 높이 추정·RANSAC·높이에 따른 차도/인도 Path 제한은 제거했다. `PointCloud2`를
 보정 변환으로 `base_link`에 옮긴 뒤 다음 조건을 모두 만족하는 점만 장애물로 사용한다.
@@ -668,7 +679,7 @@ CameraInfo 크기와 frame_id는 원본 이미지와 일치해야 하며 `plumb_
 
 영상 전용 동작이 기본값이며, `LINE_TRACKING_AVOIDANCE_ENABLED=true` 또는
 `--avoidance-enabled`로 일반 모드에서도 LiDAR를 켤 수 있다. 3번 작업은
-`--no-avoidance-enabled`를 지정해도 LiDAR를 자동 사용한다.
+`--no-avoidance-enabled`를 지정해도 가로등 확인용 LiDAR를 자동 사용한다.
 이전 `SWIN_L_LIDAR_HEIGHT_*` 및 지면 추정
 설정은 제거했다. `.env` 변경은 프로세스 재시작 또는 컨테이너 재생성 후 적용된다.
 실물 동작은 아직 검증하지 않았으며, 저속·정적 장애물부터 별도로 검증해야 한다.
@@ -826,7 +837,6 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 | `invalid_payload` | payload가 JSON 객체가 아님 (`null`/누락은 기본값 사용) |
 | `invalid_selected_mask` | 정수 `0`, `1`, `2`, `3` 이외 값. 문자열이나 bool도 거절 |
 | `street_light_label_unavailable` | 시나리오 3인데 모델에 `Street Light` 라벨이 없음 |
-| `street_light_stop_distance_out_of_range` | 시나리오 3의 도착 거리가 로봇 외곽·여유보다 작거나 LiDAR 감지 반경 이상 |
 | `invalid_duration_sec` | duration이 숫자가 아님. bool도 거절 |
 | `duration_sec_out_of_range` | duration이 NaN/Inf이거나 3초 미만. 최대값 초과는 거절하지 않고 설정 최대값으로 제한 |
 
@@ -1009,7 +1019,7 @@ longer inserts zero commands between valid results. The live inference target
 remains 4 Hz. Missing paths and stale camera/inference inputs stop motion only
 when the corresponding automatic flags are enabled. In restricted
 path mode, the smoother's separate 0.90-second hold expiry can still make the
-path unavailable. Enabled obstacle avoidance separately stops on a 0.50 s
+path unavailable. Enabled obstacle avoidance in modes 0/1/2 separately stops on a 0.50 s
 LiDAR/IMU timeout or a 2.0 s reference-path timeout; it never retains a moving
 command through these failures.
 

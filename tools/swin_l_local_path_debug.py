@@ -1071,17 +1071,27 @@ def run_ros2(args: argparse.Namespace) -> int:
             except Exception as error:
                 raise ValueError("lidar_transform_unavailable") from error
 
-        def set_lidar_enabled(self, enabled: bool) -> None:
+        def set_lidar_enabled(self, enabled: bool, *, confirmation_only: bool = False) -> None:
             # Share the worker's publication lock so an old frame cannot write
             # its reference into a runtime being removed during task release.
             with state_lock:
-                if enabled == (self.obstacles is not None) and self.timer is not None:
+                if (enabled == (self.obstacles is not None) and self.timer is not None
+                        and (not enabled or self.obstacles.confirmation_only == confirmation_only)):
                     return
+                if self.obstacles is not None:
+                    self.obstacles = None
+                    for subscription in self.lidar_subscriptions:
+                        self.destroy_subscription(subscription)
+                    self.lidar_subscriptions.clear()
+                    if self.tf_listener is not None:
+                        self.tf_listener.unregister()
+                    self.tf_buffer = self.tf_listener = None
                 if enabled:
                     self.obstacles = LidarRuntime(
                         args, _lidar_config_from_args(args), _avoidance_config_from_args(args),
                         self.lookup_lidar_transform, self.drive_config or DriveConfig(
-                            vegetation_max_lateral_mps=args.vegetation_max_lateral_mps))
+                            vegetation_max_lateral_mps=args.vegetation_max_lateral_mps),
+                        confirmation_only=confirmation_only)
                     if args.lidar_calibration_profile == "tf" and (
                         self.base_from_lidar is None or self.camera_from_base is None
                     ):
@@ -1093,24 +1103,18 @@ def run_ros2(args: argparse.Namespace) -> int:
 
                     sensor_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=5,
                                             reliability=ReliabilityPolicy.BEST_EFFORT)
-                    for message_type, topic, callback in (
+                    subscriptions = [
                         (PointCloud2, args.lidar_topic, self.on_lidar),
-                        (Imu, args.lidar_imu_topic, self.on_lidar_imu),
                         (CameraInfo, args.camera_info_topic, self.on_camera_info),
-                    ):
+                    ]
+                    if not confirmation_only:
+                        subscriptions.append((Imu, args.lidar_imu_topic, self.on_lidar_imu))
+                    for message_type, topic, callback in subscriptions:
                         self.lidar_subscriptions.append(self.create_subscription(
                             message_type, topic, callback, sensor_qos))
-                else:
-                    self.obstacles = None
-                    for subscription in self.lidar_subscriptions:
-                        self.destroy_subscription(subscription)
-                    self.lidar_subscriptions.clear()
-                    if self.tf_listener is not None:
-                        self.tf_listener.unregister()
-                    self.tf_buffer = self.tf_listener = None
                 if self.timer is not None:
                     self.destroy_timer(self.timer)
-                control_hz = args.avoidance_control_hz if enabled else args.output_hz
+                control_hz = args.avoidance_control_hz if enabled and not confirmation_only else args.output_hz
                 self.timer = self.create_timer(1.0 / control_hz, self.publish_state)
 
         def publish_task_state(self, body: dict[str, Any]) -> None:
@@ -1271,6 +1275,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         ) -> tuple[SmoothedPath | None, DriveDecision]:
             mask_class = 1 if mask_class == 3 else mask_class
             street_light_mode = self.tasks.active is not None and self.tasks.active.selected_mask == 3
+            lidar_avoidance = self.obstacles is not None and not self.obstacles.confirmation_only
             with state_lock:
                 last_image_at = state["last_image_at"]
                 camera_fault_reason = state["camera_fault_reason"]
@@ -1307,22 +1312,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path_unavailable_inferences=self.path_unavailable_inferences,
                 path_recovery_inferences=self.path_recovery_inferences if recovering else None,
             )
-            if street_light_mode:
-                if self.obstacles is None:
-                    decision = DriveDecision.stop("street_light_requires_avoidance")
-                else:
-                    decision = self.street_lights.decide(
-                        decision, light_observations, now=now, inference_id=inference_id,
-                        inference_age_sec=inference_age_sec,
-                        locate=lambda observation: self.obstacles.locate_street_light(
-                            observation, now, clock_now_ns))
-            if self.obstacles is not None:
+            if lidar_avoidance:
                 decision = self.obstacles.apply(decision, path, mask_class, now, clock_now_ns)
             if camera_fault_reason is not None and decision.reason not in (
                 "camera_stale", "inference_stale"
             ):
                 decision = DriveDecision.stop(camera_fault_reason)
-            if self.tasks.active is not None and self.obstacles is None:
+            if self.tasks.active is not None and not lidar_avoidance:
                 sensor_reason = None
                 # Searching requires live observations even when normal driving's
                 # optional stale-sensor stops are disabled.
@@ -1343,6 +1339,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                 )
                 if self.path_search.active and (path is None or path.stop_reason is None):
                     path = None
+            if street_light_mode:
+                if self.obstacles is not None:
+                    with self.obstacles.lock:
+                        self.obstacles.metrics.update(lidar_confirmed=False, lidar_match_count=0)
+                decision = self.street_lights.decide(
+                    decision, light_observations, now=now, inference_id=inference_id,
+                    inference_age_sec=inference_age_sec,
+                    locate=lambda observation: self.obstacles.locate_street_light(
+                        observation, now, clock_now_ns) if self.obstacles is not None else (0.0, None))
             if decision.reason in (
                 "camera_stale", "inference_stale",
                 "camera_timestamp_invalid", "camera_conversion_error",
@@ -1379,13 +1384,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 except ValueError:
                     selected = None  # Task validation reports malformed payloads.
                 if selected == 3:
-                    config, obstacle = self.street_lights.config, _lidar_config_from_args(args)
                     if getattr(segmenter, "street_light_id", None) is None:
                         rejection_reason = "street_light_label_unavailable"
-                    elif not (max(obstacle.front_m, obstacle.back_m, obstacle.robot_half_width_m)
-                              + obstacle.margin_m + obstacle.resolution_m <= config.stop_distance_m
-                              < obstacle.horizontal_range_m):
-                        rejection_reason = "street_light_stop_distance_out_of_range"
             previous_task = self.tasks.active
             body = self.tasks.handle_event(
                 event, now=now, rejection_reason=rejection_reason
@@ -1399,7 +1399,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.apriltag_window_resolved_at = None
                 try:
                     self.set_lidar_enabled(
-                        args.avoidance_enabled or self.tasks.active.selected_mask == 3)
+                        args.avoidance_enabled or self.tasks.active.selected_mask == 3,
+                        confirmation_only=self.tasks.active.selected_mask == 3)
                     assert Request is not None
                     self.command_publisher = self.create_publisher(
                         Request, args.sport_request_topic, self.command_qos
@@ -1643,7 +1644,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             metrics = {
                 "lidar_obstacles": {"enabled": self.obstacles is not None,
                     "topic": args.lidar_topic, "expected_hz": 10,
-                    "control_hz": args.avoidance_control_hz,
+                    "control_hz": (args.output_hz if self.obstacles is not None
+                                   and self.obstacles.confirmation_only else args.avoidance_control_hz),
                     **(self.obstacles.metrics if self.obstacles else {})},
                 "profile": args.profile,
                 "camera_topic": args.image_topic,

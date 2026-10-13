@@ -19,7 +19,7 @@ LIGHT = StreetLightObservation(0.3, 0.35, 0.25, 100)
 
 
 def decide(controller, frame, observations=(LIGHT,), *, now=None, age=0.1,
-           bearing=0.4, distance=None, normal=NORMAL):
+           bearing=0.4, distance=5.0, normal=NORMAL):
     return controller.decide(
         normal, observations, now=frame / 4 if now is None else now,
         inference_id=frame, inference_age_sec=age,
@@ -280,13 +280,14 @@ def test_stale_light_evidence_disables_only_bias_and_preserves_road_tracking(age
     assert decide(controller, 7).reason == "street_light_approaching"
 
 
-def test_missing_lidar_range_does_not_invent_arrival_and_approach_is_bounded():
+def test_missing_lidar_match_never_enables_bias_or_invents_arrival():
     controller = StreetLightApproach(StreetLightConfig(max_approach_sec=2))
-    assert confirm(controller).reason == "street_light_approaching"
-    result = decide(controller, 4, now=3.0)
-    assert result == NORMAL
-    assert decide(controller, 4, now=3.1).reason == "tracking"
-    assert controller.metrics["transition"] == "approach_timeout"
+    assert confirm(controller, distance=None) == NORMAL
+    for frame in range(4, 10):
+        assert decide(controller, frame, now=frame, distance=None) == NORMAL
+        assert controller.metrics["bias_reason"] == "lidar_unconfirmed"
+        assert controller.metrics["lidar_confirmed"] is False
+    assert controller.approach_started is None
     assert controller.visits == 0
 
 
@@ -305,12 +306,14 @@ def test_components_filter_noise_and_do_not_average_opposite_side_lights():
     observations = street_light_observations(mask, 24)
     assert len(observations) == 2
     assert observations[0].center < 0.5 < observations[1].center
+    assert observations[0].top == observations[1].top == .1
 
 
 @pytest.mark.parametrize("field,value", [
     ("stop_distance_m", float("nan")), ("max_lateral_mps", 1.1),
     ("confirm_frames", 1), ("min_area_px", 0), ("max_age_sec", 0),
     ("min_confidence", float("nan")), ("min_confidence", 1.1),
+    ("lidar_min_points", 0), ("lidar_max_range_m", float("nan")),
 ])
 def test_invalid_scenario_configuration_fails_early(field, value):
     with pytest.raises(ValueError):

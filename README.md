@@ -382,7 +382,7 @@ image. An explicit task value overrides the environment default. Metrics
 report `path_mask_class: 0` and `path_surface: "ROAD_OR_SIDEWALK"`. Existing
 stop checks still apply; no road/sidewalk region means no path.
 
-### selected_mask=3: 차도 추종 + Pole 기둥 방향 횡이동 편향
+### selected_mask=3: Pole 방향으로 중앙 기준을 천천히 이동
 
 `LINE_TRACKING` 작업 payload에 `{"selected_mask": 3}`을 지정한다.
 기본 시나리오로 사용하려면 `SWIN_L_PATH_MASK_CLASS=3`을 지정한다
@@ -392,7 +392,8 @@ Swin-L/Mapillary 및 R50의 기존 65개 클래스 추론에서 `Pole`(클래스
 가로등과의 연결 여부를 요구하지 않으므로 표지판 등을 지지하는 `Pole`도 대상이 된다.
 표면 마스크는 기존 `0/1/2`를 유지하며, `3`은 작업 시나리오 번호다.
 기존 `.env`와 상태 소비자의 호환을 위해 `LINE_TRACKING_STREET_LIGHT_*`,
-`metrics.street_light`, `street_light_approaching` 등 기존 설정·상태 이름을 유지한다.
+`metrics.street_light` 설정·상태 이름을 유지한다. 주행 사유는 일반 차도와 같은
+`tracking`/`tracking_slow_turn`을 사용하며, 별도 Pole 횡속도 명령은 보내지 않는다.
 이 설정들은 이제 `Pole` 검출·확인·편향에 적용한다.
 
 ```dotenv
@@ -410,6 +411,10 @@ LINE_TRACKING_STREET_LIGHT_MAX_AGE_SEC=1.0
 LINE_TRACKING_STREET_LIGHT_MAX_APPROACH_SEC=30.0
 LINE_TRACKING_STREET_LIGHT_LIDAR_MIN_POINTS=3
 LINE_TRACKING_STREET_LIGHT_LIDAR_MAX_RANGE_M=15.0
+LINE_TRACKING_STREET_LIGHT_CENTER_MAX_OFFSET_M=0.30
+LINE_TRACKING_STREET_LIGHT_CENTER_SHIFT_RATE_MPS=0.05
+LINE_TRACKING_STREET_LIGHT_CENTER_BIAS_GAIN=0.20
+LINE_TRACKING_STREET_LIGHT_CENTER_EDGE_MARGIN_M=0.45
 ```
 
 `.env`를 수정한 뒤 `docker compose up -d --build actual-activate`로 적용한다.
@@ -420,7 +425,7 @@ LiDAR를 기둥 확인용으로만 켠다. PointCloud2와 CameraInfo를 구독�
 모델에 `Pole` 라벨이 없으면 작업 시작을 거절한다.
 
 - **차도 추종:** 차도(`1`)와 동일한 Path·전진 속도·조향을 사용한다. 기둥이
-  없거나 아직 확인 중이면 이 주행 명령을 그대로 따른다. 전진 속도 상한은
+  없거나 아직 확인 중이면 원래 중앙을 기준으로 주행한다. 전진 속도 상한은
   일반 카메라 주행 설정을 따른다.
 - **검출 확인:** 현재 프레임에서 의미 점수 비율 0.50 이상인 `Pole`
   연결 영역 중 24픽셀 이상을 사용한다. 각 영역에 작업 내 ID를 부여하고,
@@ -430,35 +435,52 @@ LiDAR를 기둥 확인용으로만 켠다. PointCloud2와 CameraInfo를 구독�
   사용하지 않고, 방문한 ID는 같은 작업 동안 제외한다.
 - **LiDAR 확인:** 보정된 LiDAR→base_link→카메라 변환과 CameraInfo로 실제 3D
   포인트를 영상에 투영한다. 기둥 검출 영역의 상하좌우 3% 여유 안에 최소 3개
-  포인트가 겹쳐야 편향을 허용한다. 같은 영상 열에 있어도 높이가 다른 물체는
-  확인에 사용하지 않는다. 최대 확인 수평 거리는 15m이며 기존 장애물 높이 범위·
+  포인트가 겹쳐야 편향을 허용한다. 같은 영상 열뿐 아니라 영상 높이 범위도
+  비교하지만 확장 영역 안의 배경 포인트를 분리하지는 않는다. 최대 확인 수평 거리는
+  15m이며 기존 장애물 높이 범위·
   1.5m 반경·관측 공간 조건을 적용하지 않는다. 포인트와 영상 시각 차이는 최대
-  0.5초이며, 오래되거나 누락된 LiDAR·CameraInfo·보정은 편향만 해제한다.
-- **횡이동 편향:** 확인된 기둥 방향으로 최대 0.15m/s의 횡속도를 더한다.
-  편향 중에는 회전을 0으로 하고 차도 추종의 전진 속도를 유지한다.
-  `LINE_TRACKING_STREET_LIGHT_FORWARD_MPS`는 기존 설정 호환용으로만 읽으며,
-  전진 속도를 0.05m/s 또는 `|vy|/3`으로 낮추지 않는다. 기둥이 정면 ±0.05rad
-  안에 있으면 횡이동을 더하지 않고 일반 차도 조향을 사용한다.
+  0.5초이며, 오래되거나 누락된 LiDAR·CameraInfo·보정은 Pole 목표를 해제하고
+  중앙 기준을 천천히 복귀시킨다.
+- **중앙 기준 편향:** LiDAR로 확인된 기둥의 횡위치와 원래 차도 중앙의 차이에
+  `CENTER_BIAS_GAIN`(기본 0.20)을 곱하고 최대 0.30m로 제한한다. 기준 경로의 각
+  지점을 초당 최대 0.05m씩 이동하며, 넓은 구간은 함께 옮기고 좁은 구간은 경계
+  여유(기본 0.45m)에 맞춰 이동량을 줄인다. 기존 평활 경로가 현재 검출 경계 밖에
+  있는 지점에는 추가 편향을 주지 않는다. 기준은 매번 원래 중앙에서 계산하므로
+  제어 반복으로 이동량이 누적되지 않는다.
+  같은 차도 제어기가 이 기준을 추종한다. 직선에서는 전진과 횡이동으로 접근하고,
+  회전 여부와 조향 요구는 편향 전 차도 방향으로 판단한다. Pole 편향이나 복귀
+  자체가 큰 회전을 유발하지 않으며, 실제 곡선의 조향과 기존 정지 조건은 유지한다.
+  회전 구간에서는 기존 도로 조향이 우선하므로, 기준이 이동해도 횡명령은 0일 수 있다.
+  `LINE_TRACKING_ROAD_LATERAL_ENABLED=false`이면 이 기준 편향도 적용하지 않는다.
+  `STREET_LIGHT_MAX_LATERAL_MPS`와 `STREET_LIGHT_FORWARD_MPS`는 호환용으로만 읽고,
+  실제 속도는 일반 `ROAD_*` 제어 설정을 따른다.
 - **근접 판정:** 기둥 검출 영역(상하좌우 3% 여유)에 겹치는 LiDAR 포인트를
   카메라 보정으로 연관시킨다. 일치 포인트의 중앙값 위치에서 방향과 수평 거리를
   계산한다. `base_link` 중심부터 이 위치까지의 수평 거리가
-  1m 이하이면 방문 완료 ID로 기록하고 즉시 차도 추종으로 복귀한다. 기둥 도착을
+  1m 이하이면 방문 완료 ID로 기록하고 중앙 기준을 천천히 복귀시킨다. 기둥 도착을
   이유로 0 명령을 보내거나 Cobiz 작업을 완료하지 않는다. 확인된 다음 미방문 ID는
   다음 새 추론에서 편향 목표가 될 수 있다.
 - **편향 해제:** 기둥이 사라지거나, 관측 원본 영상이 `MAX_AGE_SEC`(기본 1초)를
   넘거나, 방향 계산이 실패하거나, `MAX_APPROACH_SEC`(기본 30초)를 넘으면
-  편향만 해제하고 차도 추종으로 복귀한다. 오래된 관측 뒤에는 새 추론의 연속 확인을
+  편향 목표를 0으로 바꾸고 중앙 기준을 초당 최대 0.05m씩 복귀시킨다. 반대쪽 Pole로
+  바뀌어도 기준이 즉시 반전되지 않는다. 오래된 관측 뒤에는 새 추론의 연속 확인을
   다시 요구한다. 유실·접근 시간 초과한 ID는 방문으로 기록하지 않고, 해당 ID가
   `CLEAR_FRAMES`회 연속 사라진 뒤 재시도한다. 다른 ID는 다음 목표가 될 수 있다.
 - **주행 검사:** 3번 모드에서는 LiDAR 장애물 거리·충돌·미관측 공간·참조 영역
   정지 검사를 실행하지 않는다. LiDAR가 없는 상태에서도 일반 차도 추종을 계속한다.
   카메라·추론·Path 유실·서버 취소·AprilTag 등 일반 주행 검사는 기존 설정을 따른다.
-  영상과 LiDAR의 결합 조건이 충족되지 않으면 편향 없이 차도 추종으로 복귀한다.
+  영상과 LiDAR의 결합 조건이 충족되지 않으면 남은 기준 편향을 천천히 해소한다.
+  작업 종료·취소·Path 유실/분기 가드에서는 기준 상태를 초기화하고 기존 정지·복구를 따른다.
 
 `metrics.selected_mask=3`, `path_mask_class=1`, `path_surface="ROAD"`를 발행한다.
 `metrics.street_light`에는 `state`(`cruising/confirming/approaching/passing`),
 `target_id`, `visible_ids`, `pending_ids`, `visited_ids`, 확인 횟수, 접근 방향,
 `bias_active`, `bias_reason`, LiDAR 연관 거리, 방문 횟수와 전환 이유를 기록한다.
+`control_mode="shifted_road_center"`, `center_offset_m`(lookahead에서 적용된 이동량),
+`desired_center_offset_m`, `max_reference_offset_m`, `returning_to_center`,
+`road_edge_limited`로 기준 변경을 확인한다. `bias_active`는 기준 경로가 이동된 상태이며,
+실제 횡이동 명령 여부는 `lateral_motion_active`로 구분한다. 검출된 도로 폭이 갑자기
+좁아지면 경계 제한이 시간 평활화보다 우선한다.
 `metrics.street_light.lidar_confirmed`는 두 센서의 결합 확인 여부다.
 `metrics.street_light.target_class="Pole"`, `target_class_id=45`로 추종 클래스를 확인한다.
 `metrics.lidar_obstacles.mode="street_light_confirmation"`, `stops_enabled=false`,
@@ -586,7 +608,7 @@ ID 목록으로 제한하지 않는다. 원본 광각 영상에서는 ID·2D 모
 LiDAR 사용은 기본적으로 꺼져 있다(`LINE_TRACKING_AVOIDANCE_ENABLED=false`).
 `selected_mask=0/1/2`는 기본 설정으로 카메라 Path만 사용한다. 이 모드에서 LiDAR 회피가
 필요하면 아래처럼 `true`로 명시한다. `selected_mask=3` 작업은 설정값에 관계없이
-LiDAR를 기둥 확인에만 사용하며, 없거나 오래되면 편향만 해제한다. 아래 장애물
+LiDAR를 기둥 확인에만 사용하며, 없거나 오래되면 Pole 목표를 해제하고 중앙 기준을 천천히 복귀시킨다. 아래 장애물
 회피·LiDAR 정지 조건은 회피를 켠 0/1/2 모드에 적용한다.
 
 높이 추정·RANSAC·높이에 따른 차도/인도 Path 제한은 제거했다. `PointCloud2`를
@@ -791,8 +813,9 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 
 차도 1번은 중앙 추종을 유지한다. 3번도 같은 중앙 경로를 추종하되 **Pole이 연속
 검출되고 해당 영상 위치에 LiDAR 포인트가 일치하면 Pole 편향이 우선**한다. Pole
-편향 중에는 전진을 유지하고 몸체 회전 없이 횡이동한다. 대상 유실·LiDAR 미확인·접근
-종료 시 중앙 추종으로 복귀하며, 이전 Pole 횡속도를 계속 사용하지 않는다. 3번의
+편향은 별도 속도 명령을 덮어쓰지 않고 중앙 기준을 천천히 옮긴다. 직선에서는 횡이동하고
+실제 곡선에서는 원래 차도 조향을 유지한다. 대상 유실·LiDAR 미확인·접근 종료 시 기준을
+천천히 원래 중앙으로 복귀시킨다. 3번의
 LiDAR는 확인용이며 장애물·센서 유실 정지를 추가하지 않는다.
 
 차도 중앙 제어는 평행한 위치 오차와 경로 방향을 분리한다. 평행한 직선에서 중앙을
@@ -813,10 +836,12 @@ LINE_TRACKING_ROAD_MAX_YAW_ACCEL=0.30
 
 횡속도는 최대 0.10 m/s, 위치 오차의 0.40배이며 5 cm 이내에서는 위치 보정을 멈춘다.
 작은 경로 방향 차이는 횡속도에 더한다. 횡가속도는 0.20 m/s², 회전 가속도는
-0.30 rad/s²로 제한한다. 정지 조건은 즉시 적용하며, Pole 편향 속도는 기존
-`STREET_LIGHT_*` 설정을 따른다. `road_center_control` 상태의 `active`, `mode`,
-`lateral_error_m`, `heading_error_deg`, `tangent_change_deg`로 중앙 제어를 확인할 수
-있다. `lateral_error_m`는 맞춤 경로의 몸체 위치 절편이며, 지원 범위가 짧거나 방향이
+0.30 rad/s²로 제한한다. 정지 조건은 즉시 적용하며, Pole 기준 편향 중에도 같은
+차도 제어 속도 제한을 따른다. `road_center_control` 상태의 `active`, `mode`,
+`lateral_error_m`, `heading_error_deg`, `tangent_change_deg`, `reference_offset_m`로
+중앙 제어를 확인할 수
+있다. `lateral_error_m`는 원래 차도 방향을 기준으로 계산한 위치 오차에 lookahead의
+기준 이동량을 더한 값이며, 지원 범위가 짧거나 방향이
 불안정하면 제어기는 가까운 목표의 횡오차를 대신 사용한다.
 
 이 제어는 영상의 차도 분류와 기존 거리 보정에 의존한다. 차도 경계가 보이지 않거나

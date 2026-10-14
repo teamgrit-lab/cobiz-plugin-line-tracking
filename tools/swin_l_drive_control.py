@@ -6,7 +6,7 @@ without a robot. It does not establish camera extrinsic calibration.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 import numpy as np
@@ -131,6 +131,17 @@ class DriveDecision:
         return cls(0.0, 0.0, 0.0, reason)
 
 
+def road_base_path(path: SmoothedPath) -> SmoothedPath:
+    if path.road_center_base_points_xy is not None:
+        return replace(path, points_xy=path.road_center_base_points_xy,
+                       road_center_offset_m=0.0, road_center_base_points_xy=None)
+    if path.road_center_offset_m:
+        points = np.asarray(path.points_xy, dtype=np.float64).copy()
+        points[:, 1] -= path.road_center_offset_m
+        return replace(path, points_xy=points, road_center_offset_m=0.0)
+    return path
+
+
 def road_path_errors(path: SmoothedPath, lookahead_m: float) -> tuple[float, float, float] | None:
     """Return lateral intercept, path tangent and tangent change in base_link.
 
@@ -138,7 +149,8 @@ def road_path_errors(path: SmoothedPath, lookahead_m: float) -> tuple[float, flo
     error. Its lookahead-point bearing would incorrectly rotate the body.
     """
     try:
-        points = np.asarray(path.points_xy, np.float64)
+        base = road_base_path(path)
+        points = np.asarray(base.points_xy, np.float64)
     except (ValueError, TypeError):
         return None
     if points.ndim != 2 or points.shape[1] != 2:
@@ -154,6 +166,8 @@ def road_path_errors(path: SmoothedPath, lookahead_m: float) -> tuple[float, flo
     far = float(np.arctan(np.polyval(derivative, xs[-1])))
     heading = float(np.arctan(np.polyval(derivative, np.clip(lookahead_m, xs[0], xs[-1]))))
     offset = float(np.median(ys - math.tan(heading) * xs))
+    if base is not path:
+        offset += path_target_lateral(path, lookahead_m) - path_target_lateral(base, lookahead_m)
     return offset, heading, abs(far - near)
 
 
@@ -443,13 +457,15 @@ def decide_drive(
         geometry = road_path_errors(path, config.lookahead_m)
         if geometry is not None:
             offset, road_heading, curve = geometry
-            points = np.asarray(path.points_xy, dtype=np.float64)
+            base = road_base_path(path)
+            points = np.asarray(base.points_xy, dtype=np.float64)
             points = points[np.isfinite(points).all(axis=1)]
             far_x = float(np.max(points[:, 0]))
             target_x = float(np.clip(config.lookahead_m, np.min(points[:, 0]), far_x))
-            target_heading = math.atan2(lateral, target_x)
-            far_lateral = path_target_lateral(path, far_x)
-            far_heading = math.atan2(far_lateral, far_x)
+            # A shifted center changes position demand, never road geometry.
+            # Entering/leaving Pole bias alone must not trigger a body turn.
+            target_heading = math.atan2(path_target_lateral(base, target_x), target_x)
+            far_heading = math.atan2(path_target_lateral(base, far_x), far_x)
             controller = road_state if road_state is not None else RoadCenterState()
             translate = controller.choose_translation(road_heading, curve, config,
                                                       target_heading=target_heading, far_heading=far_heading)

@@ -41,6 +41,9 @@ def test_road_midpoint_uses_edges_beyond_the_old_search_width():
     assert np.median(before.points_xy[:,1]) < 1.0
     assert np.median(after.points_xy[:,1]) == pytest.approx(2.,abs=.10)
     assert after.road_center_tracking
+    assert after.road_corridor.shape == (config.path_points, 3)
+    assert np.all(after.road_corridor[:, 1] <= after.points_xy[:, 1])
+    assert np.all(after.road_corridor[:, 2] >= after.points_xy[:, 1])
     assert after.mean_sidewalk_width_m > 7.8
     assert after.points_xy[0,0] >= after.raw_points_xy[:,0].min()
     assert after.points_xy[-1,0] <= after.raw_points_xy[:,0].max()
@@ -165,7 +168,7 @@ def test_env_and_cli_road_settings_and_validation(monkeypatch):
 
 
 @pytest.mark.parametrize('selected',[1,3])
-def test_runtime_centers_until_confirmed_pole_overrides_only_mode_three(monkeypatch,selected):
+def test_runtime_confirmed_pole_shifts_only_mode_three_reference(monkeypatch,selected):
     import json
     from types import SimpleNamespace as NS
     from test_lidar_obstacles_ros import complete_inference, enabled_ros
@@ -198,10 +201,11 @@ def test_runtime_centers_until_confirmed_pole_overrides_only_mode_three(monkeypa
         cmd=json.loads(ros.published[SPORT][-1].parameter)
         assert cmd['x']>0 and cmd['z']==0.
         if selected==3:
-            assert cmd['y']>0  # Confirmed Pole wins over leftward centering.
+            assert cmd['y']<0  # The shifted reference is still left of the robot.
             assert metrics['street_light']['lidar_confirmed']
-            assert metrics['drive_reason']=='street_light_approaching'
-            assert not metrics['road_center_control']['active']
+            assert metrics['drive_reason']=='tracking'
+            assert metrics['road_center_control']['active']
+            assert metrics['road_center_control']['reference_offset_m']<0.
             assert not metrics['lidar_obstacles']['stops_enabled']
         else:
             assert cmd['y']<0 and metrics['road_center_control']['active']

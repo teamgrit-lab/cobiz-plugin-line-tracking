@@ -310,6 +310,8 @@ class BranchSelector:
                 raw_points_xy=path.centers,
                 branch_observation=None,
                 vegetation_bias_active=path.vegetation_bias_active,
+                # The old center corridor does not describe this chosen fork.
+                road_corridor=None,
             )
             self._status.update(
                 state="locked", reason=reason, confirmation_hits=self._hits

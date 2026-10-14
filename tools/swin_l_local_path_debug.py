@@ -353,6 +353,7 @@ def road_center_metrics(path, decision, config, state) -> dict:
         "heading_error_deg": math.degrees(errors[1]) if errors else None,
         "tangent_change_deg": math.degrees(errors[2]) if errors else None,
         "command_lateral_mps": decision.vy if active else None,
+        "reference_offset_m": path.road_center_offset_m if enabled else 0.0,
     }
 
 
@@ -1334,8 +1335,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             inference_age_sec = _effective_source_age_sec(
                 last_inference_at, last_inference_stamp_ns, now, clock_now_ns
             )
-            decision = decide_drive(
-                path,
+            drive_inputs = dict(
                 camera_age_sec=camera_age_sec,
                 inference_age_sec=inference_age_sec,
                 config=self.drive_config,
@@ -1345,6 +1345,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path_unavailable_inferences=self.path_unavailable_inferences,
                 path_recovery_inferences=self.path_recovery_inferences if recovering else None,
             )
+            decision = decide_drive(path, **drive_inputs)
             if lidar_avoidance:
                 decision = self.obstacles.apply(decision, path, mask_class, now, clock_now_ns)
             if camera_fault_reason is not None and decision.reason not in (
@@ -1376,11 +1377,22 @@ def run_ros2(args: argparse.Namespace) -> int:
                 if self.obstacles is not None:
                     with self.obstacles.lock:
                         self.obstacles.metrics.update(lidar_confirmed=False, lidar_match_count=0)
-                decision = self.street_lights.decide(
-                    decision, pole_observations, now=now, inference_id=inference_id,
+                road_tracking = (decision.reason in ("tracking", "tracking_slow_turn")
+                                 and decision.vx > 0 and self.drive_config.road_lateral_enabled)
+                pole = self.street_lights.observe(
+                    pole_observations, now=now, inference_id=inference_id,
+                    road_tracking=road_tracking,
                     inference_age_sec=inference_age_sec,
                     locate=lambda observation: self.obstacles.locate_street_light(
                         observation, now, clock_now_ns) if self.obstacles is not None else (0.0, None))
+                reference = self.street_lights.shift_reference(
+                    path, pole, now=now, road_tracking=road_tracking,
+                    lookahead_m=self.drive_config.lookahead_m)
+                if reference is not path:
+                    # Reuse the road controller and every guard. Pole supplies
+                    # a slowly shifted position reference, never a Move command.
+                    path = reference
+                    decision = decide_drive(path, **drive_inputs)
             if decision.reason in (
                 "camera_stale", "inference_stale",
                 "camera_timestamp_invalid", "camera_conversion_error",
@@ -1393,8 +1405,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.last_valid_yaw_rate = decision.yaw_rate
                 self.last_valid_forward_mps = decision.vx
             if street_light_mode:
-                self.street_lights.metrics["bias_active"] = (
-                    decision.reason == "street_light_approaching" and abs(decision.vy) > 1e-6)
+                self.street_lights.metrics["lateral_motion_active"] = (
+                    decision.reason in ("tracking", "tracking_slow_turn") and abs(decision.vy) > 1e-6)
             return path, decision
 
         def on_task_event(self, message: Any) -> None:

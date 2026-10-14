@@ -162,6 +162,7 @@ class LocalPathEstimate:
     branch_observation: BranchObservation | None = None
     vegetation_bias_active: bool = False
     road_center_tracking: bool = False
+    road_corridor: np.ndarray | None = None  # Rows: forward x, lower y, upper y.
 
     @property
     def is_valid(self) -> bool:
@@ -180,6 +181,9 @@ class SmoothedPath:
     branch_status: dict | None = None
     vegetation_bias_active: bool = False
     road_center_tracking: bool = False
+    road_corridor: np.ndarray | None = None
+    road_center_offset_m: float = 0.0
+    road_center_base_points_xy: np.ndarray | None = None
 
 
 def normalized_polygon_pixels(
@@ -405,6 +409,7 @@ def extract_road_centerline(road_mask: np.ndarray, config: LocalPathConfig) -> L
     fitted = np.clip(fitted, centers - half + margin, centers + half - margin)
     return replace(estimate, points_xy=np.column_stack((forward, fitted)).astype(np.float32),
                    raw_points_xy=raw, mean_sidewalk_width_m=float(np.mean(widths)),
+                   road_corridor=np.column_stack((forward, centers - half, centers + half)).astype(np.float32),
                    road_center_tracking=True)
 
 
@@ -550,6 +555,7 @@ class LocalPathSmoother:
         self._constrained_branch = False
         self._vegetation_bias_active = False
         self._road_center_tracking = False
+        self._road_corridor = None
 
     def reset(self, *, preserve_branch: bool = False) -> None:
         """Discard path history, retaining a committed fork on sensor loss if requested."""
@@ -563,6 +569,7 @@ class LocalPathSmoother:
             self._constrained_branch = False
             self._vegetation_bias_active = False
             self._road_center_tracking = False
+            self._road_corridor = None
 
     def update(
         self, estimate: LocalPathEstimate | None, timestamp_sec: float
@@ -572,6 +579,8 @@ class LocalPathSmoother:
             estimate = choice.estimate
             self._stop_reason = choice.stop_reason
             self._constrained_branch = choice.constrained
+            self._road_corridor = (estimate.road_corridor.copy() if estimate is not None
+                                   and estimate.road_corridor is not None else None)
             if choice.stop_reason is not None:
                 # A distinct guard survives ordinary path-loss bypass and hold.
                 self._points = np.empty((0, 2), dtype=np.float32)
@@ -665,4 +674,5 @@ class LocalPathSmoother:
             branch_status=self._branch_selector.metrics(),
             vegetation_bias_active=self._vegetation_bias_active,
             road_center_tracking=self._road_center_tracking,
+            road_corridor=self._road_corridor.copy() if self._road_corridor is not None else None,
         )

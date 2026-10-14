@@ -55,6 +55,17 @@ x-sidewalk-vegetation-environment: &sidewalk-vegetation-environment
   SWIN_L_SIDEWALK_VEGETATION_MAX_GAP_M: ${SWIN_L_SIDEWALK_VEGETATION_MAX_GAP_M:-0.30}
   SWIN_L_SIDEWALK_VEGETATION_EDGE_MARGIN_M: ${SWIN_L_SIDEWALK_VEGETATION_EDGE_MARGIN_M:-0.45}
 
+x-road-center-environment: &road-center-environment
+  SWIN_L_ROAD_ROI_POLYGON: ${SWIN_L_ROAD_ROI_POLYGON:-0.02,1.00,0.98,1.00,0.98,0.42,0.02,0.42}
+  LINE_TRACKING_ROAD_LATERAL_ENABLED: ${LINE_TRACKING_ROAD_LATERAL_ENABLED:-true}
+  LINE_TRACKING_ROAD_MAX_LATERAL_MPS: ${LINE_TRACKING_ROAD_MAX_LATERAL_MPS:-0.10}
+  LINE_TRACKING_ROAD_LATERAL_GAIN: ${LINE_TRACKING_ROAD_LATERAL_GAIN:-0.40}
+  LINE_TRACKING_ROAD_LATERAL_DEADBAND_M: ${LINE_TRACKING_ROAD_LATERAL_DEADBAND_M:-0.05}
+  LINE_TRACKING_ROAD_STRAIGHT_HEADING_DEG: ${LINE_TRACKING_ROAD_STRAIGHT_HEADING_DEG:-8.0}
+  LINE_TRACKING_ROAD_STRAIGHT_CURVE_DEG: ${LINE_TRACKING_ROAD_STRAIGHT_CURVE_DEG:-10.0}
+  LINE_TRACKING_ROAD_MAX_LATERAL_ACCEL: ${LINE_TRACKING_ROAD_MAX_LATERAL_ACCEL:-0.20}
+  LINE_TRACKING_ROAD_MAX_YAW_ACCEL: ${LINE_TRACKING_ROAD_MAX_YAW_ACCEL:-0.30}
+
 services:
   # Safe inspection-only process. It publishes local path/debug topics and
   # never publishes /api/sport/request. Start it explicitly with:
@@ -81,7 +92,7 @@ services:
       - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
       - ${SWIN_L_ENGINE_DIR:-./models}:/models:ro
     environment:
-      <<: [*lidar-obstacle-environment, *apriltag-environment, *sidewalk-vegetation-environment]
+      <<: [*lidar-obstacle-environment, *apriltag-environment, *sidewalk-vegetation-environment, *road-center-environment]
       # Keep the inspection service from duplicating the driving detector.
       SWIN_L_APRILTAG_DETECTOR_ENABLED: ${SWIN_L_DEBUG_APRILTAG_DETECTOR_ENABLED:-false}
       SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/res_360p/image_raw}
@@ -127,7 +138,7 @@ services:
       - ${SWIN_L_ENGINE_DIR:-./models}:/models
       - ${SWIN_L_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint
     environment:
-      <<: [*lidar-obstacle-environment, *apriltag-environment, *sidewalk-vegetation-environment]
+      <<: [*lidar-obstacle-environment, *apriltag-environment, *sidewalk-vegetation-environment, *road-center-environment]
       SWIN_L_APRILTAG_DETECTOR_ENABLED: ${SWIN_L_APRILTAG_DETECTOR_ENABLED:-true}
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}

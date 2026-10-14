@@ -498,12 +498,29 @@ extrinsics, with a configured LiDAR-to-ground distance of 0.40 m. This projectio
 does not fit a ground plane or change the semantic Path. Reinterpreting the ROI
 as a near-field metric calibration is not supported.
 
-Road and sidewalk share the same ROI. Its default bottom width is 84% of the
-image, top width is 24%, and height is 55% (top at image y=45%):
+The distance calibration and sidewalk/union selection use the original ROI.
+Its default bottom width is 84% of the image, top width is 24%, and height is
+55% (top at image y=45%):
 
 ```dotenv
 SWIN_L_ROI_POLYGON=0.08,1.00,0.92,1.00,0.62,0.45,0.38,0.45
 ```
+
+Road selection (`selected_mask=1/3`) uses a separate wide ROI, based on the
+camera examples in `rosbag-results/livox-range-20261007`. It covers the lower
+58% and 96% of the image width:
+
+```dotenv
+SWIN_L_ROAD_ROI_POLYGON=0.02,1.00,0.98,1.00,0.98,0.42,0.02,0.42
+```
+
+This changes selection only; it retains the original pixel-to-ground mapping.
+The road search grid expands beyond the old ±3.5 m crop to include the visible
+road edges. When possible, the midpoint uses the longest stretch with both
+edges visible; a clipped image edge is not treated as an observed road edge.
+The fitted path stays within its observed forward support and selected
+corridor. If neither edge is visible, the visible region supplies a provisional
+midpoint; a single image cannot establish the center of an unseen road.
 
 An existing deployment `.env` overrides this default. Update its value and
 recreate the service to apply it. The ROI also defines the camera-to-ground
@@ -736,6 +753,11 @@ LiDAR 회피가 활성화되어 있으면 회피·외곽 충돌·미관측 공�
 설정 변경은 프로세스 재시작 또는 컨테이너 재생성 후 적용된다. 거리와 여유는 기존
 카메라 지면 투영 보정에 의존하며, 실물 주행은 아직 검증하지 않았다.
 
+For road modes 1 and 3, valid-row filtering and temporal smoothing remain active
+even with `SWIN_L_UNRESTRICTED_PATH_MODE=true`. The existing camera/inference
+freshness switches and unrestricted hold policy still apply. Modes 0 and 2
+retain the unrestricted behavior below.
+
 With the deployed default `SWIN_L_UNRESTRICTED_PATH_MODE=true`, at least two
 usable rows are sufficient. No path is produced when fewer than two rows have
 a qualifying region, including when the selected class is absent from the
@@ -762,10 +784,44 @@ freshness metrics also account for the original sensor timestamp; repeating a
 path at 10 Hz never resets them. Their stop flags determine whether stale values
 block motion. The heading calculation uses the 4 m lookahead; when enabled,
 the default 60° target-angle limit corresponds to about ±6.93 m laterally.
-Tracking sends heading-regulated forward speed (default ceiling 0.50 m/s),
-zero lateral velocity except during the vegetation bias described above, and
-yaw capped at ±0.18 rad/s. Disabling angle stopping
+Union/sidewalk tracking sends heading-regulated forward speed (default ceiling
+0.50 m/s), zero lateral velocity except during vegetation bias, and yaw capped
+at ±0.18 rad/s. Disabling angle stopping
 does not repair an inaccurate path or guarantee a sharp bend can be followed.
+
+차도 1번은 중앙 추종을 유지한다. 3번도 같은 중앙 경로를 추종하되 **Pole이 연속
+검출되고 해당 영상 위치에 LiDAR 포인트가 일치하면 Pole 편향이 우선**한다. Pole
+편향 중에는 전진을 유지하고 몸체 회전 없이 횡이동한다. 대상 유실·LiDAR 미확인·접근
+종료 시 중앙 추종으로 복귀하며, 이전 Pole 횡속도를 계속 사용하지 않는다. 3번의
+LiDAR는 확인용이며 장애물·센서 유실 정지를 추가하지 않는다.
+
+차도 중앙 제어는 평행한 위치 오차와 경로 방향을 분리한다. 평행한 직선에서 중앙을
+벗어나면 전진과 횡이동으로 복귀한다. 가까운 목표와 먼 목표의 각도가 모두 작을 때도
+회전을 횡이동으로 대체한다. 실제 곡선이나 큰 방향 차이는 목표 방향으로 회전하며,
+회전 요구가 한도를 넘으면 감속한다. 직선/회전 전환에는 4° 히스테리시스를 적용한다.
+
+```dotenv
+LINE_TRACKING_ROAD_LATERAL_ENABLED=true
+LINE_TRACKING_ROAD_MAX_LATERAL_MPS=0.10
+LINE_TRACKING_ROAD_LATERAL_GAIN=0.40
+LINE_TRACKING_ROAD_LATERAL_DEADBAND_M=0.05
+LINE_TRACKING_ROAD_STRAIGHT_HEADING_DEG=8.0
+LINE_TRACKING_ROAD_STRAIGHT_CURVE_DEG=10.0
+LINE_TRACKING_ROAD_MAX_LATERAL_ACCEL=0.20
+LINE_TRACKING_ROAD_MAX_YAW_ACCEL=0.30
+```
+
+횡속도는 최대 0.10 m/s, 위치 오차의 0.40배이며 5 cm 이내에서는 위치 보정을 멈춘다.
+작은 경로 방향 차이는 횡속도에 더한다. 횡가속도는 0.20 m/s², 회전 가속도는
+0.30 rad/s²로 제한한다. 정지 조건은 즉시 적용하며, Pole 편향 속도는 기존
+`STREET_LIGHT_*` 설정을 따른다. `road_center_control` 상태의 `active`, `mode`,
+`lateral_error_m`, `heading_error_deg`, `tangent_change_deg`로 중앙 제어를 확인할 수
+있다. `lateral_error_m`는 맞춤 경로의 몸체 위치 절편이며, 지원 범위가 짧거나 방향이
+불안정하면 제어기는 가까운 목표의 횡오차를 대신 사용한다.
+
+이 제어는 영상의 차도 분류와 기존 거리 보정에 의존한다. 차도 경계가 보이지 않거나
+거리 보정이 틀린 경우 실제 중앙을 보장하지 않는다. 오프라인 영상 분석과 운동학
+시뮬레이션은 실제 장비의 횡이동 응답이나 중앙 복귀 성능을 측정한 결과가 아니다.
 
 ## 정지·작업 중단·시작 거절 사유
 

@@ -50,6 +50,10 @@ DEFAULT_ROI_POLYGON = (
     0.45,
 )
 
+# Road selection covers both visible edges in the rosbag camera examples.
+# Keep this separate from the pixel-to-ground calibration above.
+DEFAULT_ROAD_ROI_POLYGON = (0.02, 1.00, 0.98, 1.00, 0.98, 0.42, 0.02, 0.42)
+
 
 @dataclass(frozen=True)
 class LocalPathConfig:
@@ -87,6 +91,7 @@ class LocalPathConfig:
     sidewalk_vegetation_bias_m: float = 0.20
     sidewalk_vegetation_max_gap_m: float = 0.30
     sidewalk_vegetation_edge_margin_m: float = 0.45
+    road_roi_polygon: tuple[float, ...] = DEFAULT_ROAD_ROI_POLYGON
 
     def validate(self) -> None:
         if self.near_distance_m <= 0.0:
@@ -101,6 +106,13 @@ class LocalPathConfig:
             raise ValueError("roi_polygon must contain four normalized x/y points")
         if any(value < 0.0 or value > 1.0 for value in self.roi_polygon):
             raise ValueError("roi_polygon values must be normalized to [0, 1]")
+        if (len(self.road_roi_polygon) != 8 or not all(
+            math.isfinite(value) and 0 <= value <= 1 for value in self.road_roi_polygon
+        )):
+            raise ValueError("road_roi_polygon must contain eight finite normalized values")
+        road_polygon = np.asarray(self.road_roi_polygon, np.float32).reshape(4, 2)
+        if not cv2.isContourConvex(road_polygon) or cv2.contourArea(road_polygon) <= 0:
+            raise ValueError("road_roi_polygon must be a nonempty convex quadrilateral")
         if self.path_points < 2:
             raise ValueError("path_points must be at least 2")
         if self.bev_width_px < 8 or self.bev_height_px < 8:
@@ -149,6 +161,7 @@ class LocalPathEstimate:
     raw_points_xy: np.ndarray
     branch_observation: BranchObservation | None = None
     vegetation_bias_active: bool = False
+    road_center_tracking: bool = False
 
     @property
     def is_valid(self) -> bool:
@@ -166,6 +179,7 @@ class SmoothedPath:
     stop_reason: str | None = None
     branch_status: dict | None = None
     vegetation_bias_active: bool = False
+    road_center_tracking: bool = False
 
 
 def normalized_polygon_pixels(
@@ -300,6 +314,98 @@ def _birdseye_sidewalk(
             birdseye, cv2.MORPH_CLOSE, geometry.close_kernel
         )
     return birdseye, geometry.x_values, geometry.y_values
+
+
+@lru_cache(maxsize=8)
+def _road_birdseye_geometry(frame_shape: tuple[int, int], config: LocalPathConfig):
+    """Expand the selection grid without changing the camera calibration.
+
+    The old +/-3.5m search crops the road before taking its midpoint. Project
+    the wide selection ROI through the original homography to determine the
+    complete visible search width, preserving its original spatial resolution.
+    """
+    homography = pixel_to_ground_homography(frame_shape, config)
+    polygon = normalized_polygon_pixels(config.road_roi_polygon, frame_shape)
+    projected = cv2.perspectiveTransform(polygon.astype(np.float32).reshape(-1, 1, 2), homography)
+    if not np.isfinite(projected).all():
+        raise ValueError("road ROI crosses an invalid ground projection")
+    half_width = max(config.search_half_width_m, float(np.abs(projected[:, 0, 1]).max()))
+    if half_width > 100:
+        raise ValueError("road ROI is too close to the ground-projection horizon")
+    width = max(config.bev_width_px, int(math.ceil(
+        config.bev_width_px * half_width / config.search_half_width_m)))
+    width = min(width, 4096)
+    xs = np.linspace(config.near_distance_m, config.far_distance_m, config.bev_height_px, dtype=np.float32)
+    ys = np.linspace(half_width, -half_width, width, dtype=np.float32)
+    xx, yy = np.meshgrid(xs, ys, indexing="ij")
+    pixels = ground_to_pixel(np.stack((xx, yy), axis=-1), homography).reshape(len(xs), len(ys), 2)
+    roi = np.zeros(frame_shape[:2], np.uint8)
+    cv2.fillConvexPoly(roi, polygon, 1)
+    effective = replace(config, search_half_width_m=half_width,
+                        ground_half_width_m=max(config.ground_half_width_m, half_width),
+                        max_path_lateral_m=max(config.max_path_lateral_m, half_width),
+                        bev_width_px=width, unrestricted_path_mode=False)
+    return (np.ascontiguousarray(pixels[..., 0]), np.ascontiguousarray(pixels[..., 1]),
+            roi, xs, ys, effective)
+
+
+def extract_road_centerline(road_mask: np.ndarray, config: LocalPathConfig) -> LocalPathEstimate | None:
+    """Find the whole visible road midpoint, retaining connected branch guards."""
+    config.validate()
+    mask = np.asarray(road_mask, np.uint8)
+    if mask.ndim != 2 or not mask.size:
+        raise ValueError("road_mask must be a nonempty two-dimensional array")
+    mx, my, roi, xs, ys, effective = _road_birdseye_geometry(mask.shape, config)
+    observed = cv2.remap(mask * roi, mx, my, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
+    birdseye = observed
+    if config.close_kernel_px:
+        kernel = np.ones((config.close_kernel_px, config.close_kernel_px), np.uint8)
+        birdseye = cv2.morphologyEx(observed, cv2.MORPH_CLOSE, kernel)
+    estimate = extract_metric_centerline(birdseye, xs, ys, effective, unclosed=observed)
+    if estimate is None:
+        return None
+    raw = estimate.raw_points_xy
+    support = cv2.remap(roi, mx, my, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
+    widths, complete = [], []
+    spacing = float(abs(ys[1] - ys[0]))
+    for x, y in raw:
+        row = int(np.argmin(np.abs(xs - x)))
+        runs = _runs(birdseye[row] > 0)
+        match = next(((a, b) for a, b in runs if ys[b] - spacing <= y <= ys[a] + spacing), None)
+        a, b = match if match else (0, 0)
+        widths.append((b - a + 1) * spacing)
+        # A road clipped by the image/selection border has an artificial
+        # midpoint. Prefer the longest stretch with both actual edges visible.
+        complete.append(bool(match and a > 0 and b < len(ys) - 1
+                             and support[row, a - 1] and support[row, b + 1]))
+    full = np.flatnonzero(complete)
+    if len(full):
+        groups = np.split(full, np.flatnonzero(np.diff(raw[full, 0]) > 0.10) + 1)
+        best = max(groups, key=len)
+        if len(best) >= 12 and raw[best[-1], 0] - raw[best[0], 0] >= 0.5:
+            raw, widths = raw[best], np.asarray(widths)[best]
+    widths = np.asarray(widths)
+    # Start with a line: segmentation edge jitter must not invent an S bend.
+    # Accept a quadratic only with broad support and a clear improvement.
+    coefficients = np.polyfit(raw[:, 0], raw[:, 1], 1)
+    residual = raw[:, 1] - np.polyval(coefficients, raw[:, 0])
+    linear_rms = float(np.sqrt(np.mean(residual ** 2)))
+    if config.fit_degree >= 2 and np.ptp(raw[:, 0]) >= 2.5 and linear_rms > 0.20:
+        quadratic = np.polyfit(raw[:, 0], raw[:, 1], 2)
+        rms = float(np.sqrt(np.mean((raw[:, 1] - np.polyval(quadratic, raw[:, 0])) ** 2)))
+        if rms < linear_rms * 0.65:
+            coefficients = quadratic
+    # Do not extrapolate a quadratic into buildings/vegetation where no road
+    # rows were observed. Constrain the fit to its selected corridor per row.
+    forward = np.linspace(float(raw[0, 0]), float(raw[-1, 0]), config.path_points)
+    centers = np.interp(forward, raw[:, 0], raw[:, 1])
+    half = np.interp(forward, raw[:, 0], widths) / 2
+    margin = np.minimum(0.10, half * 0.2)
+    fitted = np.polyval(coefficients, forward)
+    fitted = np.clip(fitted, centers - half + margin, centers + half - margin)
+    return replace(estimate, points_xy=np.column_stack((forward, fitted)).astype(np.float32),
+                   raw_points_xy=raw, mean_sidewalk_width_m=float(np.mean(widths)),
+                   road_center_tracking=True)
 
 
 def extract_sidewalk_centerline(
@@ -443,6 +549,7 @@ class LocalPathSmoother:
         self._stop_reason: str | None = None
         self._constrained_branch = False
         self._vegetation_bias_active = False
+        self._road_center_tracking = False
 
     def reset(self, *, preserve_branch: bool = False) -> None:
         """Discard path history, retaining a committed fork on sensor loss if requested."""
@@ -455,6 +562,7 @@ class LocalPathSmoother:
             self._stop_reason = None
             self._constrained_branch = False
             self._vegetation_bias_active = False
+            self._road_center_tracking = False
 
     def update(
         self, estimate: LocalPathEstimate | None, timestamp_sec: float
@@ -470,6 +578,7 @@ class LocalPathSmoother:
                 self._confidence = 0.0
                 self._last_update = timestamp_sec
                 self._vegetation_bias_active = False
+                self._road_center_tracking = False
                 return self._current_unlocked(timestamp_sec)
             if choice.constrained and estimate is not None:
                 # An EMA across branches can cross the non-drivable fork gap.
@@ -478,26 +587,36 @@ class LocalPathSmoother:
                 self._confidence = estimate.confidence
                 self._last_update = timestamp_sec
                 self._vegetation_bias_active = estimate.vegetation_bias_active
+                self._road_center_tracking = estimate.road_center_tracking
                 return self._current_unlocked(timestamp_sec)
-            if self.config.unrestricted_path_mode:
+            road_tracking = estimate is not None and estimate.road_center_tracking
+            if self.config.unrestricted_path_mode and not road_tracking:
                 if estimate is None or not estimate.is_valid:
                     self._points = None
                     self._confidence = 0.0
                     self._last_update = None
                     self._vegetation_bias_active = False
+                    self._road_center_tracking = False
                     return None
                 self._points = np.asarray(estimate.points_xy, dtype=np.float32).copy()
                 self._confidence = estimate.confidence
                 self._last_update = timestamp_sec
                 self._vegetation_bias_active = estimate.vegetation_bias_active
+                self._road_center_tracking = estimate.road_center_tracking
                 return self._current_unlocked(timestamp_sec)
             if estimate is not None and estimate.is_valid:
                 self._vegetation_bias_active = estimate.vegetation_bias_active
+                self._road_center_tracking = estimate.road_center_tracking
                 target = np.asarray(estimate.points_xy, dtype=np.float32)
                 if self._points is None or self._points.shape != target.shape:
                     self._points = target.copy()
                     self._confidence = estimate.confidence
                 else:
+                    if road_tracking:
+                        # Observed forward support can change when a clipped
+                        # road edge reappears. Blend y at matching distances.
+                        self._points = np.column_stack((target[:, 0], np.interp(
+                            target[:, 0], self._points[:, 0], self._points[:, 1]))).astype(np.float32)
                     previous_update = (
                         self._last_update
                         if self._last_update is not None
@@ -526,7 +645,8 @@ class LocalPathSmoother:
         if self._points is None or self._last_update is None:
             return None
         age = max(timestamp_sec - self._last_update, 0.0)
-        if self._stop_reason is None and not self.config.unrestricted_path_mode and age > self.config.path_hold_sec:
+        unrestricted = self.config.unrestricted_path_mode
+        if self._stop_reason is None and not unrestricted and age > self.config.path_hold_sec:
             return None
         return SmoothedPath(
             points_xy=self._points.copy(),
@@ -536,7 +656,7 @@ class LocalPathSmoother:
                 "branch_guard" if self._stop_reason else
                 "selected_branch" if self._constrained_branch else
                 "raw_latest"
-                if self.config.unrestricted_path_mode
+                if unrestricted and not self._road_center_tracking
                 else "smoothed_hold"
                 if age > 0.02
                 else "smoothed_update"
@@ -544,4 +664,5 @@ class LocalPathSmoother:
             stop_reason=self._stop_reason,
             branch_status=self._branch_selector.metrics(),
             vegetation_bias_active=self._vegetation_bias_active,
+            road_center_tracking=self._road_center_tracking,
         )

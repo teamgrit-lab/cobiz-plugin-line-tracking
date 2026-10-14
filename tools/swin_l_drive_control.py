@@ -53,6 +53,14 @@ class DriveConfig:
     path_recovery_confirm_frames: int = 2
     path_recovery_first_direction: str = "left"
     vegetation_max_lateral_mps: float = 0.05
+    road_lateral_enabled: bool = True
+    road_max_lateral_mps: float = 0.10
+    road_lateral_gain: float = 0.40
+    road_lateral_deadband_m: float = 0.05
+    road_straight_heading_deg: float = 8.0
+    road_straight_curve_deg: float = 10.0
+    road_max_lateral_accel: float = 0.20
+    road_max_yaw_accel: float = 0.30
 
     def validate(self) -> None:
         positive = (
@@ -84,6 +92,18 @@ class DriveConfig:
             raise ValueError("stop-check switches must be boolean values")
         if type(self.path_loss_recovery_enabled) is not bool:
             raise ValueError("path_loss_recovery_enabled must be a boolean value")
+        if type(self.road_lateral_enabled) is not bool:
+            raise ValueError("road centering switches must be boolean")
+        if not all(math.isfinite(value) and value > 0 for value in (
+            self.road_max_lateral_mps, self.road_lateral_gain,
+            self.road_lateral_deadband_m, self.road_straight_heading_deg,
+            self.road_straight_curve_deg, self.road_max_lateral_accel, self.road_max_yaw_accel,
+        )):
+            raise ValueError("road centering settings must be finite and positive")
+        if self.road_max_lateral_mps > 0.15:
+            raise ValueError("road_max_lateral_mps must not exceed 0.15 m/s")
+        if max(self.road_straight_heading_deg, self.road_straight_curve_deg) >= 45:
+            raise ValueError("road straight angles must be below 45 degrees")
         if self.path_recovery_yaw_rps > self.max_yaw_rps:
             raise ValueError("path_recovery_yaw_rps must not exceed max_yaw_rps")
         if (type(self.path_recovery_confirm_frames) is not int
@@ -109,6 +129,76 @@ class DriveDecision:
     @classmethod
     def stop(cls, reason: str) -> DriveDecision:
         return cls(0.0, 0.0, 0.0, reason)
+
+
+def road_path_errors(path: SmoothedPath, lookahead_m: float) -> tuple[float, float, float] | None:
+    """Return lateral intercept, path tangent and tangent change in base_link.
+
+    A parallel displaced path has zero heading error even with a large lateral
+    error. Its lookahead-point bearing would incorrectly rotate the body.
+    """
+    try:
+        points = np.asarray(path.points_xy, np.float64)
+    except (ValueError, TypeError):
+        return None
+    if points.ndim != 2 or points.shape[1] != 2:
+        return None
+    points = points[np.isfinite(points).all(axis=1)]
+    xs, indices = np.unique(points[:, 0], return_index=True)
+    if len(xs) < 2 or xs[-1] - xs[0] < 0.1:
+        return None
+    ys = points[indices, 1]
+    coefficients = np.polyfit(xs, ys, min(2, len(xs) - 1))
+    derivative = np.polyder(coefficients)
+    near = float(np.arctan(np.polyval(derivative, xs[0])))
+    far = float(np.arctan(np.polyval(derivative, xs[-1])))
+    heading = float(np.arctan(np.polyval(derivative, np.clip(lookahead_m, xs[0], xs[-1]))))
+    offset = float(np.median(ys - math.tan(heading) * xs))
+    return offset, heading, abs(far - near)
+
+
+class RoadCenterState:
+    """Mode hysteresis and rate limits based on commands actually published."""
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.translating = False
+        self.command = DriveDecision.stop("task_idle")
+        self.command_at: float | None = None
+
+    def record_command(self, command: DriveDecision, *, now: float) -> None:
+        self.command, self.command_at = command, now
+
+    def choose_translation(self, heading: float, curve: float, config: DriveConfig,
+                           *, target_heading: float | None = None,
+                           far_heading: float | None = None) -> bool:
+        margin = 4.0 if self.translating else 0.0
+        parallel = (abs(math.degrees(heading)) <= config.road_straight_heading_deg + margin
+                    and math.degrees(curve) <= config.road_straight_curve_deg + margin)
+        # Edge jitter/limited forward support can make a fitted tangent steep
+        # even when both targets need only a small position correction.
+        small_correction = (target_heading is not None and far_heading is not None
+                            and max(abs(math.degrees(target_heading)), abs(math.degrees(far_heading)))
+                            <= config.road_straight_heading_deg + margin)
+        self.translating = parallel or small_correction
+        return self.translating
+
+    def limit(self, desired: DriveDecision, *, now: float, config: DriveConfig) -> DriveDecision:
+        elapsed = min(0.20, max(0.0, now - self.command_at)) if self.command_at is not None else 0.0
+        step = config.road_max_lateral_accel * elapsed
+        # A completed/lost Pole target must release its sideways push at once.
+        # Ramp the new centering command from zero when its owner changes.
+        previous_vy = (self.command.vy if self.command.reason in
+                       ("tracking", "tracking_slow_turn") else 0.0)
+        vy = float(np.clip(desired.vy, previous_vy - step, previous_vy + step))
+        vy = float(np.clip(vy, -config.road_max_lateral_mps, config.road_max_lateral_mps))
+        yaw = desired.yaw_rate
+        if not self.translating:
+            step = config.road_max_yaw_accel * elapsed
+            yaw = float(np.clip(yaw, self.command.yaw_rate - step, self.command.yaw_rate + step))
+        return DriveDecision(desired.vx, vy, yaw, desired.reason)
 
 
 class PathLossRecovery:
@@ -267,6 +357,8 @@ def decide_drive(
     path_unavailable_inferences: int = 0,
     obstacle_stop_reason: str | None = None,
     path_recovery_inferences: int | None = None,
+    road_state: RoadCenterState | None = None,
+    now: float | None = None,
 ) -> DriveDecision:
     """Slow forward motion when heading demand exceeds available yaw rate.
 
@@ -347,6 +439,41 @@ def decide_drive(
     # vegetation bias uses sideways translation in place of body rotation.
     speed_scale = config.max_yaw_rps / max(config.max_yaw_rps, abs(requested_yaw))
     lateral_speed = 0.0
+    if getattr(path, "road_center_tracking", False) and config.road_lateral_enabled and not path.vegetation_bias_active:
+        geometry = road_path_errors(path, config.lookahead_m)
+        if geometry is not None:
+            offset, road_heading, curve = geometry
+            points = np.asarray(path.points_xy, dtype=np.float64)
+            points = points[np.isfinite(points).all(axis=1)]
+            far_x = float(np.max(points[:, 0]))
+            target_x = float(np.clip(config.lookahead_m, np.min(points[:, 0]), far_x))
+            target_heading = math.atan2(lateral, target_x)
+            far_lateral = path_target_lateral(path, far_x)
+            far_heading = math.atan2(far_lateral, far_x)
+            controller = road_state if road_state is not None else RoadCenterState()
+            translate = controller.choose_translation(road_heading, curve, config,
+                                                      target_heading=target_heading, far_heading=far_heading)
+            if translate:
+                # Feed forward the slight road direction, then close the loop
+                # on position. Large parallel offsets still return laterally.
+                parallel = (abs(math.degrees(road_heading)) <= config.road_straight_heading_deg + 4
+                            and math.degrees(curve) <= config.road_straight_curve_deg + 4)
+                error = offset if parallel else lateral
+                feedforward = config.max_forward_mps * math.tan(road_heading) if parallel else 0.0
+                correction = 0.0 if abs(error) <= config.road_lateral_deadband_m else error
+                vy = float(np.clip(feedforward
+                                   + config.road_lateral_gain * correction,
+                                   -config.road_max_lateral_mps, config.road_max_lateral_mps))
+                if abs(vy) < 1e-6:
+                    vy = 0.0
+                result = DriveDecision(config.max_forward_mps, vy, 0.0, "tracking")
+            else:
+                requested = config.heading_gain * target_heading
+                yaw = float(np.clip(requested, -config.max_yaw_rps, config.max_yaw_rps))
+                scale = config.max_yaw_rps / max(config.max_yaw_rps, abs(requested))
+                result = DriveDecision(config.max_forward_mps * scale, 0.0, yaw,
+                                       "tracking_slow_turn" if scale < 1.0 else "tracking")
+            return road_state.limit(result, now=now, config=config) if road_state is not None and now is not None else result
     if path.vegetation_bias_active:
         # Use current robot-relative path error, not a constant sideways push:
         # a translated camera path reduces/stops vy as the robot reaches it.

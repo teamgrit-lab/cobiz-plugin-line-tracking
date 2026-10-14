@@ -82,12 +82,14 @@ from local_avoidance import AvoidanceConfig
 from lidar_runtime import LidarRuntime
 from local_path import (
     DEFAULT_ROI_POLYGON,
+    DEFAULT_ROAD_ROI_POLYGON,
     PATH_MASK_CLASSES,
     LocalPathConfig,
     LocalPathEstimate,
     LocalPathSmoother,
     SmoothedPath,
     extract_sidewalk_centerline,
+    extract_road_centerline,
     ground_to_pixel,
     normalized_polygon_pixels,
     pixel_to_ground_homography,
@@ -104,9 +106,11 @@ from swin_l_drive_control import (
     MAX_PATH_RECOVERY_INFERENCES,
     DriveConfig,
     DriveDecision,
+    RoadCenterState,
     PathLossRecovery,
     decide_drive,
     path_target_lateral,
+    road_path_errors,
 )
 from unitree_sport_api import (
     drive_to_sport_move,
@@ -239,7 +243,8 @@ def extract_path_estimates(selected_mask, mask_classes, config, vegetation_mask=
     estimates = {}
     for key in mask_classes:
         region = selected_path_region(selected_mask, key)
-        estimate = extract_sidewalk_centerline(region, config)
+        estimate = (extract_road_centerline(region, config) if key == 1
+                    else extract_sidewalk_centerline(region, config))
         if key == 2:
             estimate = bias_sidewalk_estimate(estimate, region, vegetation_mask, config)
         estimates[key] = estimate
@@ -306,6 +311,7 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         ground_half_width_m=args.ground_half_width_m,
         search_half_width_m=args.search_half_width_m,
         roi_polygon=polygon,
+        road_roi_polygon=_parse_polygon(args.road_roi_polygon),
         path_points=args.path_points,
         bev_width_px=args.bev_width_px,
         bev_height_px=args.bev_height_px,
@@ -328,6 +334,28 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
     )
 
 
+def _preview_drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
+    return DriveConfig(
+        vegetation_max_lateral_mps=args.vegetation_max_lateral_mps,
+        **{name: getattr(args, name) for name in DriveConfig.__dataclass_fields__ if name.startswith("road_")},
+    )
+
+
+def road_center_metrics(path, decision, config, state) -> dict:
+    enabled = bool(config and config.road_lateral_enabled and path and path.road_center_tracking)
+    errors = road_path_errors(path, config.lookahead_m) if enabled else None
+    active = bool(enabled and errors is not None and decision
+                  and decision.reason in ("tracking", "tracking_slow_turn"))
+    return {
+        "enabled": enabled, "active": active,
+        "mode": ("translate" if state.translating else "turn") if active else "inactive",
+        "lateral_error_m": errors[0] if errors else None,
+        "heading_error_deg": math.degrees(errors[1]) if errors else None,
+        "tangent_change_deg": math.degrees(errors[2]) if errors else None,
+        "command_lateral_mps": decision.vy if active else None,
+    }
+
+
 def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
     config = DriveConfig(
         max_forward_mps=args.max_forward_mps,
@@ -338,6 +366,7 @@ def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
         path_recovery_yaw_rps=args.path_recovery_yaw_rps,
         path_recovery_confirm_frames=args.path_recovery_confirm_frames,
         path_recovery_first_direction=args.path_recovery_first_direction,
+        **{name: getattr(args, name) for name in DriveConfig.__dataclass_fields__ if name.startswith("road_")},
         **{
             "stop_on_" + name: getattr(args, "stop_on_" + name)
             for name in DRIVE_STOP_CHECKS
@@ -549,7 +578,8 @@ def render_local_path_overlay(
     overlay = cv2.addWeighted(overlay, 0.70, sidewalk, 0.30, 0.0)
 
     if metric_projector is None:
-        roi = normalized_polygon_pixels(config.roi_polygon, frame_bgr.shape[:2])
+        roi = normalized_polygon_pixels(config.road_roi_polygon if path_mask_class == 1
+                                        else config.roi_polygon, frame_bgr.shape[:2])
         cv2.polylines(overlay, [roi.reshape(-1, 1, 2)], True, (255, 180, 0), 2)
         homography = pixel_to_ground_homography(frame_bgr.shape[:2], config)
     if estimate is not None:
@@ -624,7 +654,7 @@ def run_mcap(args):
         raise FileNotFoundError(f"MCAP input does not exist: {path}")
     with_path = args.overlay_mode == "local-path"
     local_config = _local_path_config_from_args(args) if with_path else None
-    preview_drive_config = DriveConfig(vegetation_max_lateral_mps=args.vegetation_max_lateral_mps)
+    preview_drive_config = _preview_drive_config_from_args(args)
     segmenter = BestSoFarSegmenter(_runtime_config(args))
     smoother = LocalPathSmoother(local_config) if with_path else None
     sensors = LidarRuntime(args, _lidar_config_from_args(args), _avoidance_config_from_args(args),
@@ -899,6 +929,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.camera_from_base = parse_transform(args.base_to_camera_transform)
             self.tf_buffer = self.tf_listener = None
             self.drive_config = _drive_config_from_args(args) if task_mode else None
+            self.road_center = RoadCenterState()
             self.obstacles = None
             self.lidar_subscriptions = []
             self.path_search = (
@@ -1244,6 +1275,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.path_recovery_inferences = 0
             if self.path_search is not None:
                 self.path_search.reset()
+            self.road_center.reset()
             if self.street_lights is not None:
                 self.street_lights.reset()
 
@@ -1307,6 +1339,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 camera_age_sec=camera_age_sec,
                 inference_age_sec=inference_age_sec,
                 config=self.drive_config,
+                road_state=self.road_center, now=now,
                 last_valid_yaw_rate=self.last_valid_yaw_rate,
                 last_valid_forward_mps=self.last_valid_forward_mps,
                 path_unavailable_inferences=self.path_unavailable_inferences,
@@ -1466,6 +1499,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             self.command_publisher.publish(message)
             self.path_search.record_command(decision, now=time.monotonic())
+            self.road_center.record_command(decision, now=time.monotonic())
             return decision
 
         def on_image(self, message: Any) -> None:
@@ -1634,8 +1668,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             else:
                 path = smoothers[mask_class].current(now)
                 if self.obstacles is not None:
-                    preview = decide_drive(path, camera_age_sec=0., inference_age_sec=0., config=DriveConfig(
-                        vegetation_max_lateral_mps=args.vegetation_max_lateral_mps))
+                    preview = decide_drive(path, camera_age_sec=0., inference_age_sec=0.,
+                                           config=_preview_drive_config_from_args(args))
                     self.obstacles.apply(preview, path, mask_class, now, self.get_clock().now().nanoseconds)
             # Real callbacks keep refreshing liveness after completion. Retain
             # the terminal display independently until control is released.
@@ -1656,6 +1690,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                                  "target_class": "Pole", "target_class_id": getattr(segmenter, "pole_id", None),
                                  **(self.street_lights.metrics if self.street_lights else {})},
                 "path_tracked": path is not None and path.stop_reason is None,
+                "road_center_control": road_center_metrics(
+                    path, drive_decision, self.drive_config, self.road_center),
                 "branch_selection": path.branch_status if path else {
                     "preference": local_config.branch_preference, "state": "idle",
                     "reason": "no_path", "branch_detected": False,
@@ -1913,6 +1949,18 @@ def run_ros2(args: argparse.Namespace) -> int:
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--path-frame-id", default=_env("SWIN_L_PATH_FRAME_ID", "base_link"))
+    parser.add_argument("--road-roi-polygon",
+                        default=_env("SWIN_L_ROAD_ROI_POLYGON", ",".join(map(str, DEFAULT_ROAD_ROI_POLYGON))),
+                        help="wide road selection ROI; does not change the ground calibration")
+    for name, value in asdict(DriveConfig()).items():
+        if not name.startswith("road_"):
+            continue
+        option = "--" + name.replace("_", "-")
+        env_name = "LINE_TRACKING_" + name.upper()
+        if isinstance(value, bool):
+            parser.add_argument(option, action=argparse.BooleanOptionalAction, default=_env_bool(env_name, value))
+        else:
+            parser.add_argument(option, type=float, default=_env_float(env_name, value))
     parser.add_argument(
         "--vegetation-max-lateral-mps", type=float,
         default=_env_float("LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS", 0.05),
@@ -2270,7 +2318,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         _lidar_config_from_args(args).validate()
         _avoidance_config_from_args(args).validate()
         _street_light_config_from_args(args).validate()
-        DriveConfig(vegetation_max_lateral_mps=args.vegetation_max_lateral_mps).validate()
+        _preview_drive_config_from_args(args).validate()
         if args.lidar_calibration_profile not in CALIBRATION_PROFILES:
             raise ValueError("invalid lidar calibration profile")
         parse_transform(args.lidar_to_base_transform)

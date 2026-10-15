@@ -462,8 +462,9 @@ LiDAR를 기둥 확인용으로만 켠다. PointCloud2와 CameraInfo를 구독�
   `.env`의 `LINE_TRACKING_STREET_LIGHT_CENTER_SHIFT_RATE_MPS`로 조정하며,
   허용 범위는 0 초과 0.5m/s 이하다. 이 값은 중앙 기준의 이동·복귀 속도이고,
   실제 로봇 횡속도 상한은 `LINE_TRACKING_ROAD_MAX_LATERAL_MPS`(기본 0.25m/s)를 따른다.
-  넓은 구간은 함께 옮기고 좁은 구간은 경계
-  여유(기본 0.45m)에 맞춰 이동량을 줄인다. 기존 평활 경로가 현재 검출 경계 밖에
+  넓은 구간은 함께 옮기고 좁은 구간은 차도 허용 영역 안에서
+  이동량을 줄인다. `CENTER_EDGE_MARGIN_M`(기본 0.45m)은 차도에서 이미 확보한
+  `ROAD_EDGE_MARGIN_M`을 뺀 추가 여유만 적용한다. 기존 평활 경로가 현재 검출 경계 밖에
   있는 지점에는 추가 편향을 주지 않는다. 기준은 매번 원래 중앙에서 계산하므로
   제어 반복으로 이동량이 누적되지 않는다.
   같은 차도 제어기가 이 기준을 추종한다. 직선에서는 전진과 횡이동으로 접근하고,
@@ -572,13 +573,16 @@ Its default bottom width is 84% of the image, top width is 24%, and height is
 SWIN_L_ROI_POLYGON=0.08,1.00,0.92,1.00,0.62,0.45,0.38,0.45
 ```
 
-Road selection (`selected_mask=1/3`) uses a separate convex polygon. The current
-9-point outline follows the user-marked road perspective: it narrows to
-x=45–51% at y=45%, widens toward the near road, and clips the lower corners.
-The previous rectangle was intended to keep wide road edges from being cropped.
+Road selection (`selected_mask=1/3`) uses a separate wide rectangular ROI:
+96% of the image width and the lower 53% (top at y=47%). This retains more of
+the visible road boundaries while the ground calibration stays unchanged.
 
 ```dotenv
-SWIN_L_ROAD_ROI_POLYGON=0.09,0.99,0.94,0.99,0.98,0.94,0.98,0.77,0.85,0.59,0.51,0.45,0.45,0.45,0.02,0.71,0.02,0.90
+SWIN_L_ROAD_ROI_POLYGON=0.02,1.00,0.98,1.00,0.98,0.47,0.02,0.47
+SWIN_L_ROAD_CLEARANCE_ENABLED=true
+SWIN_L_ROAD_EDGE_MARGIN_M=0.60
+SWIN_L_ROAD_HAZARD_MARGIN_M=0.60
+SWIN_L_ROAD_HAZARD_MIN_CONFIDENCE=0.50
 ```
 
 The setting accepts at least 3 normalized x/y pairs, ordered around a nonempty
@@ -591,10 +595,31 @@ The fitted path stays within its observed forward support and selected
 corridor. If neither edge is visible, the visible region supplies a provisional
 midpoint; a single image cannot establish the center of an unseen road.
 
+차도 모드 1·3은 같은 R50 추론의 현재 프레임 점수에서 `Vegetation`과 `Curb`를
+추출한다. 별도 모델 추론은 추가하지 않는다. `Vegetation`에는 풀뿐 아니라 수풀·나무도
+포함된다. 현재 클래스의 정규화 점수가 `ROAD_HAZARD_MIN_CONFIDENCE` 이상인 픽셀을
+사용하며, 이전 표면 EMA가 차도로 남아 있어도 현재 풀·연석 증거가 우선한다.
+
+차도 경계에서 기본 0.60m, 풀·연석에서 기본 0.60m의 경로 중심 여유를 지면 격자에서
+확보하고 남은 연결 영역의 중앙을 추종한다. 연석 너머의 더 큰 차도 조각으로 Path를
+이어 붙이지 않는다. 차도 또는 풀·연석 증거가 있는데 충분한 허용 경로를 얻지 못하면
+기존의 두 추론 전진 유예를 적용하지 않고 즉시 전진·횡이동을 중단한다. 이후 기존의
+대기·회전 탐색 복구를 따른다. 기존 평활 경로가 새 허용 영역 밖에 남으면 즉시 영역 안으로 제한한다.
+3번 Pole 편향에도 동일한 허용 영역이 우선하며, 선분이 풀·연석 제외 영역을 가로지르는
+편향은 적용하지 않는다. 이미 확보한 차도 경계 여유를 Pole 설정과 중복 차감하지 않는다.
+
+이 거리는 기존 영상–지면 보정에 따른 추정이며 차체 외곽에서 측정한 실거리나 모든
+연석의 검출을 보장하지 않는다. 카메라 입력 끊김과 촬영 이후 로봇 이동 보정 문제를
+이 변경으로 해결했다고 판단하지 않는다. `ROAD_CLEARANCE_ENABLED=false`로 이 제한을
+끄고 이전 차도 경로 추출과 비교할 수 있다. 0·2번 모드의 표면 선택·인도 편향은 유지한다.
+`metrics.road_center_control.clearance`에 적용 여유, 검출 픽셀 수, 허용 영역 크기와
+평활 Path 제한 여부를 기록한다.
+`metrics.road_clearance.blocked`는 새 추론에서 허용 경로가 막힌 상태를 나타낸다.
+
 An existing deployment `.env` overrides this default. Update its value and
-recreate the service to apply it. The ROI also defines the camera-to-ground
+recreate the service to apply it. Only `SWIN_L_ROI_POLYGON` defines the camera-to-ground
 homography: moving its top changes which pixels map to the configured 8 m far
-distance. Check known ground points after changing it; this setting does not
+distance. `SWIN_L_ROAD_ROI_POLYGON` changes selection only. Check known ground points after changing it; this setting does not
 measure the distance from the camera.
 
 1. Adjust `SWIN_L_ROI_POLYGON` while inspecting the

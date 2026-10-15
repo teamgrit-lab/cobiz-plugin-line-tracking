@@ -12,6 +12,8 @@ import local_path as lp
 import swin_l_local_path_debug as debug
 from swin_l_drive_control import DriveConfig, DriveDecision, RoadCenterState, decide_drive, road_path_errors
 
+PERSPECTIVE_ROI=(.09,.99,.94,.99,.98,.94,.98,.77,.85,.59,.51,.45,.45,.45,.02,.71,.02,.90)
+
 
 def road_path(offset=0., slope=0., curve=0.):
     xs=np.linspace(3.,8.,20)
@@ -42,10 +44,9 @@ def test_road_midpoint_uses_edges_beyond_the_old_search_width():
     assert np.median(before.points_xy[:,1]) < 1.0
     assert np.median(after.points_xy[:,1]) == pytest.approx(2.,abs=.10)
     assert after.road_center_tracking
-    assert after.road_corridor.shape == (config.path_points, 3)
-    assert np.all(after.road_corridor[:, 1] <= after.points_xy[:, 1])
-    assert np.all(after.road_corridor[:, 2] >= after.points_xy[:, 1])
-    assert after.mean_sidewalk_width_m > 7.8
+    assert after.road_corridor.shape[1] == 3
+    assert lp.road_path_within_corridor(after.points_xy,after.road_corridor)
+    assert after.mean_sidewalk_width_m > 6.5  # 0.6m reserved on each side.
     assert after.points_xy[0,0] >= after.raw_points_xy[:,0].min()
     assert after.points_xy[-1,0] <= after.raw_points_xy[:,0].max()
 
@@ -71,7 +72,7 @@ def test_invalid_road_roi_is_rejected(polygon):
     with pytest.raises(ValueError):replace(lp.LocalPathConfig(),road_roi_polygon=polygon).validate()
 
 
-@pytest.mark.parametrize('polygon',[lp.DEFAULT_ROAD_ROI_POLYGON,
+@pytest.mark.parametrize('polygon',[lp.DEFAULT_ROAD_ROI_POLYGON,PERSPECTIVE_ROI,
     (.08,1.,.92,1.,.5,.45),(.02,1.,.98,1.,.98,.42,.02,.42)])
 def test_road_roi_supports_multiple_vertices_from_env(monkeypatch,polygon):
     monkeypatch.setitem(debug.ENV,'SWIN_L_ROAD_ROI_POLYGON',','.join(map(str,polygon)))
@@ -84,7 +85,8 @@ def test_road_roi_supports_multiple_vertices_from_env(monkeypatch,polygon):
 
 
 def test_road_polygon_excludes_regions_outside_the_requested_outline():
-    config=lp.LocalPathConfig(close_kernel_px=0,min_valid_ratio=.05)
+    config=lp.LocalPathConfig(close_kernel_px=0,min_valid_ratio=.05,
+        road_roi_polygon=PERSPECTIVE_ROI,road_clearance_enabled=False)
     rectangle=replace(config,road_roi_polygon=(.02,1.,.98,1.,.98,.42,.02,.42))
     old_region=np.zeros((360,640),np.uint8);new_region=old_region.copy()
     cv2.fillConvexPoly(old_region,lp.normalized_polygon_pixels(rectangle.road_roi_polygon,old_region.shape),1)
@@ -95,8 +97,8 @@ def test_road_polygon_excludes_regions_outside_the_requested_outline():
 
 
 def test_ground_calibration_remains_a_four_point_polygon():
-    with pytest.raises(ValueError):replace(lp.LocalPathConfig(),roi_polygon=lp.DEFAULT_ROAD_ROI_POLYGON).validate()
-    with pytest.raises(SystemExit):debug.parse_args(['task-drive','--roi-polygon',','.join(map(str,lp.DEFAULT_ROAD_ROI_POLYGON))])
+    with pytest.raises(ValueError):replace(lp.LocalPathConfig(),roi_polygon=PERSPECTIVE_ROI).validate()
+    with pytest.raises(SystemExit):debug.parse_args(['task-drive','--roi-polygon',','.join(map(str,PERSPECTIVE_ROI))])
 
 
 def test_road_always_smooths_jitter_even_with_unrestricted_mode():

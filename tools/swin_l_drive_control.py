@@ -383,6 +383,7 @@ def decide_drive(
     path_recovery_inferences: int | None = None,
     road_state: RoadCenterState | None = None,
     now: float | None = None,
+    road_clearance_blocked: bool = False,
 ) -> DriveDecision:
     """Slow forward motion when heading demand exceeds available yaw rate.
 
@@ -414,6 +415,9 @@ def decide_drive(
         return DriveDecision.stop("path_low_confidence")
     lateral = path_target_lateral(path, config.lookahead_m)
     if lateral is None:
+        if road_clearance_blocked:
+            return DriveDecision.stop("path_recovery_waiting" if config.path_loss_recovery_enabled
+                                      else "road_clearance_unavailable")
         if config.path_loss_recovery_enabled and path_recovery_inferences is not None:
             if config.stop_on_path_unavailable:
                 return DriveDecision.stop("path_unavailable")

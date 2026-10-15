@@ -238,17 +238,24 @@ def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
     return 1 if selected == 3 else selected
 
 
-def extract_path_estimates(selected_mask, mask_classes, config, vegetation_mask=None):
+def extract_path_estimates(selected_mask, mask_classes, config, vegetation_mask=None,
+                          road_hazard_mask=None):
     """Semantic reference paths are independent of obstacle sensing."""
     estimates = {}
     for key in mask_classes:
         region = selected_path_region(selected_mask, key)
-        estimate = (extract_road_centerline(region, config) if key == 1
+        estimate = (extract_road_centerline(region, config, road_hazard_mask) if key == 1
                     else extract_sidewalk_centerline(region, config))
         if key == 2:
             estimate = bias_sidewalk_estimate(estimate, region, vegetation_mask, config)
         estimates[key] = estimate
     return estimates
+
+
+def _road_clearance_blocked(estimate, selected_mask, road_hazard_mask, config):
+    return bool(config.road_clearance_enabled and estimate is None
+                and (np.any(selected_mask == 1)
+                     or (road_hazard_mask is not None and np.any(road_hazard_mask))))
 
 
 def update_path_smoothers(
@@ -257,10 +264,12 @@ def update_path_smoothers(
     config: LocalPathConfig,
     timestamp_sec: float,
     vegetation_mask: np.ndarray | None = None,
+    road_hazard_mask: np.ndarray | None = None,
 ) -> dict[int, LocalPathEstimate | None]:
     """Keep all configured surface candidates current from one inference."""
 
-    estimates = extract_path_estimates(selected_mask, tuple(smoothers), config, vegetation_mask)
+    estimates = extract_path_estimates(selected_mask, tuple(smoothers), config, vegetation_mask,
+                                      road_hazard_mask)
     for mask_class, smoother in smoothers.items():
         smoother.update(estimates[mask_class], timestamp_sec)
     return estimates
@@ -314,6 +323,10 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         search_half_width_m=args.search_half_width_m,
         roi_polygon=polygon,
         road_roi_polygon=_parse_polygon(args.road_roi_polygon, quadrilateral=False),
+        road_clearance_enabled=args.road_clearance_enabled,
+        road_edge_margin_m=args.road_edge_margin_m,
+        road_hazard_margin_m=args.road_hazard_margin_m,
+        road_hazard_min_confidence=args.road_hazard_min_confidence,
         path_points=args.path_points,
         bev_width_px=args.bev_width_px,
         bev_height_px=args.bev_height_px,
@@ -356,6 +369,7 @@ def road_center_metrics(path, decision, config, state) -> dict:
         "tangent_change_deg": math.degrees(errors[2]) if errors else None,
         "command_lateral_mps": decision.vy if active else None,
         "reference_offset_m": path.road_center_offset_m if enabled else 0.0,
+        "clearance": path.road_clearance if enabled else None,
     }
 
 
@@ -677,6 +691,7 @@ def run_mcap(args):
     count = updates = 0
     next_inference = -math.inf
     previous_mask = None
+    clearance_blocked = False
     times = deque(maxlen=32)
     try:
         for schema, channel, message, decoded in _iter_mcap_events(path, tuple(topics), start_time_ns=start_ns):
@@ -702,13 +717,19 @@ def run_mcap(args):
                 overlay = segmenter.render_overlay(frame, result.selected_mask, frame_index=count, fps=args.output_fps)
             else:
                 if args.unrestricted_path_mode or now >= next_inference:
-                    result = segmenter.segment(
-                        frame, detect_vegetation=(args.path_mask_class == 2
-                                                 and local_config.sidewalk_vegetation_bias_m > 0))
+                    extras = {"detect_vegetation": (args.path_mask_class == 2
+                                                   and local_config.sidewalk_vegetation_bias_m > 0)}
+                    if args.path_mask_class == 1 and local_config.road_clearance_enabled:
+                        extras.update(detect_road_hazards=True,
+                                      road_hazard_min_confidence=local_config.road_hazard_min_confidence)
+                    result = segmenter.segment(frame, **extras)
                     previous_mask = result.selected_mask
                     estimate = extract_path_estimates(
                         previous_mask, (args.path_mask_class,), local_config,
-                        getattr(result, "vegetation_mask", None))[args.path_mask_class]
+                        getattr(result, "vegetation_mask", None),
+                        getattr(result, "road_hazard_mask", None))[args.path_mask_class]
+                    clearance_blocked = (args.path_mask_class == 1 and _road_clearance_blocked(
+                        estimate, previous_mask, getattr(result, "road_hazard_mask", None), local_config))
                     smoother.update(estimate, now)
                     if sensors:
                         sensors.set_reference(previous_mask, decoded.header, frame.shape[:2], now)
@@ -717,7 +738,8 @@ def run_mcap(args):
                     next_inference = now + 1 / args.inference_hz
                 current = smoother.current(now)
                 if sensors:
-                    nominal = decide_drive(current, camera_age_sec=0, inference_age_sec=0, config=preview_drive_config)
+                    nominal = decide_drive(current, camera_age_sec=0, inference_age_sec=0, config=preview_drive_config,
+                                           road_clearance_blocked=clearance_blocked)
                     sensors.apply(nominal, current, args.path_mask_class, now, message.log_time)
                 overlay = render_local_path_overlay(frame, previous_mask, estimate, current, local_config,
                     frame_index=count, inference_count=updates,
@@ -901,6 +923,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         "path_unavailable_inferences": {mask_class: 0 for mask_class in smoothers},
         "path_recovery_inferences": {key: 0 for key in smoothers},
         "semantic_path_missing": {key: False for key in smoothers},
+        "road_clearance_blocked": False,
         "performance_inference_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_processing_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_completion_times": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
@@ -1264,6 +1287,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 }
                 state["path_recovery_inferences"] = {key: 0 for key in smoothers}
                 state["semantic_path_missing"] = {key: False for key in smoothers}
+                state["road_clearance_blocked"] = False
                 state["pole_observations"] = ()
                 for key in (
                     "performance_inference_seconds", "performance_processing_seconds",
@@ -1325,6 +1349,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 ))
                 inference_id = int(state["inference_count"])
                 pole_observations = state["pole_observations"]
+                clearance_blocked = mask_class == 1 and state["road_clearance_blocked"]
                 if recovering and (path is None or path.stop_reason is None):
                     path = None
                 self.path_unavailable_inferences = state["path_unavailable_inferences"][
@@ -1346,6 +1371,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 last_valid_forward_mps=self.last_valid_forward_mps,
                 path_unavailable_inferences=self.path_unavailable_inferences,
                 path_recovery_inferences=self.path_recovery_inferences if recovering else None,
+                road_clearance_blocked=clearance_blocked,
             )
             decision = decide_drive(path, **drive_inputs)
             if lidar_avoidance:
@@ -1691,6 +1717,10 @@ def run_ros2(args: argparse.Namespace) -> int:
             if self.terminal_apriltag_status is not None:
                 tag_status = self.terminal_apriltag_status
             metrics = {
+                "road_clearance": {"enabled": mask_class == 1 and local_config.road_clearance_enabled,
+                    "blocked": mask_class == 1 and state["road_clearance_blocked"],
+                    "edge_margin_m": local_config.road_edge_margin_m,
+                    "hazard_margin_m": local_config.road_hazard_margin_m},
                 "lidar_obstacles": {"enabled": self.obstacles is not None,
                     "topic": args.lidar_topic, "expected_hz": 10,
                     "control_hz": (args.output_hz if self.obstacles is not None
@@ -1857,12 +1887,18 @@ def run_ros2(args: argparse.Namespace) -> int:
                         2 in smoothers and local_config.sidewalk_vegetation_bias_m > 0
                         and (not task_mode or (node.tasks.active is not None
                                                and node.tasks.active.selected_mask == 2)))
+                    detect_road_hazards = (local_config.road_clearance_enabled and
+                        (not task_mode or (node.tasks.active is not None
+                                          and node.tasks.active.selected_mask in (1, 3))))
                 segment_kwargs = {"color_order": "rgb"}
                 if detect_vegetation:
                     segment_kwargs["detect_vegetation"] = True
                 if detect_poles:
                     segment_kwargs.update(detect_poles=True,
                                           pole_min_confidence=args.street_light_min_confidence)
+                if detect_road_hazards:
+                    segment_kwargs.update(detect_road_hazards=True,
+                        road_hazard_min_confidence=local_config.road_hazard_min_confidence)
                 result: BestSoFarResult = segmenter.segment(frame_rgb, **segment_kwargs)
                 with state_lock:
                     if not latest.is_current(packet):
@@ -1873,7 +1909,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path_updated_at = time.monotonic()
                 estimates = extract_path_estimates(
                     result.selected_mask, tuple(smoothers), local_config,
-                    getattr(result, "vegetation_mask", None))
+                    getattr(result, "vegetation_mask", None),
+                    getattr(result, "road_hazard_mask", None))
                 recovery_enabled = task_mode and node.drive_config.path_loss_recovery_enabled
                 semantic_missing = {key: recovery_enabled and estimates[key] is None for key in smoothers}
                 with state_lock:
@@ -1910,6 +1947,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                                 recovery_counts[mask_class] += 1
                             counts[mask_class] = 0 if available else counts[mask_class] + 1
                     state["header"] = packet.source_header
+                    state["road_clearance_blocked"] = _road_clearance_blocked(
+                        estimates.get(1), result.selected_mask,
+                        getattr(result, "road_hazard_mask", None), local_config)
                     state["pole_observations"] = street_light_observations(
                         getattr(result, "pole_mask", None), args.street_light_min_area_px)
                     completed_before = int(state["inference_count"])
@@ -1967,6 +2007,12 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--road-roi-polygon",
                         default=_env("SWIN_L_ROAD_ROI_POLYGON", ",".join(map(str, DEFAULT_ROAD_ROI_POLYGON))),
                         help="convex road selection polygon (at least 3 normalized x/y pairs); does not change the ground calibration")
+    parser.add_argument("--road-clearance-enabled", action=argparse.BooleanOptionalAction,
+                        default=_env_bool("SWIN_L_ROAD_CLEARANCE_ENABLED", True))
+    for name, value in (("road_edge_margin_m", 0.60), ("road_hazard_margin_m", 0.60),
+                        ("road_hazard_min_confidence", 0.50)):
+        parser.add_argument("--" + name.replace("_", "-"), type=float,
+                            default=_env_float("SWIN_L_" + name.upper(), value))
     for name, value in asdict(DriveConfig()).items():
         if not name.startswith("road_"):
             continue

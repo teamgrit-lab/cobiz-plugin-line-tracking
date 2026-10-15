@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from local_path import SmoothedPath
+from local_path import SmoothedPath, road_path_within_corridor
 from swin_l_drive_control import path_target_lateral, road_base_path
 
 
@@ -373,7 +373,9 @@ class StreetLightApproach:
             return path
         lower = np.interp(points[:, 0], corridor[:, 0], corridor[:, 1])
         upper = np.interp(points[:, 0], corridor[:, 0], corridor[:, 2])
-        margin = np.minimum(c.center_edge_margin_m, np.maximum(0., (upper - lower) / 2))
+        applied_margin = (path.road_clearance or {}).get("edge_margin_m", 0.0)
+        margin = np.minimum(max(0., c.center_edge_margin_m - applied_margin),
+                            np.maximum(0., (upper - lower) / 2))
         minimum = lower + margin - points[:, 1]
         maximum = upper - margin - points[:, 1]
         # A lagging smoothed point may already lie outside today's corridor.
@@ -432,5 +434,14 @@ class StreetLightApproach:
             return path
         shifted = points.copy()
         shifted[:, 1] += offsets
+        if path.road_clearance is not None and not road_path_within_corridor(shifted, corridor):
+            # A shifted straight segment can cut through a concave clearance
+            # boundary between waypoints. Keep the already verified base path.
+            self.center_offset_m = 0.0
+            self.center_offsets_xy = None
+            self.metrics.update(bias_active=False, center_offset_m=0.0,
+                                max_reference_offset_m=0.0, road_edge_limited=True,
+                                bias_reason="road_clearance_limited")
+            return path
         return replace(path, points_xy=shifted, road_center_offset_m=offset,
                        road_center_base_points_xy=points.copy())

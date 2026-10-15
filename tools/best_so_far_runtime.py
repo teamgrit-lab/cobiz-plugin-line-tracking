@@ -274,6 +274,7 @@ class BestSoFarResult:
     sidewalk_area_ratio: float
     pole_mask: np.ndarray | None = None
     vegetation_mask: np.ndarray | None = None
+    road_hazard_mask: np.ndarray | None = None
 
 
 def _changed_pixel_hysteresis_hold_mask(
@@ -425,6 +426,8 @@ class BestSoFarSegmenter:
                              if str(name).strip().lower() == "pole"), None)
         self.vegetation_id = next((int(key) for key, name in id2label.items()
                                   if str(name).strip().lower() == "vegetation"), None)
+        self.road_hazard_ids = tuple(int(key) for key, name in id2label.items()
+                                     if str(name).strip().lower() in {"vegetation", "curb"})
         self.model_load_seconds = time.perf_counter() - load_started
         self._previous_scores: torch.Tensor | None = None
         self._previous_selected: np.ndarray | None = None
@@ -678,6 +681,7 @@ class BestSoFarSegmenter:
         self, frame: np.ndarray, *, color_order: str = "bgr",
         detect_poles: bool = False, pole_min_confidence: float = 0.5,
         detect_vegetation: bool = False,
+        detect_road_hazards: bool = False, road_hazard_min_confidence: float = 0.5,
     ) -> BestSoFarResult:
         """Segment a BGR image, or native RGB from the live camera worker."""
 
@@ -696,14 +700,17 @@ class BestSoFarSegmenter:
 
         pole_mask = None
         vegetation_mask = None
+        road_hazard_mask = None
+        if detect_poles or detect_vegetation or detect_road_hazards:
+            # All optional classes share the same forward pass and reductions.
+            current_class = scores.argmax(dim=0)
+            current_confidence = scores.gather(0, current_class.unsqueeze(0))[0].float() / scores.sum(
+                dim=0, dtype=torch.float32).clamp_min(1e-8)
         if detect_vegetation and self.vegetation_id is not None:
             # Current-frame evidence avoids steering toward vanished vegetation
             # retained by the road/sidewalk EMA. Mapillary has no grass-only label.
-            confidence = scores[self.vegetation_id].float() / scores.sum(
-                dim=0, dtype=torch.float32
-            ).clamp_min(1e-8)
-            vegetation_mask = ((scores.argmax(dim=0) == self.vegetation_id)
-                               & (confidence >= 0.5)).cpu().numpy()
+            vegetation_mask = ((current_class == self.vegetation_id)
+                               & (current_confidence >= 0.5)).cpu().numpy()
         if detect_poles:
             if self.pole_id is None:
                 raise RuntimeError("model is missing Pole label")
@@ -711,9 +718,16 @@ class BestSoFarSegmenter:
                 raise ValueError("Pole confidence must be in (0, 1]")
             # Use current-frame scores, not the surface EMA: a vanished pole
             # must never leave a ghost target commanding lateral motion.
-            confidence = scores[self.pole_id].float() / scores.sum(dim=0, dtype=torch.float32).clamp_min(1e-8)
-            pole_mask = ((scores.argmax(dim=0) == self.pole_id)
-                         & (confidence >= pole_min_confidence)).cpu().numpy()
+            pole_mask = ((current_class == self.pole_id)
+                         & (current_confidence >= pole_min_confidence)).cpu().numpy()
+        if detect_road_hazards:
+            if not 0 < road_hazard_min_confidence <= 1:
+                raise ValueError("road hazard confidence must be in (0, 1]")
+            hazard = torch.zeros_like(current_class, dtype=torch.bool)
+            for label in getattr(self, "road_hazard_ids", ()):
+                hazard |= current_class == label
+            # Fresh evidence overrides a road/sidewalk EMA ghost at the boundary.
+            road_hazard_mask = (hazard & (current_confidence >= road_hazard_min_confidence)).cpu().numpy()
 
         if self._previous_scores is None:
             # TensorRT owns and reuses its output allocation. Keep temporal
@@ -753,6 +767,7 @@ class BestSoFarSegmenter:
             sidewalk_area_ratio=float(np.mean(selected == 2)),
             pole_mask=pole_mask,
             vegetation_mask=vegetation_mask,
+            road_hazard_mask=road_hazard_mask,
         )
 
     def render_overlay(

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Iterable
 
 import cv2
 import numpy as np
+from scipy.optimize import LinearConstraint, minimize
 
 if TYPE_CHECKING:
     from branch_path import BranchObservation
@@ -194,9 +195,54 @@ class SmoothedPath:
     vegetation_bias_active: bool = False
     road_center_tracking: bool = False
     road_corridor: np.ndarray | None = None
-    road_center_offset_m: float = 0.0
-    road_center_base_points_xy: np.ndarray | None = None
     road_clearance: dict | None = None
+
+
+@dataclass(frozen=True)
+class RoadPathResult:
+    """Separate an unobserved/failed fit from a corridor excluded by clearance."""
+
+    estimate: LocalPathEstimate | None
+    status: str
+    reason: str
+    clearance: dict
+    allowed_mask: np.ndarray
+    x_values: np.ndarray
+    y_values: np.ndarray
+
+    @property
+    def blocked(self) -> bool:
+        return self.status == "blocked"
+
+    def corridor_for(self, points: np.ndarray) -> np.ndarray | None:
+        """Validate a previous path against every row of the *current* mask."""
+        if points is None or len(points) < 2 or not np.isfinite(points).all():
+            return None
+        xs, ys = self.x_values, self.y_values
+        if points[0, 0] < xs[0] - 1e-6 or points[-1, 0] > xs[-1] + 1e-6:
+            return None
+        rows = np.flatnonzero((xs >= points[0, 0] - 1e-6) & (xs <= points[-1, 0] + 1e-6))
+        if len(rows) < 2:
+            return None
+        values = np.interp(xs[rows], points[:, 0], points[:, 1])
+        spacing = float(abs(ys[1] - ys[0]))
+        # Vectorize the fresh-mask check: per-row scans are costly on Jetson
+        # while other ROS/video processes compete for its CPU cores.
+        columns = np.rint(np.interp(values, ys[::-1],
+                                   np.arange(len(ys))[::-1])).astype(np.intp)
+        allowed = self.allowed_mask[rows] > 0
+        if (np.any(abs(ys[columns] - values) > spacing / 2 + 1e-5)
+                or not np.all(allowed[np.arange(len(rows)), columns])):
+            return None
+        grid_columns = np.arange(len(ys))[None, :]
+        left = np.max(np.where((grid_columns < columns[:, None]) & ~allowed,
+                               grid_columns, -1), axis=1) + 1
+        right = np.min(np.where((grid_columns > columns[:, None]) & ~allowed,
+                                grid_columns, len(ys)), axis=1) - 1
+        # Stay inside the pixel cell despite float32 boundary rounding.
+        corridor = np.column_stack((xs[rows], ys[right] - spacing / 2 + 1e-4,
+                                    ys[left] + spacing / 2 - 1e-4)).astype(np.float32)
+        return corridor if road_path_within_corridor(points, corridor) else None
 
 
 def normalized_polygon_pixels(
@@ -376,13 +422,76 @@ def _metric_margin_kernel(margin: float, xs: np.ndarray, ys: np.ndarray) -> np.n
 
 def road_path_within_corridor(points: np.ndarray, corridor: np.ndarray) -> bool:
     """Check the segments between published points, not only their endpoints."""
+    if (len(points) < 2 or len(corridor) < 2 or not np.isfinite(points).all()
+            or not np.isfinite(corridor).all() or np.any(np.diff(points[:, 0]) <= 0)):
+        return False
     xs = corridor[:, 0]
+    if points[0, 0] < xs[0] - 1e-5 or points[-1, 0] > xs[-1] + 1e-5:
+        return False
+    lower = np.interp(points[:, 0], xs, corridor[:, 1])
+    upper = np.interp(points[:, 0], xs, corridor[:, 2])
+    if np.any(points[:, 1] < lower - 1e-5) or np.any(points[:, 1] > upper + 1e-5):
+        return False
     keep = (xs >= points[0, 0] - 1e-6) & (xs <= points[-1, 0] + 1e-6)
     if not np.any(keep):
         return False
     values = np.interp(xs[keep], points[:, 0], points[:, 1])
     return bool(np.all(values >= corridor[keep, 1] - 1e-5)
                 and np.all(values <= corridor[keep, 2] + 1e-5))
+
+
+def regenerate_road_path(points: np.ndarray, corridor: np.ndarray) -> tuple[np.ndarray | None, str]:
+    """Fit inside dense bounds, preferring a straight line over new curvature.
+
+    If no single line fits a curved corridor, retain the valid portions of the
+    original fit and insert the offending row knots. Each insertion is bounded
+    by the current corridor; the final segments must pass the same hard check.
+    """
+    if len(points) < 2 or not np.isfinite(points).all():
+        return None, "nonfinite_fit"
+    if road_path_within_corridor(points, corridor):
+        return points, "original_fit"
+    if (len(corridor) < 2 or not np.isfinite(corridor).all()
+            or np.any(corridor[:, 1] > corridor[:, 2])):
+        return None, "invalid_corridor"
+    xs = corridor[:, 0].astype(np.float64)
+    midpoint = corridor[:, 1:].mean(axis=1).astype(np.float64)
+    # Scale x so numerical conditioning does not depend on forward distance.
+    origin, span = float(xs[0]), float(xs[-1] - xs[0])
+    if span <= 0:
+        return None, "invalid_corridor"
+    design = np.column_stack(((xs - origin) / span, np.ones(len(xs))))
+    inset = np.minimum(.01, (corridor[:, 2] - corridor[:, 1]) * .05)
+    lower, upper = corridor[:, 1] + inset, corridor[:, 2] - inset
+    try:
+        initial = np.linalg.lstsq(design, midpoint, rcond=None)[0]
+        fit = minimize(lambda q: float(np.mean((design @ q - midpoint) ** 2)), initial,
+            jac=lambda q: 2 * design.T @ (design @ q - midpoint) / len(xs),
+            method="SLSQP", constraints=[LinearConstraint(design, lower, upper)],
+            options={"ftol": 1e-9, "maxiter": 60})
+        candidate = np.column_stack((points[:, 0],
+            (points[:, 0] - origin) / span * fit.x[0] + fit.x[1])).astype(np.float32)
+        if fit.success and road_path_within_corridor(candidate, corridor):
+            return candidate, "constrained_line"
+    except (ValueError, FloatingPointError, np.linalg.LinAlgError):
+        pass
+    # An adaptive polyline handles bends that cannot contain a single line.
+    # In the worst case it has one knot per observed row (at most BEV height).
+    knots = {float(x): float(np.clip(y, np.interp(x, xs, lower),
+                                     np.interp(x, xs, upper))) for x, y in points}
+    knots[float(xs[0])] = float(np.clip(np.interp(xs[0], points[:, 0], points[:, 1]), lower[0], upper[0]))
+    knots[float(xs[-1])] = float(np.clip(np.interp(xs[-1], points[:, 0], points[:, 1]), lower[-1], upper[-1]))
+    for _ in range(len(xs) + 1):
+        candidate = np.asarray(sorted(knots.items()), np.float32)
+        if road_path_within_corridor(candidate, corridor):
+            return candidate, "constrained_polyline"
+        values = np.interp(xs, candidate[:, 0], candidate[:, 1])
+        violation = np.maximum(lower - values, values - upper)
+        row = int(np.argmax(violation))
+        if violation[row] <= 1e-6:
+            break
+        knots[float(xs[row])] = float(np.clip(values[row], lower[row], upper[row]))
+    return None, "fit_failed"
 
 
 def _nearest_road_component(region: np.ndarray, ys: np.ndarray) -> np.ndarray:
@@ -403,6 +512,11 @@ def _nearest_road_component(region: np.ndarray, ys: np.ndarray) -> np.ndarray:
 
 def extract_road_centerline(road_mask: np.ndarray, config: LocalPathConfig,
                             road_hazard_mask: np.ndarray | None = None) -> LocalPathEstimate | None:
+    return analyze_road_path(road_mask, config, road_hazard_mask).estimate
+
+
+def analyze_road_path(road_mask: np.ndarray, config: LocalPathConfig,
+                      road_hazard_mask: np.ndarray | None = None) -> RoadPathResult:
     """Find the whole visible road midpoint, retaining connected branch guards."""
     config.validate()
     mask = np.asarray(road_mask, np.uint8)
@@ -417,6 +531,7 @@ def extract_road_centerline(road_mask: np.ndarray, config: LocalPathConfig,
         kernel = np.ones((config.close_kernel_px, config.close_kernel_px), np.uint8)
         birdseye = cv2.morphologyEx(observed, cv2.MORPH_CLOSE, kernel)
     clearance = None
+    before_clearance = birdseye
     if config.road_clearance_enabled:
         # The crop boundary does not invent a hazard beyond the metric grid.
         inner = cv2.erode(observed, _metric_margin_kernel(config.road_edge_margin_m, xs, ys),
@@ -436,8 +551,26 @@ def extract_road_centerline(road_mask: np.ndarray, config: LocalPathConfig,
                      "allowed_road_pixels": int(np.count_nonzero(birdseye)),
                      "path_clamped": False}
     estimate = extract_metric_centerline(birdseye, xs, ys, effective, unclosed=observed)
+    def result(estimate, status, reason):
+        metrics = {**(clearance or {}), "status": status, "reason": reason,
+                   "blocked": status == "blocked", "using_previous_path": False}
+        if estimate is not None and clearance is not None:
+            estimate = replace(estimate, road_clearance=metrics)
+        analyzed = RoadPathResult(estimate, status, reason, metrics, birdseye, xs, ys)
+        if estimate is not None and clearance is not None:
+            fresh_corridor = analyzed.corridor_for(estimate.points_xy)
+            if fresh_corridor is None:
+                return result(None, "calculation_failed", "fresh_mask_validation_failed")
+            analyzed = replace(analyzed, estimate=replace(estimate, road_corridor=fresh_corridor))
+        return analyzed
     if estimate is None:
-        return None
+        # Evidence elsewhere in the image does not prove this corridor is
+        # blocked. Compare the visible road with and without the exclusions.
+        baseline = (extract_metric_centerline(_nearest_road_component(before_clearance, ys),
+                    xs, ys, effective, unclosed=observed) if clearance is not None else None)
+        if baseline is not None:
+            return result(None, "blocked", "clearance_leaves_no_passage")
+        return result(None, "insufficient_observation", "insufficient_road_support")
     raw = estimate.raw_points_xy
     support = cv2.remap(roi, mx, my, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
     widths, complete = [], []
@@ -463,11 +596,17 @@ def extract_road_centerline(road_mask: np.ndarray, config: LocalPathConfig,
     widths = np.asarray(widths)
     # Start with a line: segmentation edge jitter must not invent an S bend.
     # Accept a quadratic only with broad support and a clear improvement.
-    coefficients = np.polyfit(raw[:, 0], raw[:, 1], 1)
+    try:
+        coefficients = np.polyfit(raw[:, 0], raw[:, 1], 1)
+    except (ValueError, FloatingPointError, np.linalg.LinAlgError):
+        return result(None, "calculation_failed", "linear_fit_failed")
     residual = raw[:, 1] - np.polyval(coefficients, raw[:, 0])
     linear_rms = float(np.sqrt(np.mean(residual ** 2)))
     if config.fit_degree >= 2 and np.ptp(raw[:, 0]) >= 2.5 and linear_rms > 0.20:
-        quadratic = np.polyfit(raw[:, 0], raw[:, 1], 2)
+        try:
+            quadratic = np.polyfit(raw[:, 0], raw[:, 1], 2)
+        except (ValueError, FloatingPointError, np.linalg.LinAlgError):
+            quadratic = coefficients
         rms = float(np.sqrt(np.mean((raw[:, 1] - np.polyval(quadratic, raw[:, 0])) ** 2)))
         if rms < linear_rms * 0.65:
             coefficients = quadratic
@@ -480,16 +619,25 @@ def extract_road_centerline(road_mask: np.ndarray, config: LocalPathConfig,
     fitted = np.polyval(coefficients, forward)
     fitted = np.clip(fitted, centers - half + margin, centers + half - margin)
     points = np.column_stack((forward, fitted)).astype(np.float32)
-    # Keep dense row constraints so smoothing and Pole offsets cannot cut
+    # Keep dense row constraints so smoothing cannot cut
     # through a narrow excluded strip between the published path points.
     corridor = np.column_stack((raw[:, 0], raw[:, 1] - widths / 2,
                                 raw[:, 1] + widths / 2)).astype(np.float32)
+    corridor[:, 1] += 1e-4
+    corridor[:, 2] -= 1e-4
     if clearance is not None and not road_path_within_corridor(points, corridor):
-        return None
-    return replace(estimate, points_xy=points,
+        points, method = regenerate_road_path(points, corridor)
+        if points is None:
+            return result(None, "calculation_failed", method)
+        clearance["regeneration_method"] = method
+    elif clearance is not None:
+        clearance["regeneration_method"] = "original_fit"
+    estimate = replace(estimate, points_xy=points,
                    raw_points_xy=raw, mean_sidewalk_width_m=float(np.mean(widths)),
                    road_corridor=corridor, road_clearance=clearance,
                    road_center_tracking=True)
+    return result(estimate, "regenerated" if clearance is not None and
+                  clearance["regeneration_method"] != "original_fit" else "valid", "path_available")
 
 
 def extract_sidewalk_centerline(
@@ -636,6 +784,7 @@ class LocalPathSmoother:
         self._road_center_tracking = False
         self._road_corridor = None
         self._road_clearance = None
+        self._road_validation_hold = False
 
     def reset(self, *, preserve_branch: bool = False) -> None:
         """Discard path history, retaining a committed fork on sensor loss if requested."""
@@ -651,11 +800,31 @@ class LocalPathSmoother:
             self._road_center_tracking = False
             self._road_corridor = None
             self._road_clearance = None
+            self._road_validation_hold = False
+
+    def update_road(self, result: RoadPathResult, timestamp_sec: float) -> SmoothedPath | None:
+        """Hold only a recent path revalidated against fresh allowed pixels."""
+        if result.estimate is not None:
+            return self.update(result.estimate, timestamp_sec)
+        with self._lock:
+            recent = (self._last_update is not None and
+                      0 <= timestamp_sec - self._last_update <= self.config.path_hold_sec)
+            if not result.blocked and recent and self._road_center_tracking and self._stop_reason is None:
+                corridor = result.corridor_for(self._points)
+                if corridor is not None:
+                    self._road_corridor = corridor
+                    self._road_clearance = {**result.clearance, "using_previous_path": True}
+                    self._road_validation_hold = True
+                    # Never refresh the age with a failed extraction.
+                    return self._current_unlocked(timestamp_sec)
+        self.reset(preserve_branch=True)
+        return self.update(None, timestamp_sec)
 
     def update(
         self, estimate: LocalPathEstimate | None, timestamp_sec: float
     ) -> SmoothedPath | None:
         with self._lock:
+            self._road_validation_hold = False
             choice = self._branch_selector.update(estimate, timestamp_sec)
             estimate = choice.estimate
             self._stop_reason = choice.stop_reason
@@ -754,7 +923,7 @@ class LocalPathSmoother:
             return None
         age = max(timestamp_sec - self._last_update, 0.0)
         unrestricted = self.config.unrestricted_path_mode
-        if self._stop_reason is None and not unrestricted and age > self.config.path_hold_sec:
+        if self._stop_reason is None and (not unrestricted or self._road_validation_hold) and age > self.config.path_hold_sec:
             return None
         return SmoothedPath(
             points_xy=self._points.copy(),
@@ -762,6 +931,7 @@ class LocalPathSmoother:
             age_sec=float(age),
             source=(
                 "branch_guard" if self._stop_reason else
+                "road_validated_hold" if self._road_validation_hold else
                 "selected_branch" if self._constrained_branch else
                 "raw_latest"
                 if unrestricted and not self._road_center_tracking

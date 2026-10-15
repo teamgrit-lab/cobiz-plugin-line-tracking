@@ -30,31 +30,15 @@ def test_sidewalk_is_the_default_path_class(monkeypatch):
     assert debug.parse_args(["ros2"]).path_mask_class == 2
 
 
-def test_street_light_scenario_uses_road_and_is_task_drive_only():
-    assert debug.parse_args(["task-drive", "--path-mask-class", "3"]).path_mask_class == 3
-    active = ActiveTask("light", "light", None, None, 10.0, 30.0, 3)
-    assert debug.active_path_mask_class(active, 2) == 1
-    assert debug.active_path_mask_class(None, 3) == 1
-    with pytest.raises(SystemExit):
-        debug.parse_args(["ros2", "--path-mask-class", "3"])
-
-
-@pytest.mark.parametrize("rate", ["0.05", "0.25", "0.5"])
-def test_pole_reference_rate_can_be_configured_from_env(monkeypatch, rate):
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STREET_LIGHT_CENTER_SHIFT_RATE_MPS", rate)
-    config = debug._street_light_config_from_args(debug.parse_args(["task-drive"]))
-    config.validate()
-    assert config.center_shift_rate_mps == float(rate)
-
-
-def test_pole_reference_default_rate_matches_road_lateral_cap(monkeypatch):
-    monkeypatch.delitem(debug.ENV, "LINE_TRACKING_STREET_LIGHT_CENTER_SHIFT_RATE_MPS", raising=False)
-    config = debug._street_light_config_from_args(debug.parse_args(["task-drive"]))
-    config.validate()
-    assert config.center_shift_rate_mps == 0.25
-    road_config = debug._drive_config_from_args(debug.parse_args(["task-drive"]))
-    road_config.validate()
-    assert road_config.road_max_lateral_mps == config.center_shift_rate_mps
+@pytest.mark.parametrize("mode", ["ros2", "task-drive", "mcap"])
+def test_removed_mode_is_rejected_by_every_command_line_entrypoint(mode, tmp_path):
+    arguments = [mode, "--path-mask-class", "3"]
+    if mode == "mcap":
+        arguments += ["--input", str(tmp_path / "input.mcap"),
+                      "--output", str(tmp_path / "output.mp4")]
+    with pytest.raises(SystemExit) as error:
+        debug.parse_args(arguments)
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize("mask_class", [0, 1, 2])
@@ -77,7 +61,7 @@ def test_command_line_can_override_env_for_offline_path_preview(
     assert args.path_mask_class == mask_class
 
 
-@pytest.mark.parametrize("value", ["-1", "4", "road", ""])
+@pytest.mark.parametrize("value", ["-1", "3", "4", "road", ""])
 def test_invalid_path_class_fails_before_ros_starts(monkeypatch, value):
     monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", value)
 

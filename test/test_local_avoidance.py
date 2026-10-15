@@ -49,52 +49,6 @@ def test_clear_space_preserves_small_vegetation_velocity_and_zero_yaw(sign):
     assert command.vy == pytest.approx(sign * 0.04)
 
 
-@pytest.mark.parametrize("sign", [-1, 1])
-def test_light_bias_preserves_forward_speed_under_lateral_caps(sign):
-    config = AvoidanceConfig(max_lateral_mps=0.03)
-    controller = AvoidanceController(config, C)
-    nominal = DriveDecision(0.05, sign * 0.15, 0.0, "street_light_approaching")
-    for tick in range(20):
-        now = tick * 0.05
-        scan = replace(scene(), arrival=now, stamp_ns=100_000_000_000 + round(now * 1e9))
-        command = controller.apply_direct(nominal, scan, np.ones(C.shape, bool),
-                                          now=now, clock_ns=scan.stamp_ns)
-        assert command.reason == "street_light_approaching"
-        assert command.yaw_rate == 0
-        assert command.vy * sign > 0
-    assert abs(command.vy) == pytest.approx(0.03)
-    assert command.vx == pytest.approx(nominal.vx)
-
-
-def test_blocked_light_bias_falls_back_without_resetting_forward_ramp():
-    controller = AvoidanceController(AvoidanceConfig(), C)
-    region = np.abs(C.centers()[..., 1]) <= C.robot_half_width_m + C.margin_m
-    for tick in range(30):
-        now = tick * 0.05
-        scan = replace(scene(), arrival=now, stamp_ns=100_000_000_000 + round(now * 1e9))
-        command = controller.apply_direct(
-            DriveDecision(0.2, 0.15, 0.0, "street_light_approaching"), scan, region,
-            now=now, clock_ns=scan.stamp_ns,
-            fallback=lambda _reason: controller.apply(
-                NOMINAL, path(), scan, region, now=now, clock_ns=scan.stamp_ns))
-        assert command.reason == "lidar_tracking"
-        assert command.vx > 0 and command.vy == 0
-    assert command.vx == pytest.approx(NOMINAL.vx)
-
-
-@pytest.mark.parametrize("fault", ["collision", "unknown", "semantic_edge"])
-def test_scenario_direct_velocity_cannot_bypass_swept_footprint_checks(fault):
-    controller = AvoidanceController(AvoidanceConfig(), C)
-    scan = scene([[0.7, 0.0]]) if fault == "collision" else scene()
-    if fault == "unknown":
-        scan = replace(scan, observed=np.zeros(C.shape, bool))
-    region = np.zeros(C.shape, bool) if fault == "semantic_edge" else np.ones(C.shape, bool)
-    command = controller.apply_direct(
-        DriveDecision(0.05, 0.15, 0.0, "street_light_approaching"), scan, region,
-        now=0.0, clock_ns=scan.stamp_ns)
-    assert command.vx == command.vy == command.yaw_rate == 0
-
-
 @pytest.mark.parametrize("preference,sign", [("right", -1), ("left", 1)])
 def test_head_on_symmetry_is_broken_by_configured_side(preference, sign):
     ctrl = AvoidanceController(AvoidanceConfig(preference=preference), C)

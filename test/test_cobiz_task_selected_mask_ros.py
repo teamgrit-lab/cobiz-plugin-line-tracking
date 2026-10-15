@@ -17,6 +17,45 @@ import swin_l_local_path_debug as debug  # noqa: E402
 from swin_l_drive_control import DriveDecision  # noqa: E402
 
 
+@pytest.mark.parametrize("as_json", [False, True])
+def test_removed_mode_does_not_start_control_or_disrupt_a_supported_task(monkeypatch, as_json):
+    from test_apriltag_task_stop_ros import Message, RosHarness, SPORT
+
+    ros = RosHarness(monkeypatch)
+
+    def request(node, task_id):
+        payload = {"selected_mask": 3, "duration_sec": 30}
+        node.on_task_event(Message(json.dumps({
+            "type": "TASK_REGISTERED", "action_name": "LINE_TRACKING",
+            "task_id": task_id, "payload": json.dumps(payload) if as_json else payload,
+        })))
+        assert ros.task_state()["type"] == "TASK_REJECTED"
+
+    def scenario(node):
+        request(node, "removed-idle")
+        assert ros.task_state()["reason"] == "invalid_selected_mask"
+        assert node.tasks.active is None and node.command_publisher is None
+        assert not ros.published.get(SPORT)
+        assert node.obstacles is None
+        assert debug.DEFAULT_LIDAR_TOPIC not in ros.subscriptions
+        assert debug.DEFAULT_IMU_TOPIC not in ros.subscriptions
+        node.publish_state()
+        assert not ros.metrics()["inference_enabled"]
+
+        ros.establish_tracking()
+        active = node.tasks.active
+        count = len(ros.published[SPORT])
+        request(node, "removed-busy")
+        assert node.tasks.active is active
+        assert len(ros.published[SPORT]) == count
+        node.publish_state()
+        assert ros.metrics()["drive_reason"] == "tracking"
+        assert "street_light" not in ros.metrics()
+        assert json.loads(ros.published[SPORT][-1].parameter)["x"] > 0
+
+    ros.run(scenario, "--branch-preference", "center")
+
+
 @pytest.mark.parametrize(
     "preexisting_control_publishers",
     [0, 1, 5],

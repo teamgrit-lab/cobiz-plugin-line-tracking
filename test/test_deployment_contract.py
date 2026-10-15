@@ -13,19 +13,6 @@ def test_vegetation_sideways_speed_reaches_both_live_services():
     assert key + "=0.05" in (ROOT / ".env.example").read_text()
 
 
-def test_street_light_configuration_reaches_the_task_container():
-    import yaml
-    import sys
-    sys.path.insert(0, str(ROOT / "tools"))
-    from street_light_approach import StreetLightConfig
-    listener = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]["actual-activate"]
-    example = (ROOT / ".env.example").read_text(encoding="utf-8")
-    for name in StreetLightConfig.__dataclass_fields__:
-        key = "LINE_TRACKING_STREET_LIGHT_" + name.upper()
-        assert key in listener["environment"]
-        assert key + "=" in example
-
-
 def test_compose_uses_host_network_and_direct_sport_contract():
     import yaml
 

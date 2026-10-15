@@ -1,6 +1,5 @@
-"""Current grass/curb evidence bounds the road, smoothed Path and Pole reference."""
+"""Current grass/curb evidence bounds the road and smoothed Path."""
 from dataclasses import replace
-import math
 from pathlib import Path
 import sys
 import numpy as np
@@ -9,7 +8,6 @@ import torch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 import local_path as lp
 import swin_l_local_path_debug as debug
-from street_light_approach import ConfirmedPole,StreetLightApproach,StreetLightConfig
 from test_accelerator_postprocess import device,make_segmenter
 
 
@@ -102,19 +100,6 @@ def test_smoothing_cannot_retain_a_path_inside_new_grass(metric_grid):
     assert lp.road_path_within_corridor(smoother.current(.3).points_xy,estimate.road_corridor)
 
 
-def test_pole_reference_respects_excluded_grass_and_does_not_double_inset(metric_grid):
-    xs,ys,road,cfg=metric_grid;hazard=np.broadcast_to(ys>=1.2,road.shape).copy()
-    estimate=lp.extract_road_centerline(road,cfg,hazard)
-    smoother=lp.LocalPathSmoother(cfg);path=smoother.update(estimate,0.)
-    pole=ConfirmedPole(math.atan2(3.,5.),math.hypot(5.,3.))
-    controller=StreetLightApproach(StreetLightConfig())
-    for tick in range(151):shifted=controller.shift_reference(path,pole,now=tick/10)
-    assert lp.road_path_within_corridor(shifted.points_xy,estimate.road_corridor)
-    upper=float(np.interp(4.,estimate.road_corridor[:,0],estimate.road_corridor[:,2]))
-    assert np.interp(4.,shifted.points_xy[:,0],shifted.points_xy[:,1])==pytest.approx(upper,abs=.03)
-    assert controller.metrics['road_edge_limited']
-
-
 def test_dense_corridor_detects_a_hazard_between_path_endpoints():
     points=np.array([[3.,0.],[8.,0.]])
     corridor=np.array([[3.,-1.,1.],[5.,.5,1.],[8.,-1.,1.]])
@@ -164,10 +149,10 @@ def test_clearance_block_stops_immediately_without_semantic_forward_grace(enable
         last_valid_forward_mps=.8,last_valid_yaw_rate=.1,path_recovery_inferences=1,
         road_clearance_blocked=True)
     assert (out.vx,out.vy,out.yaw_rate)==(0.,0.,0.)
-    assert out.reason==('path_recovery_waiting' if enabled else 'road_clearance_unavailable')
+    assert out.reason=='road_clearance_blocked'
 
 
-@pytest.mark.parametrize('selected',[0,1,2,3])
+@pytest.mark.parametrize('selected',[0,1,2])
 def test_runtime_requests_hazards_only_for_road_and_blocks_forward(monkeypatch,selected):
     import json
     from types import SimpleNamespace as NS
@@ -184,23 +169,27 @@ def test_runtime_requests_hazards_only_for_road_and_blocks_forward(monkeypatch,s
     def segment(_frame,**kwargs):
         calls.append(kwargs)
         return NS(selected_mask=labels.copy(),road_hazard_mask=hazard.copy(),
-                  pole_mask=np.zeros_like(region,bool),inference_seconds=.01)
+                  inference_seconds=.01)
     monkeypatch.setattr(debug,'BestSoFarSegmenter',lambda _:NS(
-        device=NS(type='cuda'),reset=lambda:None,pole_id=45,segment=segment))
+        device=NS(type='cuda'),reset=lambda:None,segment=segment))
     def scenario(node):
         ros.start();ros.now=2.1
         first=complete_inference(node,ros)
-        assert calls[-1].get('detect_road_hazards',False)==(selected in (1,3))
+        assert calls[-1].get('detect_road_hazards',False)==(selected == 1)
         assert first['drive_reason'] in ('tracking','tracking_slow_turn')
         assert json.loads(ros.published[SPORT][-1].parameter)['x']>0
         # Current grass/curb evidence conflicts with retained road labels.
         hazard[:]=True;ros.now+=.1
         after=complete_inference(node,ros)
-        if selected in (1,3):
+        if selected == 1:
             move=json.loads(ros.published[SPORT][-1].parameter)
             assert move=={'x':0.,'y':0.,'z':0.}
             assert after['road_clearance']['blocked']
-            assert after['drive_reason']=='path_recovery_waiting'
+            assert after['drive_reason']=='road_clearance_blocked'
+            # A confirmed exclusion must not turn into automatic rotation.
+            ros.now+=2.;node.publish_state()
+            assert ros.metrics()['drive_reason']=='road_clearance_blocked'
+            assert not ros.metrics()['path_recovery']['active']
         else:
             assert not after['road_clearance']['enabled']
             assert after['drive_reason'] in ('tracking','tracking_slow_turn')

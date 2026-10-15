@@ -272,7 +272,6 @@ class BestSoFarResult:
     hysteresis_hold_ratio: float
     road_area_ratio: float
     sidewalk_area_ratio: float
-    pole_mask: np.ndarray | None = None
     vegetation_mask: np.ndarray | None = None
     road_hazard_mask: np.ndarray | None = None
 
@@ -422,8 +421,6 @@ class BestSoFarSegmenter:
         self.road_ids = resolve_ids(id2label, self.road_labels)
         self.sidewalk_ids = resolve_ids(id2label, self.sidewalk_labels)
         self.pedestrian_area_id = resolve_ids(id2label, ("Pedestrian Area",))[0]
-        self.pole_id = next((int(key) for key, name in id2label.items()
-                             if str(name).strip().lower() == "pole"), None)
         self.vegetation_id = next((int(key) for key, name in id2label.items()
                                   if str(name).strip().lower() == "vegetation"), None)
         self.road_hazard_ids = tuple(int(key) for key, name in id2label.items()
@@ -679,7 +676,6 @@ class BestSoFarSegmenter:
     @torch.inference_mode()
     def segment(
         self, frame: np.ndarray, *, color_order: str = "bgr",
-        detect_poles: bool = False, pole_min_confidence: float = 0.5,
         detect_vegetation: bool = False,
         detect_road_hazards: bool = False, road_hazard_min_confidence: float = 0.5,
     ) -> BestSoFarResult:
@@ -698,10 +694,9 @@ class BestSoFarSegmenter:
         self._synchronize()
         inference_finished = time.perf_counter()
 
-        pole_mask = None
         vegetation_mask = None
         road_hazard_mask = None
-        if detect_poles or detect_vegetation or detect_road_hazards:
+        if detect_vegetation or detect_road_hazards:
             # All optional classes share the same forward pass and reductions.
             current_class = scores.argmax(dim=0)
             current_confidence = scores.gather(0, current_class.unsqueeze(0))[0].float() / scores.sum(
@@ -711,15 +706,6 @@ class BestSoFarSegmenter:
             # retained by the road/sidewalk EMA. Mapillary has no grass-only label.
             vegetation_mask = ((current_class == self.vegetation_id)
                                & (current_confidence >= 0.5)).cpu().numpy()
-        if detect_poles:
-            if self.pole_id is None:
-                raise RuntimeError("model is missing Pole label")
-            if not 0 < pole_min_confidence <= 1:
-                raise ValueError("Pole confidence must be in (0, 1]")
-            # Use current-frame scores, not the surface EMA: a vanished pole
-            # must never leave a ghost target commanding lateral motion.
-            pole_mask = ((current_class == self.pole_id)
-                         & (current_confidence >= pole_min_confidence)).cpu().numpy()
         if detect_road_hazards:
             if not 0 < road_hazard_min_confidence <= 1:
                 raise ValueError("road hazard confidence must be in (0, 1]")
@@ -765,7 +751,6 @@ class BestSoFarSegmenter:
             hysteresis_hold_ratio=hold_ratio,
             road_area_ratio=float(np.mean(selected == 1)),
             sidewalk_area_ratio=float(np.mean(selected == 2)),
-            pole_mask=pole_mask,
             vegetation_mask=vegetation_mask,
             road_hazard_mask=road_hazard_mask,
         )

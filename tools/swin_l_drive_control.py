@@ -6,7 +6,7 @@ without a robot. It does not establish camera extrinsic calibration.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import math
 
 import numpy as np
@@ -118,15 +118,6 @@ class DriveConfig:
 
         return self.lookahead_m * math.tan(math.radians(self.max_target_heading_deg))
 
-    def scaled_speed(self, ratio: float) -> DriveConfig:
-        """Reduce path speed while keeping its requested turning curvature."""
-        if not math.isfinite(ratio) or not 0.0 < ratio <= 1.0:
-            raise ValueError("drive speed ratio must be finite and in (0, 1]")
-        yaw_limit = self.max_yaw_rps * ratio
-        return replace(self, max_forward_mps=self.max_forward_mps * ratio,
-                       max_yaw_rps=yaw_limit, heading_gain=self.heading_gain * ratio,
-                       path_recovery_yaw_rps=min(self.path_recovery_yaw_rps, yaw_limit))
-
 
 @dataclass(frozen=True)
 class DriveDecision:
@@ -140,17 +131,6 @@ class DriveDecision:
         return cls(0.0, 0.0, 0.0, reason)
 
 
-def road_base_path(path: SmoothedPath) -> SmoothedPath:
-    if path.road_center_base_points_xy is not None:
-        return replace(path, points_xy=path.road_center_base_points_xy,
-                       road_center_offset_m=0.0, road_center_base_points_xy=None)
-    if path.road_center_offset_m:
-        points = np.asarray(path.points_xy, dtype=np.float64).copy()
-        points[:, 1] -= path.road_center_offset_m
-        return replace(path, points_xy=points, road_center_offset_m=0.0)
-    return path
-
-
 def road_path_errors(path: SmoothedPath, lookahead_m: float) -> tuple[float, float, float] | None:
     """Return lateral intercept, path tangent and tangent change in base_link.
 
@@ -158,8 +138,7 @@ def road_path_errors(path: SmoothedPath, lookahead_m: float) -> tuple[float, flo
     error. Its lookahead-point bearing would incorrectly rotate the body.
     """
     try:
-        base = road_base_path(path)
-        points = np.asarray(base.points_xy, np.float64)
+        points = np.asarray(path.points_xy, np.float64)
     except (ValueError, TypeError):
         return None
     if points.ndim != 2 or points.shape[1] != 2:
@@ -175,8 +154,6 @@ def road_path_errors(path: SmoothedPath, lookahead_m: float) -> tuple[float, flo
     far = float(np.arctan(np.polyval(derivative, xs[-1])))
     heading = float(np.arctan(np.polyval(derivative, np.clip(lookahead_m, xs[0], xs[-1]))))
     offset = float(np.median(ys - math.tan(heading) * xs))
-    if base is not path:
-        offset += path_target_lateral(path, lookahead_m) - path_target_lateral(base, lookahead_m)
     return offset, heading, abs(far - near)
 
 
@@ -211,8 +188,7 @@ class RoadCenterState:
     def limit(self, desired: DriveDecision, *, now: float, config: DriveConfig) -> DriveDecision:
         elapsed = min(0.20, max(0.0, now - self.command_at)) if self.command_at is not None else 0.0
         step = config.road_max_lateral_accel * elapsed
-        # A completed/lost Pole target must release its sideways push at once.
-        # Ramp the new centering command from zero when its owner changes.
+        # Resume centering from zero after a stop or recovery command.
         previous_vy = (self.command.vy if self.command.reason in
                        ("tracking", "tracking_slow_turn") else 0.0)
         vy = float(np.clip(desired.vy, previous_vy - step, previous_vy + step))
@@ -289,6 +265,10 @@ class PathLossRecovery:
         sensor_reason: str, path_confidence: float | None,
     ) -> DriveDecision:
         self._advance(now)
+        if normal.reason == "road_clearance_blocked":
+            # A detected clearance exclusion is not a missing-line search.
+            self.reset()
+            return normal
         if not self.config.path_loss_recovery_enabled:
             return normal
         if not self.active:
@@ -384,6 +364,7 @@ def decide_drive(
     road_state: RoadCenterState | None = None,
     now: float | None = None,
     road_clearance_blocked: bool = False,
+    road_path_unconfirmed: bool = False,
 ) -> DriveDecision:
     """Slow forward motion when heading demand exceeds available yaw rate.
 
@@ -413,14 +394,23 @@ def decide_drive(
         or path.confidence < config.min_confidence
     ):
         return DriveDecision.stop("path_low_confidence")
+    if road_clearance_blocked:
+        return DriveDecision.stop("road_clearance_blocked")
     lateral = path_target_lateral(path, config.lookahead_m)
     if lateral is None:
-        if road_clearance_blocked:
-            return DriveDecision.stop("path_recovery_waiting" if config.path_loss_recovery_enabled
-                                      else "road_clearance_unavailable")
+        if config.stop_on_path_unavailable or (
+            config.stop_on_path_loss_limit
+            and path_unavailable_inferences >= MAX_PATH_UNAVAILABLE_INFERENCES
+        ):
+            return DriveDecision.stop("path_unavailable")
+        if road_path_unconfirmed and not (
+            config.path_loss_recovery_enabled and path_recovery_inferences is not None
+            and path_recovery_inferences >= MAX_PATH_RECOVERY_INFERENCES
+        ):
+            # Without fresh validation there is no permission for blind forward
+            # grace, and one uncertain result must not initiate a scan.
+            return DriveDecision.stop("road_path_unconfirmed")
         if config.path_loss_recovery_enabled and path_recovery_inferences is not None:
-            if config.stop_on_path_unavailable:
-                return DriveDecision.stop("path_unavailable")
             if (last_valid_forward_mps is None or not math.isfinite(last_valid_forward_mps)
                     or last_valid_forward_mps <= 0):
                 return DriveDecision.stop("waiting_for_path")
@@ -428,11 +418,6 @@ def decide_drive(
                 return DriveDecision.stop("path_recovery_waiting")
             return DriveDecision(min(last_valid_forward_mps, config.max_forward_mps),
                                  0.0, 0.0, "tracking_path_recovery")
-        if config.stop_on_path_unavailable or (
-            config.stop_on_path_loss_limit
-            and path_unavailable_inferences >= MAX_PATH_UNAVAILABLE_INFERENCES
-        ):
-            return DriveDecision.stop("path_unavailable")
         held_speed = (
             config.max_forward_mps
             if last_valid_forward_mps is None
@@ -471,15 +456,12 @@ def decide_drive(
         geometry = road_path_errors(path, config.lookahead_m)
         if geometry is not None:
             offset, road_heading, curve = geometry
-            base = road_base_path(path)
-            points = np.asarray(base.points_xy, dtype=np.float64)
+            points = np.asarray(path.points_xy, dtype=np.float64)
             points = points[np.isfinite(points).all(axis=1)]
             far_x = float(np.max(points[:, 0]))
             target_x = float(np.clip(config.lookahead_m, np.min(points[:, 0]), far_x))
-            # A shifted center changes position demand, never road geometry.
-            # Entering/leaving Pole bias alone must not trigger a body turn.
-            target_heading = math.atan2(path_target_lateral(base, target_x), target_x)
-            far_heading = math.atan2(path_target_lateral(base, far_x), far_x)
+            target_heading = math.atan2(path_target_lateral(path, target_x), target_x)
+            far_heading = math.atan2(path_target_lateral(path, far_x), far_x)
             controller = road_state if road_state is not None else RoadCenterState()
             translate = controller.choose_translation(road_heading, curve, config,
                                                       target_heading=target_heading, far_heading=far_heading)

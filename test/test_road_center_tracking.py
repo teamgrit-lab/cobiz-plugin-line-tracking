@@ -162,7 +162,7 @@ def test_hysteresis_and_limits_follow_published_commands():
     assert command(road_path(2.),road_state=state,now=.1)==out
     state.record_command(out,now=.1)
     assert command(road_path(2.),road_state=state,now=.2).vy==pytest.approx(.04)
-    state.record_command(DriveDecision(.5,.15,0.,'street_light_approaching'),now=.2)
+    state.record_command(DriveDecision(.5,.15,0.,'lidar_avoiding'),now=.2)
     assert command(road_path(),road_state=state,now=.3).vy==0.
     state.reset();assert state.command_at is None and not state.translating
 
@@ -200,57 +200,6 @@ def test_env_and_cli_road_settings_and_validation(monkeypatch):
     assert debug._drive_config_from_args(args).road_lateral_gain==.3
     assert debug._local_path_config_from_args(args).road_roi_polygon[0]==.01
     with pytest.raises(SystemExit):debug.parse_args(['ros2','--road-max-lateral-mps','0.250001'])
-
-
-@pytest.mark.parametrize('selected',[1,3])
-def test_runtime_confirmed_pole_shifts_only_mode_three_reference(monkeypatch,selected):
-    import json
-    from types import SimpleNamespace as NS
-    from test_lidar_obstacles_ros import complete_inference, enabled_ros
-    from test_street_light_task_ros import model, confirmed_points
-    from test_apriltag_task_stop_ros import Message, SPORT
-    ros=enabled_ros(monkeypatch)
-    monkeypatch.setitem(debug.ENV,'LINE_TRACKING_AVOIDANCE_ENABLED','false')
-    config=lp.LocalPathConfig(branch_preference='center')
-    detection=NS(road=projected_road(config,3.,-1.),pole=np.zeros((360,640),bool))
-    model(monkeypatch,detection)
-
-    def tick(node):
-        ros.now+=.1
-        return complete_inference(node,ros)
-
-    def scenario(node):
-        node.on_task_event(Message(json.dumps({'type':'TASK_REGISTERED','action_name':'LINE_TRACKING',
-                            'task_id':'center','payload':{'selected_mask':selected,'duration_sec':30}})))
-        ros.now=2.1
-        for _ in range(3):metrics=tick(node)
-        cmd=json.loads(ros.published[SPORT][-1].parameter)
-        assert cmd['x']>0 and cmd['y']<0 and cmd['z']==0.  # Center is to the left.
-        assert metrics['road_center_control']['active']
-        assert metrics['road_center_control']['mode']=='translate'
-        assert (node.obstacles is not None)==(selected==3)
-        detection.pole[70:100,395:415]=True  # Pole lies to the right, opposite to center.
-        for _ in range(4):
-            if selected==3:confirmed_points(node,ros,centers=(405,))
-            metrics=tick(node)
-        cmd=json.loads(ros.published[SPORT][-1].parameter)
-        assert cmd['x']>0 and cmd['z']==0.
-        if selected==3:
-            assert cmd['y']<0  # The shifted reference is still left of the robot.
-            assert metrics['street_light']['lidar_confirmed']
-            assert metrics['drive_reason']=='tracking'
-            assert metrics['road_center_control']['active']
-            assert metrics['road_center_control']['reference_offset_m']<0.
-            assert not metrics['lidar_obstacles']['stops_enabled']
-        else:
-            assert cmd['y']<0 and metrics['road_center_control']['active']
-        detection.pole[:]=False
-        for _ in range(3):metrics=tick(node)
-        cmd=json.loads(ros.published[SPORT][-1].parameter)
-        assert cmd['x']>0 and cmd['y']<0 and cmd['z']==0.
-        assert metrics['road_center_control']['active']
-
-    ros.run(scenario,'--branch-preference','center')
 
 
 @pytest.mark.parametrize('value',['nan','inf','-1','0','0.250001'])

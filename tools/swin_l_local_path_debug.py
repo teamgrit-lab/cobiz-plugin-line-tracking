@@ -70,7 +70,6 @@ from cobiz_line_tracking_task import (
     ActiveTask,
     LineTrackingTasks,
     TaskPolicy,
-    requested_selected_mask,
 )
 from evaluate_mapillary_temporal import upscale_mask
 from lidar_common import (
@@ -90,6 +89,7 @@ from local_path import (
     SmoothedPath,
     extract_sidewalk_centerline,
     extract_road_centerline,
+    analyze_road_path,
     ground_to_pixel,
     normalized_polygon_pixels,
     pixel_to_ground_homography,
@@ -97,9 +97,6 @@ from local_path import (
 )
 from r50_checkpoint import validate_checkpoint
 from sidewalk_vegetation import bias_sidewalk_estimate
-from street_light_approach import (
-    StreetLightApproach, StreetLightConfig, street_light_observations,
-)
 from swin_l_drive_control import (
     DRIVE_STOP_CHECKS,
     MAX_PATH_UNAVAILABLE_INFERENCES,
@@ -234,18 +231,22 @@ def cuda_memory_metrics(device: torch.device) -> dict[str, float] | None:
 def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
     """Use the Cobiz task's class only for the lifetime of that task."""
 
-    selected = active_task.selected_mask if active_task is not None else default
-    return 1 if selected == 3 else selected
+    return active_task.selected_mask if active_task is not None else default
 
 
 def extract_path_estimates(selected_mask, mask_classes, config, vegetation_mask=None,
-                          road_hazard_mask=None):
+                          road_hazard_mask=None, road_analysis=None):
     """Semantic reference paths are independent of obstacle sensing."""
     estimates = {}
     for key in mask_classes:
         region = selected_path_region(selected_mask, key)
-        estimate = (extract_road_centerline(region, config, road_hazard_mask) if key == 1
-                    else extract_sidewalk_centerline(region, config))
+        if key == 1:
+            analysis = analyze_road_path(region, config, road_hazard_mask)
+            if road_analysis is not None:
+                road_analysis["result"] = analysis
+            estimate = analysis.estimate
+        else:
+            estimate = extract_sidewalk_centerline(region, config)
         if key == 2:
             estimate = bias_sidewalk_estimate(estimate, region, vegetation_mask, config)
         estimates[key] = estimate
@@ -253,9 +254,8 @@ def extract_path_estimates(selected_mask, mask_classes, config, vegetation_mask=
 
 
 def _road_clearance_blocked(estimate, selected_mask, road_hazard_mask, config):
-    return bool(config.road_clearance_enabled and estimate is None
-                and (np.any(selected_mask == 1)
-                     or (road_hazard_mask is not None and np.any(road_hazard_mask))))
+    return bool(config.road_clearance_enabled and estimate is None and
+                analyze_road_path(selected_mask == 1, config, road_hazard_mask).blocked)
 
 
 def update_path_smoothers(
@@ -268,10 +268,14 @@ def update_path_smoothers(
 ) -> dict[int, LocalPathEstimate | None]:
     """Keep all configured surface candidates current from one inference."""
 
+    analysis = {}
     estimates = extract_path_estimates(selected_mask, tuple(smoothers), config, vegetation_mask,
-                                      road_hazard_mask)
+                                      road_hazard_mask, analysis)
     for mask_class, smoother in smoothers.items():
-        smoother.update(estimates[mask_class], timestamp_sec)
+        if mask_class == 1 and config.road_clearance_enabled:
+            smoother.update_road(analysis["result"], timestamp_sec)
+        else:
+            smoother.update(estimates[mask_class], timestamp_sec)
     return estimates
 
 
@@ -297,11 +301,6 @@ def _lidar_config_from_args(args):
 def _avoidance_config_from_args(args):
     return AvoidanceConfig(**{name: getattr(args, "avoidance_" + name)
                               for name in AvoidanceConfig.__dataclass_fields__})
-
-
-def _street_light_config_from_args(args):
-    return StreetLightConfig(**{name: getattr(args, "street_light_" + name)
-                                for name in StreetLightConfig.__dataclass_fields__})
 
 
 def _camera_info_topic(image_topic: str) -> str:
@@ -368,7 +367,6 @@ def road_center_metrics(path, decision, config, state) -> dict:
         "heading_error_deg": math.degrees(errors[1]) if errors else None,
         "tangent_change_deg": math.degrees(errors[2]) if errors else None,
         "command_lateral_mps": decision.vy if active else None,
-        "reference_offset_m": path.road_center_offset_m if enabled else 0.0,
         "clearance": path.road_clearance if enabled else None,
     }
 
@@ -724,13 +722,17 @@ def run_mcap(args):
                                       road_hazard_min_confidence=local_config.road_hazard_min_confidence)
                     result = segmenter.segment(frame, **extras)
                     previous_mask = result.selected_mask
+                    road_analysis = {}
                     estimate = extract_path_estimates(
                         previous_mask, (args.path_mask_class,), local_config,
                         getattr(result, "vegetation_mask", None),
-                        getattr(result, "road_hazard_mask", None))[args.path_mask_class]
-                    clearance_blocked = (args.path_mask_class == 1 and _road_clearance_blocked(
-                        estimate, previous_mask, getattr(result, "road_hazard_mask", None), local_config))
-                    smoother.update(estimate, now)
+                        getattr(result, "road_hazard_mask", None), road_analysis)[args.path_mask_class]
+                    clearance_blocked = (args.path_mask_class == 1 and local_config.road_clearance_enabled
+                                         and road_analysis["result"].blocked)
+                    if args.path_mask_class == 1 and local_config.road_clearance_enabled:
+                        smoother.update_road(road_analysis["result"], now)
+                    else:
+                        smoother.update(estimate, now)
                     if sensors:
                         sensors.set_reference(previous_mask, decoded.header, frame.shape[:2], now)
                     updates += 1
@@ -739,7 +741,9 @@ def run_mcap(args):
                 current = smoother.current(now)
                 if sensors:
                     nominal = decide_drive(current, camera_age_sec=0, inference_age_sec=0, config=preview_drive_config,
-                                           road_clearance_blocked=clearance_blocked)
+                        road_clearance_blocked=clearance_blocked,
+                        road_path_unconfirmed=(args.path_mask_class == 1 and local_config.road_clearance_enabled
+                                               and current is None and not clearance_blocked))
                     sensors.apply(nominal, current, args.path_mask_class, now, message.log_time)
                 overlay = render_local_path_overlay(frame, previous_mask, estimate, current, local_config,
                     frame_index=count, inference_count=updates,
@@ -924,6 +928,8 @@ def run_ros2(args: argparse.Namespace) -> int:
         "path_recovery_inferences": {key: 0 for key in smoothers},
         "semantic_path_missing": {key: False for key in smoothers},
         "road_clearance_blocked": False,
+        "road_path_unconfirmed": False,
+        "road_path_analysis": {},
         "performance_inference_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_processing_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_completion_times": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
@@ -933,7 +939,6 @@ def run_ros2(args: argparse.Namespace) -> int:
         "last_inference_at": None,
         "last_image_stamp_ns": None,
         "last_inference_stamp_ns": None,
-        "pole_observations": (),
     }
     worker_error: list[BaseException] = []
 
@@ -961,9 +966,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.path_search = (
                 PathLossRecovery(self.drive_config, output_hz=args.output_hz)
                 if task_mode else None
-            )
-            self.street_lights = (
-                StreetLightApproach(_street_light_config_from_args(args)) if task_mode else None
             )
             self.tasks = (
                 LineTrackingTasks(
@@ -1128,12 +1130,11 @@ def run_ros2(args: argparse.Namespace) -> int:
             except Exception as error:
                 raise ValueError("lidar_transform_unavailable") from error
 
-        def set_lidar_enabled(self, enabled: bool, *, confirmation_only: bool = False) -> None:
+        def set_lidar_enabled(self, enabled: bool) -> None:
             # Share the worker's publication lock so an old frame cannot write
             # its reference into a runtime being removed during task release.
             with state_lock:
-                if (enabled == (self.obstacles is not None) and self.timer is not None
-                        and (not enabled or self.obstacles.confirmation_only == confirmation_only)):
+                if enabled == (self.obstacles is not None) and self.timer is not None:
                     return
                 if self.obstacles is not None:
                     self.obstacles = None
@@ -1147,8 +1148,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.obstacles = LidarRuntime(
                         args, _lidar_config_from_args(args), _avoidance_config_from_args(args),
                         self.lookup_lidar_transform, self.drive_config or DriveConfig(
-                            vegetation_max_lateral_mps=args.vegetation_max_lateral_mps),
-                        confirmation_only=confirmation_only)
+                            vegetation_max_lateral_mps=args.vegetation_max_lateral_mps))
                     if args.lidar_calibration_profile == "tf" and (
                         self.base_from_lidar is None or self.camera_from_base is None
                     ):
@@ -1163,15 +1163,14 @@ def run_ros2(args: argparse.Namespace) -> int:
                     subscriptions = [
                         (PointCloud2, args.lidar_topic, self.on_lidar),
                         (CameraInfo, args.camera_info_topic, self.on_camera_info),
+                        (Imu, args.lidar_imu_topic, self.on_lidar_imu),
                     ]
-                    if not confirmation_only:
-                        subscriptions.append((Imu, args.lidar_imu_topic, self.on_lidar_imu))
                     for message_type, topic, callback in subscriptions:
                         self.lidar_subscriptions.append(self.create_subscription(
                             message_type, topic, callback, sensor_qos))
                 if self.timer is not None:
                     self.destroy_timer(self.timer)
-                control_hz = args.avoidance_control_hz if enabled and not confirmation_only else args.output_hz
+                control_hz = args.avoidance_control_hz if enabled else args.output_hz
                 self.timer = self.create_timer(1.0 / control_hz, self.publish_state)
 
         def publish_task_state(self, body: dict[str, Any]) -> None:
@@ -1288,7 +1287,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 state["path_recovery_inferences"] = {key: 0 for key in smoothers}
                 state["semantic_path_missing"] = {key: False for key in smoothers}
                 state["road_clearance_blocked"] = False
-                state["pole_observations"] = ()
+                state["road_path_unconfirmed"] = False
+                state["road_path_analysis"] = {}
                 for key in (
                     "performance_inference_seconds", "performance_processing_seconds",
                     "performance_completion_times",
@@ -1303,8 +1303,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             if self.path_search is not None:
                 self.path_search.reset()
             self.road_center.reset()
-            if self.street_lights is not None:
-                self.street_lights.reset()
 
         def release_task_control(self, reason: str) -> None:
             self.set_task_inference(False)
@@ -1332,9 +1330,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         def drive_readiness(
             self, mask_class: int, now: float
         ) -> tuple[SmoothedPath | None, DriveDecision]:
-            mask_class = 1 if mask_class == 3 else mask_class
-            street_light_mode = self.tasks.active is not None and self.tasks.active.selected_mask == 3
-            lidar_avoidance = self.obstacles is not None and not self.obstacles.confirmation_only
+            lidar_avoidance = self.obstacles is not None
             with state_lock:
                 last_image_at = state["last_image_at"]
                 camera_fault_reason = state["camera_fault_reason"]
@@ -1348,8 +1344,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                     or self.path_recovery_inferences >= MAX_PATH_RECOVERY_INFERENCES
                 ))
                 inference_id = int(state["inference_count"])
-                pole_observations = state["pole_observations"]
                 clearance_blocked = mask_class == 1 and state["road_clearance_blocked"]
+                road_path_unconfirmed = mask_class == 1 and (state["road_path_unconfirmed"] or
+                    (path is None and state["road_path_analysis"].get("status") in
+                     ("calculation_failed", "insufficient_observation")))
                 if recovering and (path is None or path.stop_reason is None):
                     path = None
                 self.path_unavailable_inferences = state["path_unavailable_inferences"][
@@ -1372,6 +1370,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path_unavailable_inferences=self.path_unavailable_inferences,
                 path_recovery_inferences=self.path_recovery_inferences if recovering else None,
                 road_clearance_blocked=clearance_blocked,
+                road_path_unconfirmed=road_path_unconfirmed,
             )
             decision = decide_drive(path, **drive_inputs)
             if lidar_avoidance:
@@ -1401,29 +1400,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 )
                 if self.path_search.active and (path is None or path.stop_reason is None):
                     path = None
-            if street_light_mode:
-                if self.obstacles is not None:
-                    with self.obstacles.lock:
-                        self.obstacles.metrics.update(lidar_confirmed=False, lidar_match_count=0)
-                road_tracking = (decision.reason in ("tracking", "tracking_slow_turn")
-                                 and decision.vx > 0 and self.drive_config.road_lateral_enabled)
-                pole = self.street_lights.observe(
-                    pole_observations, now=now, inference_id=inference_id,
-                    road_tracking=road_tracking,
-                    inference_age_sec=inference_age_sec,
-                    locate=lambda observation: self.obstacles.locate_street_light(
-                        observation, now, clock_now_ns) if self.obstacles is not None else (0.0, None))
-                reference = self.street_lights.shift_reference(
-                    path, pole, now=now, road_tracking=road_tracking,
-                    lookahead_m=self.drive_config.lookahead_m)
-                if reference is not path:
-                    # Reuse the road controller and every guard. Pole supplies
-                    # a slowly shifted position reference, never a Move command.
-                    path = reference
-                    decision = decide_drive(path, **drive_inputs)
             if decision.reason in (
                 "camera_stale", "inference_stale",
-                "camera_timestamp_invalid", "camera_conversion_error",
+                "camera_timestamp_invalid", "camera_conversion_error", "road_clearance_blocked",
             ) or decision.reason.startswith(("branch_", "lidar_", "avoidance_", "obstacle_")):
                 self.last_valid_yaw_rate = None
                 self.last_valid_forward_mps = None
@@ -1432,10 +1411,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             ):
                 self.last_valid_yaw_rate = decision.yaw_rate
                 self.last_valid_forward_mps = decision.vx
-            if street_light_mode:
-                self.street_lights.metrics["lateral_alignment_available"] = self.road_center.translating
-                self.street_lights.metrics["lateral_motion_active"] = (
-                    decision.reason in ("tracking", "tracking_slow_turn") and abs(decision.vy) > 1e-6)
             return path, decision
 
         def on_task_event(self, message: Any) -> None:
@@ -1452,14 +1427,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             rejection_reason = None
             if self.command_publisher is not None and self.tasks.active is None:
                 rejection_reason = "control_release_pending"
-            if rejection_reason is None and self.tasks.active is None:
-                try:
-                    selected = requested_selected_mask(event, args.path_mask_class)
-                except ValueError:
-                    selected = None  # Task validation reports malformed payloads.
-                if selected == 3:
-                    if getattr(segmenter, "pole_id", None) is None:
-                        rejection_reason = "pole_label_unavailable"
             previous_task = self.tasks.active
             body = self.tasks.handle_event(
                 event, now=now, rejection_reason=rejection_reason
@@ -1472,9 +1439,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.apriltag_confirmed_range_m = None
                 self.apriltag_window_resolved_at = None
                 try:
-                    self.set_lidar_enabled(
-                        args.avoidance_enabled or self.tasks.active.selected_mask == 3,
-                        confirmation_only=self.tasks.active.selected_mask == 3)
+                    self.set_lidar_enabled(args.avoidance_enabled)
                     assert Request is not None
                     self.command_publisher = self.create_publisher(
                         Request, args.sport_request_topic, self.command_qos
@@ -1718,22 +1683,19 @@ def run_ros2(args: argparse.Namespace) -> int:
                 tag_status = self.terminal_apriltag_status
             metrics = {
                 "road_clearance": {"enabled": mask_class == 1 and local_config.road_clearance_enabled,
+                    **(state["road_path_analysis"] if mask_class == 1 else {}),
                     "blocked": mask_class == 1 and state["road_clearance_blocked"],
                     "edge_margin_m": local_config.road_edge_margin_m,
                     "hazard_margin_m": local_config.road_hazard_margin_m},
                 "lidar_obstacles": {"enabled": self.obstacles is not None,
                     "topic": args.lidar_topic, "expected_hz": 10,
-                    "control_hz": (args.output_hz if self.obstacles is not None
-                                   and self.obstacles.confirmation_only else args.avoidance_control_hz),
+                    "control_hz": args.avoidance_control_hz,
                     **(self.obstacles.metrics if self.obstacles else {})},
                 "profile": args.profile,
                 "camera_topic": args.image_topic,
                 "path_mask_class": mask_class,
                 "path_surface": PATH_MASK_CLASSES[mask_class],
                 "selected_mask": task_active.selected_mask if task_active is not None else args.path_mask_class,
-                "street_light": {"enabled": task_active is not None and task_active.selected_mask == 3,
-                                 "target_class": "Pole", "target_class_id": getattr(segmenter, "pole_id", None),
-                                 **(self.street_lights.metrics if self.street_lights else {})},
                 "path_tracked": path is not None and path.stop_reason is None,
                 "road_center_control": road_center_metrics(
                     path, drive_decision, self.drive_config, self.road_center),
@@ -1881,21 +1843,16 @@ def run_ros2(args: argparse.Namespace) -> int:
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
-                    detect_poles = (task_mode and node.tasks.active is not None
-                                    and node.tasks.active.selected_mask == 3)
                     detect_vegetation = (
                         2 in smoothers and local_config.sidewalk_vegetation_bias_m > 0
                         and (not task_mode or (node.tasks.active is not None
                                                and node.tasks.active.selected_mask == 2)))
                     detect_road_hazards = (local_config.road_clearance_enabled and
                         (not task_mode or (node.tasks.active is not None
-                                          and node.tasks.active.selected_mask in (1, 3))))
+                                          and node.tasks.active.selected_mask == 1)))
                 segment_kwargs = {"color_order": "rgb"}
                 if detect_vegetation:
                     segment_kwargs["detect_vegetation"] = True
-                if detect_poles:
-                    segment_kwargs.update(detect_poles=True,
-                                          pole_min_confidence=args.street_light_min_confidence)
                 if detect_road_hazards:
                     segment_kwargs.update(detect_road_hazards=True,
                         road_hazard_min_confidence=local_config.road_hazard_min_confidence)
@@ -1906,20 +1863,25 @@ def run_ros2(args: argparse.Namespace) -> int:
                 # The path becomes usable when this result is available. Using
                 # the camera-arrival timestamp here can expire a path before it
                 # is ever published when inference or rate limiting is slow.
-                path_updated_at = time.monotonic()
+                road_analysis = {}
                 estimates = extract_path_estimates(
                     result.selected_mask, tuple(smoothers), local_config,
                     getattr(result, "vegetation_mask", None),
-                    getattr(result, "road_hazard_mask", None))
+                    getattr(result, "road_hazard_mask", None), road_analysis)
+                path_updated_at = time.monotonic()
                 recovery_enabled = task_mode and node.drive_config.path_loss_recovery_enabled
                 semantic_missing = {key: recovery_enabled and estimates[key] is None for key in smoothers}
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
                     for mask_class, smoother in smoothers.items():
-                        if estimates[mask_class] is None:
-                            smoother.reset(preserve_branch=True)
-                        smoother.update(estimates[mask_class], path_updated_at)
+                        if mask_class == 1 and local_config.road_clearance_enabled:
+                            smoother.update_road(road_analysis["result"], path_updated_at)
+                            semantic_missing[mask_class] = smoother.current(path_updated_at) is None
+                        else:
+                            if estimates[mask_class] is None:
+                                smoother.reset(preserve_branch=True)
+                            smoother.update(estimates[mask_class], path_updated_at)
                     if node.obstacles is not None:
                         node.obstacles.set_reference(result.selected_mask, packet.source_header,
                             (packet.image_message.height, packet.image_message.width), path_updated_at)
@@ -1947,11 +1909,14 @@ def run_ros2(args: argparse.Namespace) -> int:
                                 recovery_counts[mask_class] += 1
                             counts[mask_class] = 0 if available else counts[mask_class] + 1
                     state["header"] = packet.source_header
-                    state["road_clearance_blocked"] = _road_clearance_blocked(
-                        estimates.get(1), result.selected_mask,
-                        getattr(result, "road_hazard_mask", None), local_config)
-                    state["pole_observations"] = street_light_observations(
-                        getattr(result, "pole_mask", None), args.street_light_min_area_px)
+                    road_result = road_analysis.get("result")
+                    road_enabled = local_config.road_clearance_enabled and road_result is not None
+                    road_path = smoothers[1].current(inference_finished_at) if 1 in smoothers else None
+                    state["road_clearance_blocked"] = bool(road_enabled and road_result.blocked)
+                    state["road_path_unconfirmed"] = bool(road_enabled and not road_result.blocked and road_path is None)
+                    state["road_path_analysis"] = (dict(road_path.road_clearance or road_result.clearance)
+                        if road_enabled and road_path is not None else
+                        dict(road_result.clearance) if road_enabled else {})
                     completed_before = int(state["inference_count"])
                     state["inference_count"] += 1
                     state["last_inference_at"] = inference_finished_at
@@ -2029,7 +1994,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--avoidance-enabled", action=argparse.BooleanOptionalAction,
                         default=_env_bool("LINE_TRACKING_AVOIDANCE_ENABLED", False),
-                        help="enable LiDAR for normal paths; selected_mask=3 enables it automatically")
+                        help="enable LiDAR obstacle avoidance for path tracking (default: disabled)")
     parser.add_argument("--lidar-topic", default=_env("SWIN_L_LIDAR_TOPIC", DEFAULT_LIDAR_TOPIC))
     parser.add_argument("--lidar-imu-topic", default=_env("SWIN_L_LIDAR_IMU_TOPIC", DEFAULT_IMU_TOPIC))
     parser.add_argument("--camera-info-topic", default=_env("SWIN_L_CAMERA_INFO_TOPIC", ""))
@@ -2039,8 +2004,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lidar-to-base-transform", default=_env("SWIN_L_LIDAR_TO_BASE_TRANSFORM", ""))
     parser.add_argument("--base-to-camera-transform", default=_env("SWIN_L_BASE_TO_CAMERA_TRANSFORM", ""))
     for cls, prefix, env_prefix in ((ObstacleConfig, "obstacle_", "LIDAR_OBSTACLE_"),
-                                   (AvoidanceConfig, "avoidance_", "LINE_TRACKING_AVOIDANCE_"),
-                                   (StreetLightConfig, "street_light_", "LINE_TRACKING_STREET_LIGHT_")):
+                                   (AvoidanceConfig, "avoidance_", "LINE_TRACKING_AVOIDANCE_")):
         for name, value in asdict(cls()).items():
             parser.add_argument("--" + (prefix + name).replace("_", "-"), dest=prefix + name,
                 type=type(value), default=type(value)(_env(env_prefix + name.upper(), str(value))))
@@ -2096,7 +2060,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         type=int,
         choices=SELECTED_MASKS,
         default=_env("SWIN_L_PATH_MASK_CLASS", "2"),
-        help="0=road or sidewalk, 1=road, 2=sidewalk, 3=street-light scenario (task-drive only)",
+        help="0=road or sidewalk, 1=road, 2=sidewalk",
     )
     parser.add_argument(
         "--near-distance-m",
@@ -2378,7 +2342,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     try:
         _lidar_config_from_args(args).validate()
         _avoidance_config_from_args(args).validate()
-        _street_light_config_from_args(args).validate()
         _preview_drive_config_from_args(args).validate()
         if args.lidar_calibration_profile not in CALIBRATION_PROFILES:
             raise ValueError("invalid lidar calibration profile")
@@ -2400,7 +2363,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.path_mask_class not in (SELECTED_MASKS if args.mode == "task-drive" else PATH_MASK_CLASSES):
         parser.error(
             "SWIN_L_PATH_MASK_CLASS must be 0 (road or sidewalk), "
-            "1 (road), 2 (sidewalk), or 3 (street-light scenario, task-drive only)"
+            "1 (road), or 2 (sidewalk)"
         )
     if not all(
         math.isfinite(rate) and rate > 0.0

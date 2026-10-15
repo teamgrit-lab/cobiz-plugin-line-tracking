@@ -11,13 +11,10 @@ from typing import Any, Mapping
 
 
 ACTION_NAME = "LINE_TRACKING"
-SELECTED_MASKS = (0, 1, 2, 3)
+SELECTED_MASKS = (0, 1, 2)
 TRACKING_REASONS = frozenset(("tracking", "tracking_slow_turn", "tracking_path_hold",
                               "tracking_path_recovery", "lidar_tracking",
-                              "lidar_avoiding", "lidar_returning",
-                              "street_light_cruising", "street_light_approaching",
-                              "street_light_reached", "street_light_target_lost",
-                              "street_light_approach_timeout"))
+                              "lidar_avoiding", "lidar_returning"))
 PATH_RECOVERY_REASONS = frozenset((
     "path_recovery_waiting", "path_recovery_scan_left", "path_recovery_hold_left",
     "path_recovery_scan_right", "path_recovery_hold_right", "path_recovery_return",
@@ -74,7 +71,7 @@ class TaskPolicy:
         ) is not int or self.default_selected_mask not in SELECTED_MASKS:
             raise ValueError(
                 "default selected_mask must be 0 (road or sidewalk), "
-                "1 (road), 2 (sidewalk), or 3 (road/street-light approach)"
+                "1 (road), or 2 (sidewalk)"
             )
 
 
@@ -111,12 +108,6 @@ def _payload(event: Mapping[str, Any]) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("invalid_payload")
     return payload
-
-
-def requested_selected_mask(event: Mapping[str, Any], default: int) -> int:
-    """Return the requested surface/scenario, falling back to the configured default."""
-
-    return _selected_mask(_payload(event), default)
 
 
 def _selected_mask(payload: Mapping[str, Any], default: int) -> int:

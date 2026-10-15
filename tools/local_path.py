@@ -50,9 +50,12 @@ DEFAULT_ROI_POLYGON = (
     0.45,
 )
 
-# Road selection covers both visible edges in the rosbag camera examples.
-# Keep this separate from the pixel-to-ground calibration above.
-DEFAULT_ROAD_ROI_POLYGON = (0.02, 1.00, 0.98, 1.00, 0.98, 0.42, 0.02, 0.42)
+# Road selection follows the user-marked perspective outline (9 vertices).
+# Keep this separate from the four-point pixel-to-ground calibration above.
+DEFAULT_ROAD_ROI_POLYGON = (
+    0.09, 0.99, 0.94, 0.99, 0.98, 0.94, 0.98, 0.77, 0.85, 0.59,
+    0.51, 0.45, 0.45, 0.45, 0.02, 0.71, 0.02, 0.90,
+)
 
 
 @dataclass(frozen=True)
@@ -106,13 +109,13 @@ class LocalPathConfig:
             raise ValueError("roi_polygon must contain four normalized x/y points")
         if any(value < 0.0 or value > 1.0 for value in self.roi_polygon):
             raise ValueError("roi_polygon values must be normalized to [0, 1]")
-        if (len(self.road_roi_polygon) != 8 or not all(
+        if (len(self.road_roi_polygon) < 6 or len(self.road_roi_polygon) % 2 or not all(
             math.isfinite(value) and 0 <= value <= 1 for value in self.road_roi_polygon
         )):
-            raise ValueError("road_roi_polygon must contain eight finite normalized values")
-        road_polygon = np.asarray(self.road_roi_polygon, np.float32).reshape(4, 2)
+            raise ValueError("road_roi_polygon must contain at least three finite normalized x/y pairs")
+        road_polygon = np.asarray(self.road_roi_polygon, np.float32).reshape(-1, 2)
         if not cv2.isContourConvex(road_polygon) or cv2.contourArea(road_polygon) <= 0:
-            raise ValueError("road_roi_polygon must be a nonempty convex quadrilateral")
+            raise ValueError("road_roi_polygon must be a nonempty convex polygon")
         if self.path_points < 2:
             raise ValueError("path_points must be at least 2")
         if self.bev_width_px < 8 or self.bev_height_px < 8:
@@ -193,9 +196,11 @@ def normalized_polygon_pixels(
 
     height, width = frame_shape[:2]
     values = np.asarray(tuple(float(value) for value in polygon), dtype=np.float32)
-    if values.size != 8:
-        raise ValueError("polygon must contain four x/y points")
-    points = values.reshape(4, 2).copy()
+    if values.size < 6 or values.size % 2:
+        raise ValueError("polygon must contain at least three x/y points")
+    if not np.isfinite(values).all():
+        raise ValueError("polygon points must be finite")
+    points = values.reshape(-1, 2).copy()
     points[:, 0] *= max(width - 1, 1)
     points[:, 1] *= max(height - 1, 1)
     return np.rint(points).astype(np.int32)

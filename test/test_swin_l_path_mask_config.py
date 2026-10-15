@@ -39,6 +39,24 @@ def test_street_light_scenario_uses_road_and_is_task_drive_only():
         debug.parse_args(["ros2", "--path-mask-class", "3"])
 
 
+@pytest.mark.parametrize("rate", ["0.05", "0.25", "0.5"])
+def test_pole_reference_rate_can_be_configured_from_env(monkeypatch, rate):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STREET_LIGHT_CENTER_SHIFT_RATE_MPS", rate)
+    config = debug._street_light_config_from_args(debug.parse_args(["task-drive"]))
+    config.validate()
+    assert config.center_shift_rate_mps == float(rate)
+
+
+def test_pole_reference_default_rate_matches_road_lateral_cap(monkeypatch):
+    monkeypatch.delitem(debug.ENV, "LINE_TRACKING_STREET_LIGHT_CENTER_SHIFT_RATE_MPS", raising=False)
+    config = debug._street_light_config_from_args(debug.parse_args(["task-drive"]))
+    config.validate()
+    assert config.center_shift_rate_mps == 0.25
+    road_config = debug._drive_config_from_args(debug.parse_args(["task-drive"]))
+    road_config.validate()
+    assert road_config.road_max_lateral_mps == config.center_shift_rate_mps
+
+
 @pytest.mark.parametrize("mask_class", [0, 1, 2])
 def test_command_line_can_override_env_for_offline_path_preview(
     monkeypatch, tmp_path, mask_class

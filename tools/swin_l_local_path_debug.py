@@ -266,15 +266,17 @@ def update_path_smoothers(
     return estimates
 
 
-def _parse_polygon(value: str) -> tuple[float, ...]:
+def _parse_polygon(value: str, *, quadrilateral: bool = True) -> tuple[float, ...]:
     try:
         values = tuple(
             float(item.strip()) for item in value.replace(";", ",").split(",")
         )
     except ValueError as error:
-        raise ValueError("SWIN_L_ROI_POLYGON must be comma-separated floats") from error
-    if len(values) != 8:
+        raise ValueError("ROI polygon must be comma-separated floats") from error
+    if quadrilateral and len(values) != 8:
         raise ValueError("SWIN_L_ROI_POLYGON must contain eight values")
+    if len(values) < 6 or len(values) % 2:
+        raise ValueError("road ROI polygon must contain at least three x/y pairs")
     return values
 
 
@@ -311,7 +313,7 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         ground_half_width_m=args.ground_half_width_m,
         search_half_width_m=args.search_half_width_m,
         roi_polygon=polygon,
-        road_roi_polygon=_parse_polygon(args.road_roi_polygon),
+        road_roi_polygon=_parse_polygon(args.road_roi_polygon, quadrilateral=False),
         path_points=args.path_points,
         bev_width_px=args.bev_width_px,
         bev_height_px=args.bev_height_px,
@@ -1405,6 +1407,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.last_valid_yaw_rate = decision.yaw_rate
                 self.last_valid_forward_mps = decision.vx
             if street_light_mode:
+                self.street_lights.metrics["lateral_alignment_available"] = self.road_center.translating
                 self.street_lights.metrics["lateral_motion_active"] = (
                     decision.reason in ("tracking", "tracking_slow_turn") and abs(decision.vy) > 1e-6)
             return path, decision
@@ -1963,7 +1966,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--path-frame-id", default=_env("SWIN_L_PATH_FRAME_ID", "base_link"))
     parser.add_argument("--road-roi-polygon",
                         default=_env("SWIN_L_ROAD_ROI_POLYGON", ",".join(map(str, DEFAULT_ROAD_ROI_POLYGON))),
-                        help="wide road selection ROI; does not change the ground calibration")
+                        help="convex road selection polygon (at least 3 normalized x/y pairs); does not change the ground calibration")
     for name, value in asdict(DriveConfig()).items():
         if not name.startswith("road_"):
             continue

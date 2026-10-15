@@ -54,9 +54,9 @@ class DriveConfig:
     path_recovery_first_direction: str = "left"
     vegetation_max_lateral_mps: float = 0.05
     road_lateral_enabled: bool = True
-    road_max_lateral_mps: float = 0.10
+    road_max_lateral_mps: float = 0.25
     road_lateral_gain: float = 0.40
-    road_lateral_deadband_m: float = 0.05
+    road_lateral_deadband_m: float = 0.10
     road_straight_heading_deg: float = 8.0
     road_straight_curve_deg: float = 10.0
     road_max_lateral_accel: float = 0.20
@@ -100,8 +100,8 @@ class DriveConfig:
             self.road_straight_curve_deg, self.road_max_lateral_accel, self.road_max_yaw_accel,
         )):
             raise ValueError("road centering settings must be finite and positive")
-        if self.road_max_lateral_mps > 0.15:
-            raise ValueError("road_max_lateral_mps must not exceed 0.15 m/s")
+        if self.road_max_lateral_mps > 0.25:
+            raise ValueError("road_max_lateral_mps must not exceed 0.25 m/s")
         if max(self.road_straight_heading_deg, self.road_straight_curve_deg) >= 45:
             raise ValueError("road straight angles must be below 45 degrees")
         if self.path_recovery_yaw_rps > self.max_yaw_rps:
@@ -117,6 +117,15 @@ class DriveConfig:
         """Equivalent lateral limit at the configured lookahead distance."""
 
         return self.lookahead_m * math.tan(math.radians(self.max_target_heading_deg))
+
+    def scaled_speed(self, ratio: float) -> DriveConfig:
+        """Reduce path speed while keeping its requested turning curvature."""
+        if not math.isfinite(ratio) or not 0.0 < ratio <= 1.0:
+            raise ValueError("drive speed ratio must be finite and in (0, 1]")
+        yaw_limit = self.max_yaw_rps * ratio
+        return replace(self, max_forward_mps=self.max_forward_mps * ratio,
+                       max_yaw_rps=yaw_limit, heading_gain=self.heading_gain * ratio,
+                       path_recovery_yaw_rps=min(self.path_recovery_yaw_rps, yaw_limit))
 
 
 @dataclass(frozen=True)
@@ -212,6 +221,7 @@ class RoadCenterState:
         if not self.translating:
             step = config.road_max_yaw_accel * elapsed
             yaw = float(np.clip(yaw, self.command.yaw_rate - step, self.command.yaw_rate + step))
+            yaw = float(np.clip(yaw, -config.max_yaw_rps, config.max_yaw_rps))
         return DriveDecision(desired.vx, vy, yaw, desired.reason)
 
 

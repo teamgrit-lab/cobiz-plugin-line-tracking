@@ -1,4 +1,4 @@
-"""Latest-frame LiDAR avoidance or optional Pole corroboration.
+"""Latest-frame LiDAR avoidance or image-time Pole corroboration.
 
 StreetLight names remain for compatibility with existing settings and telemetry.
 """
@@ -56,6 +56,9 @@ class LidarRuntime:
             deque(maxlen=8),
         )
         self.scan = None
+        # Only confirmation mode stores history. At 10Hz this covers the image
+        # validity window plus scan/transport margins; the count caps memory.
+        self.confirmation_scans = deque(maxlen=128)
         self.reference = None
         self.fault = "lidar_waiting_for_cloud"
         self.metrics = {
@@ -76,7 +79,13 @@ class LidarRuntime:
             self.controller.reset()
             if self.confirmation_only:
                 self.scan = None
+                self.confirmation_scans.clear()
                 self.fault = "lidar_waiting_for_cloud"
+                self.metrics.update(lidar_history_size=0, lidar_confirmed=False,
+                                    lidar_match_count=0, confirmation_scan_stamp_ns=None,
+                                    confirmation_image_stamp_ns=None,
+                                    confirmation_time_delta_sec=None,
+                                    confirmation_scan_age_sec=None)
 
     def on_imu(self, message, arrival):
         with self.lock:
@@ -108,9 +117,18 @@ class LidarRuntime:
                     maximum = self.args.street_light_lidar_max_range_m
                     points = points[np.isfinite(points).all(axis=1) & (ranges <= maximum)]
                     self.scan = ConfirmationScan(points, source, arrival)
+                    # Retransmission of one timestamp replaces that sample;
+                    # nearest-time selection must not keep an older duplicate.
+                    self.confirmation_scans = deque(
+                        (scan for scan in self.confirmation_scans if scan.stamp_ns != source),
+                        maxlen=128,
+                    )
+                    self.confirmation_scans.append(self.scan)
+                    self._prune_confirmation_scans(clock_ns)
                     self.base, self.fault = base, None
                     self.metrics.update(state="ready", scan_stamp_ns=source,
                                         input_points=len(raw), confirmation_points=len(points),
+                                        lidar_history_size=len(self.confirmation_scans),
                                         lidar_match_count=0, lidar_confirmed=False)
                     return
                 if not self.imus:
@@ -156,6 +174,12 @@ class LidarRuntime:
             if self.reference and stamp_ns(header) < stamp_ns(self.reference[1]):
                 return
             self.reference = (mask.copy(), header, tuple(image_shape), arrival)
+            if self.confirmation_only:
+                self.metrics.update(lidar_confirmed=False, lidar_match_count=0,
+                                    confirmation_scan_stamp_ns=None,
+                                    confirmation_image_stamp_ns=None,
+                                    confirmation_time_delta_sec=None,
+                                    confirmation_scan_age_sec=None)
 
     def _context(self, mask_class, now, clock_ns):
         if self.fault:
@@ -312,16 +336,35 @@ class LidarRuntime:
                     distance = float(np.linalg.norm(scan.points[match], axis=1).min())
             return bearing, distance
 
+    def _prune_confirmation_scans(self, clock_ns):
+        # Retain scans long enough for a slow result and its remaining lifetime.
+        duration = (self.args.street_light_max_age_sec
+                    + self.args.street_light_lidar_sync_tolerance_sec
+                    + self.config.max_age_sec)
+        cutoff = clock_ns - int(duration * 1e9)
+        self.confirmation_scans = deque(
+            (scan for scan in self.confirmation_scans if scan.stamp_ns >= cutoff),
+            maxlen=128,
+        )
+
     def _confirm_street_light(self, observation, now, clock_ns):
-        """Match current 3-D returns to the visual box without obstacle/IMU gates."""
+        """Project the scan nearest the image time, while requiring a live LiDAR.
+
+        Geometry belongs to the image's base_link frame. A newly arriving scan
+        must not be projected onto an older image after slow inference.
+        """
         with self.lock:
-            self.metrics.update(lidar_confirmed=False, lidar_match_count=0)
+            self.metrics.update(lidar_confirmed=False, lidar_match_count=0,
+                                confirmation_scan_stamp_ns=None,
+                                confirmation_image_stamp_ns=None,
+                                confirmation_time_delta_sec=None,
+                                confirmation_scan_age_sec=None)
             if self.fault:
                 raise ValueError(self.fault)
-            scan = self.scan
-            if scan is None or not (
-                0 <= now - scan.arrival <= self.config.max_age_sec
-                and -0.05 <= (clock_ns - scan.stamp_ns) / 1e9 <= self.config.max_age_sec
+            latest = self.scan
+            if latest is None or not (
+                0 <= now - latest.arrival <= self.config.max_age_sec
+                and -0.05 <= (clock_ns - latest.stamp_ns) / 1e9 <= self.config.max_age_sec
             ):
                 raise ValueError("lidar_stale")
             if self.reference is None:
@@ -331,8 +374,19 @@ class LidarRuntime:
             if not (0 <= now - arrival <= self.args.street_light_max_age_sec
                     and -0.05 <= source_age <= self.args.street_light_max_age_sec):
                 raise ValueError("street_light_camera_reference_stale")
-            if abs(scan.stamp_ns - stamp_ns(header)) / 1e9 > self.config.max_age_sec:
+            image_stamp = stamp_ns(header)
+            self._prune_confirmation_scans(clock_ns)
+            self.metrics["lidar_history_size"] = len(self.confirmation_scans)
+            scan = min(self.confirmation_scans,
+                       key=lambda candidate: (abs(candidate.stamp_ns - image_stamp),
+                                              -candidate.stamp_ns), default=None)
+            if (scan is None or abs(scan.stamp_ns - image_stamp) / 1e9
+                    > self.args.street_light_lidar_sync_tolerance_sec):
                 raise ValueError("street_light_lidar_camera_unsynchronized")
+            self.metrics.update(confirmation_scan_stamp_ns=scan.stamp_ns,
+                                confirmation_image_stamp_ns=image_stamp,
+                                confirmation_time_delta_sec=(scan.stamp_ns - image_stamp) / 1e9,
+                                confirmation_scan_age_sec=(clock_ns - scan.stamp_ns) / 1e9)
             infos = [info for info in self.infos if info.header.frame_id == header.frame_id
                      and (info.height, info.width) == shape]
             if not infos:

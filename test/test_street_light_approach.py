@@ -265,7 +265,7 @@ def test_never_switches_to_an_unrelated_light_during_an_approach():
     assert controller.phase == "passing"
 
 
-@pytest.mark.parametrize("age", [None, -0.01, 1.01, float("nan"), float("inf")])
+@pytest.mark.parametrize("age", [None, -0.01, 3.01, float("nan"), float("inf")])
 def test_stale_light_evidence_disables_only_bias_and_preserves_road_tracking(age):
     controller = StreetLightApproach(StreetLightConfig())
     confirm(controller)
@@ -287,6 +287,18 @@ def test_missing_lidar_match_never_enables_bias_or_invents_arrival():
         assert controller.metrics["lidar_confirmed"] is False
     assert controller.approach_started is None
     assert controller.visits == 0
+
+
+def test_temporary_lidar_loss_does_not_extend_the_same_pole_approach_deadline():
+    controller = StreetLightApproach(StreetLightConfig(max_approach_sec=2))
+    confirm(controller)
+    began = controller.approach_started
+    assert decide(controller, 4, now=1.5, distance=None) is None
+    assert controller.approach_started == began
+    assert decide(controller, 5, now=2.) is not None
+    assert controller.approach_started == began
+    assert decide(controller, 6, now=3.) is None
+    assert controller.metrics['bias_reason'] == 'approach_timeout'
 
 
 @pytest.mark.parametrize("reason", ["branch_path_lost", "path_unavailable", "camera_stale"])
@@ -312,6 +324,7 @@ def test_components_filter_noise_and_do_not_average_opposite_side_lights():
     ("confirm_frames", 1), ("min_area_px", 0), ("max_age_sec", 0),
     ("min_confidence", float("nan")), ("min_confidence", 1.1),
     ("lidar_min_points", 0), ("lidar_max_range_m", float("nan")),
+    ("lidar_sync_tolerance_sec", 0), ("lidar_sync_tolerance_sec", .51),
 ])
 def test_invalid_scenario_configuration_fails_early(field, value):
     with pytest.raises(ValueError):

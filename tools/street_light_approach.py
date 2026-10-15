@@ -25,29 +25,43 @@ class StreetLightConfig:
     clear_frames: int = 3
     min_area_px: int = 24
     min_confidence: float = 0.50
-    max_age_sec: float = 1.0
-    max_approach_sec: float = 30.0
+    max_age_sec: float = 3.0
+    max_approach_sec: float = 120.0
     lidar_min_points: int = 3
     lidar_max_range_m: float = 15.0
-    center_max_offset_m: float = 0.30
-    center_shift_rate_mps: float = 0.05
-    center_bias_gain: float = 0.20
+    lidar_sync_tolerance_sec: float = 0.15
+    center_max_offset_m: float = 0.30  # Legacy; the road corridor bounds the 1m goal.
+    center_shift_rate_mps: float = 0.25
+    center_bias_gain: float = 0.20  # Legacy; the Pole clearance now defines the goal.
     center_edge_margin_m: float = 0.45
+    target_clearance_m: float = 1.0
+    # Legacy settings; Pole bias no longer changes forward speed.
+    approach_min_forward_mps: float = 0.02
+    approach_forward_margin_m: float = 1.5
+    approach_time_margin_sec: float = 3.0
+    approach_max_forward_accel: float = 0.20
 
     def validate(self) -> None:
         for name in ("stop_distance_m", "max_lateral_mps", "forward_mps",
                      "max_age_sec", "max_approach_sec", "lidar_max_range_m",
+                     "lidar_sync_tolerance_sec",
                      "center_max_offset_m", "center_shift_rate_mps", "center_bias_gain",
-                     "center_edge_margin_m"):
+                     "center_edge_margin_m", "target_clearance_m",
+                     "approach_min_forward_mps", "approach_forward_margin_m",
+                     "approach_time_margin_sec", "approach_max_forward_accel"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"street light {name} must be finite and positive")
         if max(self.forward_mps, self.max_lateral_mps) > 1.0:
             raise ValueError("street light speeds must not exceed 1 m/s")
-        if self.center_max_offset_m > 1.0 or self.center_shift_rate_mps > 0.15:
-            raise ValueError("Pole center offset/rate must not exceed 1m and 0.15m/s")
+        if self.center_max_offset_m > 1.0 or self.center_shift_rate_mps > 0.5:
+            raise ValueError("Pole center offset/rate must not exceed 1m and 0.5m/s")
         if self.center_bias_gain > 1.0:
             raise ValueError("Pole center bias gain must not exceed 1")
+        if self.lidar_sync_tolerance_sec > 0.5:
+            raise ValueError("Pole LiDAR synchronization tolerance must not exceed 0.5s")
+        if self.approach_min_forward_mps > 0.1:
+            raise ValueError("Pole minimum forward speed must not exceed 0.1m/s")
         for name in ("confirm_frames", "clear_frames", "min_area_px", "lidar_min_points"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"street light {name} must be a positive integer")
@@ -123,10 +137,16 @@ class StreetLightApproach:
         self.center_offset_m = 0.0
         self.center_offsets_xy = None
         self.last_reference_at = None
+        self.clearance_side = None
+        self.clearance_target_id = None
         self.metrics = {"bias_active": False, "bias_reason": "no_confirmed_light",
                         "lidar_confirmed": False, "control_mode": "shifted_road_center",
                         "center_offset_m": 0.0, "desired_center_offset_m": 0.0,
                         "max_reference_offset_m": 0.0,
+                        "target_clearance_m": self.config.target_clearance_m,
+                        "forward_speed_limited": False, "forward_speed_limit_mps": None,
+                        "alignment_time_sec": None, "available_forward_m": None,
+                        "speed_limit_reason": "disabled",
                         "returning_to_center": False, "road_edge_limited": False}
         self._update_metrics()
 
@@ -245,7 +265,7 @@ class StreetLightApproach:
             self._track(observations, consecutive)
             track = self.tracks.get(self.target_id)
             if track is not None and track.misses:
-                if self.phase == "approaching":
+                if self.phase == "approaching" or self.approach_started is not None:
                     self._cooldown("target_lost")
                     self.metrics["bias_reason"] = "target_lost"
                     return None
@@ -258,6 +278,8 @@ class StreetLightApproach:
                 self.target = self.target_id = None
                 self.hits, self.phase = 0, "cruising"
             else:
+                if self.target_id != track.id:
+                    self.approach_started = None
                 self.target, self.target_id, self.hits = track.observation, track.id, track.hits
                 if self.phase != "approaching":
                     self.phase = "confirming"
@@ -272,7 +294,7 @@ class StreetLightApproach:
         try:
             bearing, distance = locate(self.target)
         except (ValueError, cv2.error) as error:
-            self.phase, self.approach_started = "confirming", None
+            self.phase = "confirming"
             self.metrics["bias_reason"] = str(error)
             self._update_metrics()
             return None
@@ -281,13 +303,15 @@ class StreetLightApproach:
             self.metrics["bias_reason"] = "street_light_geometry_invalid"
             return None
         if distance is None:
-            self.phase, self.approach_started = "confirming", None
+            self.phase = "confirming"
             self.metrics.update(bias_reason="lidar_unconfirmed", bearing_rad=None,
                                 range_m=None, range_source=None)
             self._update_metrics()
             return None
         if self.phase != "approaching":
-            self.phase, self.approach_started = "approaching", now
+            self.phase = "approaching"
+            if self.approach_started is None:
+                self.approach_started = now
         self.metrics["lidar_confirmed"] = True
         self._update_metrics()
         self.metrics.update(bearing_rad=bearing, range_m=distance,
@@ -315,11 +339,19 @@ class StreetLightApproach:
         self.metrics.update(bias_active=False, control_mode="shifted_road_center",
                             center_offset_m=self.center_offset_m, desired_center_offset_m=0.0,
                             max_reference_offset_m=0.0, returning_to_center=False,
-                            road_edge_limited=False)
+                            road_edge_limited=False, center_goal="pole_clearance",
+                            target_clearance_m=c.target_clearance_m,
+                            pole_x_m=None, pole_y_m=None, requested_offset_m=0.0,
+                            reference_clearance_at_pole_m=None,
+                            edge_limited_goal_clearance_m=None,
+                            reference_clearance_supported=False,
+                            goal_corridor_supported=False, goal_reference_y_m=None,
+                            reference_pending_m=None)
         if (not road_tracking or path is None or not path.road_center_tracking
                 or path.stop_reason is not None):
             self.center_offset_m = 0.0
             self.center_offsets_xy = None
+            self.clearance_side = self.clearance_target_id = None
             self.metrics["center_offset_m"] = 0.0
             return path
         path = road_base_path(path)
@@ -342,21 +374,34 @@ class StreetLightApproach:
         lower = np.interp(points[:, 0], corridor[:, 0], corridor[:, 1])
         upper = np.interp(points[:, 0], corridor[:, 0], corridor[:, 2])
         margin = np.minimum(c.center_edge_margin_m, np.maximum(0., (upper - lower) / 2))
-        minimum = np.maximum(-c.center_max_offset_m, lower + margin - points[:, 1])
-        maximum = np.minimum(c.center_max_offset_m, upper - margin - points[:, 1])
+        minimum = lower + margin - points[:, 1]
+        maximum = upper - margin - points[:, 1]
         # A lagging smoothed point may already lie outside today's corridor.
         # Leave it unchanged rather than introducing additional displacement.
         supported = (minimum <= 1e-6) & (maximum >= -1e-6) & (minimum <= maximum)
         minimum = np.where(supported, np.minimum(minimum, 0.), 0.)
         maximum = np.where(supported, np.maximum(maximum, 0.), 0.)
         desired = 0.0
+        pole_x = pole_y = None
         if pole is not None:
             pole_x = pole.distance_m * math.cos(pole.bearing_rad)
             pole_y = pole.distance_m * math.sin(pole.bearing_rad)
             center_y = path_target_lateral(path, pole_x)
             if center_y is not None:
-                desired = float(np.clip(c.center_bias_gain * (pole_y - center_y),
-                                        -c.center_max_offset_m, c.center_max_offset_m))
+                difference = pole_y - center_y
+                # Keep the original road-center side of this tracked Pole;
+                # noisy center estimates must not flip the 1m target across it.
+                if (self.clearance_side is None or self.target_id is None
+                        or self.clearance_target_id != self.target_id):
+                    self.clearance_side = 1.0 if difference >= 0.0 else -1.0
+                    self.clearance_target_id = self.target_id
+                desired = difference - self.clearance_side * c.target_clearance_m
+                self.metrics.update(pole_x_m=pole_x, pole_y_m=pole_y,
+                                    requested_offset_m=desired,
+                                    reference_clearance_supported=bool(
+                                        points[0, 0] <= pole_x <= points[-1, 0]),
+                                    goal_corridor_supported=bool(np.interp(
+                                        pole_x, points[:, 0], supported.astype(float)) >= 1.0 - 1e-6))
         target = np.clip(desired, minimum, maximum)
         step = c.center_shift_rate_mps * elapsed
         previous = (np.interp(points[:, 0], self.center_offsets_xy[:, 0], self.center_offsets_xy[:, 1])
@@ -374,6 +419,15 @@ class StreetLightApproach:
                             max_reference_offset_m=float(np.max(np.abs(offsets))),
                             returning_to_center=pole is None and active,
                             road_edge_limited=bool(np.any(np.abs(target - desired) > 1e-6)))
+        if pole_x is not None:
+            goal_y = float(np.interp(pole_x, points[:, 0], points[:, 1] + target))
+            applied_y = float(np.interp(pole_x, points[:, 0], points[:, 1] + offsets))
+            self.metrics.update(goal_reference_y_m=goal_y,
+                                reference_pending_m=abs(goal_y - applied_y),
+                                applied_offset_at_pole_m=float(np.interp(pole_x, points[:, 0], offsets)))
+            if self.metrics["reference_clearance_supported"]:
+                self.metrics.update(reference_clearance_at_pole_m=abs(pole_y - applied_y),
+                                    edge_limited_goal_clearance_m=abs(pole_y - goal_y))
         if not active:
             return path
         shifted = points.copy()

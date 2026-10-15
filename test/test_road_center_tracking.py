@@ -32,7 +32,8 @@ def projected_road(config,left,right,near=3.,far=8.):
 
 
 def test_road_midpoint_uses_edges_beyond_the_old_search_width():
-    config=lp.LocalPathConfig(close_kernel_px=0,branch_preference='center')
+    config=lp.LocalPathConfig(close_kernel_px=0,branch_preference='center',
+        road_roi_polygon=(.02,1.,.98,1.,.98,.42,.02,.42))
     mask=projected_road(config,6.,-2.)
     before=lp.extract_sidewalk_centerline(mask,config)
     after=lp.extract_road_centerline(mask,config)
@@ -64,9 +65,38 @@ def test_road_roi_does_not_change_distance_calibration_or_sidewalk():
     assert estimates[2] is not None and not estimates[2].road_center_tracking
 
 
-@pytest.mark.parametrize('polygon',[(0.,)*8,(float('nan'),)*8,(0.,0.,1.,1.,0.,1.,1.,0.)])
+@pytest.mark.parametrize('polygon',[(0.,)*8,(float('nan'),)*8,(0.,0.,1.,1.,0.,1.,1.,0.),
+    (.1,1.,.9,1.),(.1,1.,.9,1.,.5),(.1,1.,.9,1.,.5,.7,.8,.4,.2,.4)])
 def test_invalid_road_roi_is_rejected(polygon):
     with pytest.raises(ValueError):replace(lp.LocalPathConfig(),road_roi_polygon=polygon).validate()
+
+
+@pytest.mark.parametrize('polygon',[lp.DEFAULT_ROAD_ROI_POLYGON,
+    (.08,1.,.92,1.,.5,.45),(.02,1.,.98,1.,.98,.42,.02,.42)])
+def test_road_roi_supports_multiple_vertices_from_env(monkeypatch,polygon):
+    monkeypatch.setitem(debug.ENV,'SWIN_L_ROAD_ROI_POLYGON',','.join(map(str,polygon)))
+    config=debug._local_path_config_from_args(debug.parse_args(['task-drive']))
+    config.validate()
+    assert config.road_roi_polygon==polygon
+    assert lp.normalized_polygon_pixels(polygon,(360,640)).shape==(len(polygon)//2,2)
+    assert np.array_equal(lp.pixel_to_ground_homography((360,640),config),
+                          lp.pixel_to_ground_homography((360,640),lp.LocalPathConfig()))
+
+
+def test_road_polygon_excludes_regions_outside_the_requested_outline():
+    config=lp.LocalPathConfig(close_kernel_px=0,min_valid_ratio=.05)
+    rectangle=replace(config,road_roi_polygon=(.02,1.,.98,1.,.98,.42,.02,.42))
+    old_region=np.zeros((360,640),np.uint8);new_region=old_region.copy()
+    cv2.fillConvexPoly(old_region,lp.normalized_polygon_pixels(rectangle.road_roi_polygon,old_region.shape),1)
+    cv2.fillConvexPoly(new_region,lp.normalized_polygon_pixels(config.road_roi_polygon,new_region.shape),1)
+    outside=old_region*(1-new_region)
+    assert lp.extract_road_centerline(outside,config) is None
+    assert lp.extract_road_centerline(outside,rectangle) is not None
+
+
+def test_ground_calibration_remains_a_four_point_polygon():
+    with pytest.raises(ValueError):replace(lp.LocalPathConfig(),roi_polygon=lp.DEFAULT_ROAD_ROI_POLYGON).validate()
+    with pytest.raises(SystemExit):debug.parse_args(['task-drive','--roi-polygon',','.join(map(str,lp.DEFAULT_ROAD_ROI_POLYGON))])
 
 
 def test_road_always_smooths_jitter_even_with_unrestricted_mode():
@@ -91,11 +121,11 @@ def test_parallel_road_recovers_laterally_without_rotation(offset):
     out=command(road_path(offset))
     assert out.vx==.5 and out.yaw_rate==0.
     assert np.sign(out.vy)==np.sign(offset)
-    assert abs(out.vy)<=.10
+    assert abs(out.vy)==pytest.approx(min(.40*abs(offset),.25))
 
 
 def test_center_deadband_and_small_heading_feedforward():
-    assert command(road_path(.02)).vy==0.
+    assert command(road_path(.09)).vy==0.
     slope=math.tan(math.radians(6.))
     out=command(road_path(slope=slope))
     assert out.yaw_rate==0. and out.vy==pytest.approx(.5*slope)
@@ -153,18 +183,21 @@ def test_position_loop_returns_to_center_after_a_disturbance(initial):
         out=command(road_path(offset),road_state=state,now=i*.05)
         assert out.yaw_rate==0.
         offset-=out.vy*.05;state.record_command(out,now=i*.05);history.append(offset)
-    assert abs(history[398])<.06 and abs(history[-1])<.06
+    tolerance=DriveConfig().road_lateral_deadband_m+.01
+    assert abs(history[398])<tolerance and abs(history[-1])<tolerance
     assert all(o*initial>=0. for o in history)  # No repeated side crossings.
 
 
 def test_env_and_cli_road_settings_and_validation(monkeypatch):
-    monkeypatch.setitem(debug.ENV,'LINE_TRACKING_ROAD_MAX_LATERAL_MPS','0.07')
+    monkeypatch.setitem(debug.ENV,'LINE_TRACKING_ROAD_MAX_LATERAL_MPS','0.25')
+    monkeypatch.setitem(debug.ENV,'LINE_TRACKING_ROAD_LATERAL_DEADBAND_M','0.12')
     monkeypatch.setitem(debug.ENV,'SWIN_L_ROAD_ROI_POLYGON','0.01,1,0.99,1,0.99,0.43,0.01,0.43')
     args=debug.parse_args(['task-drive','--road-lateral-gain','0.3'])
-    assert debug._drive_config_from_args(args).road_max_lateral_mps==.07
+    assert debug._drive_config_from_args(args).road_max_lateral_mps==.25
+    assert debug._drive_config_from_args(args).road_lateral_deadband_m==.12
     assert debug._drive_config_from_args(args).road_lateral_gain==.3
     assert debug._local_path_config_from_args(args).road_roi_polygon[0]==.01
-    with pytest.raises(SystemExit):debug.parse_args(['ros2','--road-max-lateral-mps','0.2'])
+    with pytest.raises(SystemExit):debug.parse_args(['ros2','--road-max-lateral-mps','0.250001'])
 
 
 @pytest.mark.parametrize('selected',[1,3])
@@ -218,7 +251,7 @@ def test_runtime_confirmed_pole_shifts_only_mode_three_reference(monkeypatch,sel
     ros.run(scenario,'--branch-preference','center')
 
 
-@pytest.mark.parametrize('value',['nan','-1','0','0.16'])
+@pytest.mark.parametrize('value',['nan','inf','-1','0','0.250001'])
 def test_invalid_road_lateral_speed_rejected(value):
     with pytest.raises(SystemExit):debug.parse_args(['task-drive','--road-max-lateral-mps',value])
 

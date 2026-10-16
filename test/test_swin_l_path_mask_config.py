@@ -164,7 +164,7 @@ def test_invalid_branch_environment_is_rejected_before_startup(monkeypatch, name
 
 
 @pytest.mark.parametrize("mode", ["ros2", "task-drive", "mcap"])
-def test_vegetation_bias_settings_reach_all_path_modes(monkeypatch, tmp_path, mode):
+def test_legacy_vegetation_options_remain_parseable(monkeypatch, tmp_path, mode):
     monkeypatch.setitem(debug.ENV, "SWIN_L_SIDEWALK_VEGETATION_BIAS_M", "0.15")
     monkeypatch.setitem(debug.ENV, "SWIN_L_SIDEWALK_VEGETATION_MAX_GAP_M", "0.25")
     monkeypatch.setitem(debug.ENV, "SWIN_L_SIDEWALK_VEGETATION_EDGE_MARGIN_M", "0.50")
@@ -199,7 +199,7 @@ def test_invalid_vegetation_environment_is_rejected(monkeypatch, name, value):
         debug.parse_args(["task-drive"])
 
 
-def test_image_projection_biases_only_sidewalk_and_returns_to_center_without_vegetation():
+def test_sidewalk_vegetation_never_biases_runtime_path_even_with_legacy_nonzero_config():
     mask = np.zeros((360, 640), np.uint8)
     mask[:, :320] = 2
     vegetation = mask == 0  # Image-right is robot-right (negative y).
@@ -207,8 +207,8 @@ def test_image_projection_biases_only_sidewalk_and_returns_to_center_without_veg
     smoothers = {key: LocalPathSmoother(cfg) for key in (0, 1, 2)}
     baseline = debug.extract_path_estimates(mask, tuple(smoothers), cfg)
     biased = debug.update_path_smoothers(mask, smoothers, cfg, 1.0, vegetation)
-    np.testing.assert_allclose(biased[2].points_xy[:, 1],
-                               baseline[2].points_xy[:, 1] - 0.20, atol=1e-6)
+    np.testing.assert_array_equal(biased[2].points_xy, baseline[2].points_xy)
+    assert not biased[2].vegetation_bias_active
     np.testing.assert_array_equal(biased[0].points_xy, baseline[0].points_xy)
     assert biased[1] is None
     returned = debug.update_path_smoothers(mask, smoothers, cfg, 2.0, np.zeros_like(mask))

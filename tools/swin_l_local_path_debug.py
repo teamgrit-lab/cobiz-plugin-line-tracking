@@ -98,7 +98,8 @@ from local_path import (
     selected_path_region,
 )
 from r50_checkpoint import validate_checkpoint
-from sidewalk_vegetation import bias_sidewalk_estimate
+from path_execution import (PathExecution, PathExecutionConfig, make_path_tracker,
+                            surface_evidence)
 from swin_l_drive_control import (
     DRIVE_STOP_CHECKS,
     MAX_PATH_UNAVAILABLE_INFERENCES,
@@ -238,7 +239,10 @@ def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
 
 def extract_path_estimates(selected_mask, mask_classes, config, vegetation_mask=None,
                           road_hazard_mask=None, road_analysis=None):
-    """Semantic reference paths are independent of obstacle sensing."""
+    """Extract surface centers; the legacy vegetation argument is ignored.
+
+    Road hazard clearance remains independent of the removed sidewalk bias.
+    """
     estimates = {}
     for key in mask_classes:
         region = selected_path_region(selected_mask, key)
@@ -249,8 +253,6 @@ def extract_path_estimates(selected_mask, mask_classes, config, vegetation_mask=
             estimate = analysis.estimate
         else:
             estimate = extract_sidewalk_centerline(region, config)
-        if key == 2:
-            estimate = bias_sidewalk_estimate(estimate, region, vegetation_mask, config)
         estimates[key] = estimate
     return estimates
 
@@ -348,6 +350,32 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         sidewalk_vegetation_max_gap_m=args.sidewalk_vegetation_max_gap_m,
         sidewalk_vegetation_edge_margin_m=args.sidewalk_vegetation_edge_margin_m,
     )
+
+
+def _path_execution_config_from_args(args) -> PathExecutionConfig:
+    config = PathExecutionConfig(**{
+        name: getattr(args, 'path_execution_' + name)
+        for name in PathExecutionConfig.__dataclass_fields__
+    })
+    config.validate()
+    return config
+
+
+def _update_path_tracker(tracker, mask_class, estimate, analysis, selected,
+                         hazards, config, timestamp, observation_pose=None, observed_at=None,
+                         frame_key=None, reset_missing=True):
+    if mask_class == 1 and config.road_clearance_enabled:
+        if isinstance(tracker, PathExecution):
+            return tracker.update_road(analysis['result'], timestamp, observation_pose,
+                                       observed_at=observed_at, frame_key=frame_key)
+        return tracker.update_road(analysis['result'], timestamp, observation_pose)
+    if isinstance(tracker, PathExecution):
+        evidence = surface_evidence(selected_path_region(selected, mask_class), config,
+                                    observed_at=observed_at, frame_key=frame_key)
+        return tracker.update(estimate, timestamp, evidence=evidence)
+    if estimate is None and reset_missing:
+        tracker.reset(preserve_branch=True)
+    return tracker.update(estimate, timestamp)
 
 
 def _preview_drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
@@ -674,7 +702,8 @@ def run_mcap(args):
     local_config = _local_path_config_from_args(args) if with_path else None
     preview_drive_config = _preview_drive_config_from_args(args)
     segmenter = BestSoFarSegmenter(_runtime_config(args))
-    smoother = LocalPathSmoother(local_config) if with_path else None
+    execution_config = _path_execution_config_from_args(args)
+    smoother = make_path_tracker(local_config, execution_config, args.path_mask_class) if with_path else None
     sensors = LidarRuntime(args, _lidar_config_from_args(args), _avoidance_config_from_args(args),
                            drive_config=preview_drive_config) if with_path and args.avoidance_enabled else None
     topics = [args.image_topic]
@@ -718,8 +747,7 @@ def run_mcap(args):
                 overlay = segmenter.render_overlay(frame, result.selected_mask, frame_index=count, fps=args.output_fps)
             else:
                 if args.unrestricted_path_mode or now >= next_inference:
-                    extras = {"detect_vegetation": (args.path_mask_class == 2
-                                                   and local_config.sidewalk_vegetation_bias_m > 0)}
+                    extras = {}
                     if args.path_mask_class == 1 and local_config.road_clearance_enabled:
                         extras.update(detect_road_hazards=True,
                                       road_hazard_min_confidence=local_config.road_hazard_min_confidence)
@@ -732,15 +760,16 @@ def run_mcap(args):
                         getattr(result, "road_hazard_mask", None), road_analysis)[args.path_mask_class]
                     clearance_blocked = (args.path_mask_class == 1 and local_config.road_clearance_enabled
                                          and road_analysis["result"].blocked)
-                    if args.path_mask_class == 1 and local_config.road_clearance_enabled:
-                        smoother.update_road(road_analysis["result"], now)
-                    else:
-                        smoother.update(estimate, now)
+                    _update_path_tracker(smoother, args.path_mask_class, estimate,
+                        road_analysis, previous_mask, getattr(result, 'road_hazard_mask', None),
+                        local_config, now, reset_missing=False)
                     if sensors:
                         sensors.set_reference(previous_mask, decoded.header, frame.shape[:2], now)
                     updates += 1
                     times.append(result.total_seconds)
                     next_inference = now + 1 / args.inference_hz
+                if isinstance(smoother, PathExecution):
+                    smoother.advance(now)
                 current = smoother.current(now)
                 if sensors:
                     nominal = decide_drive(current, camera_age_sec=0, inference_age_sec=0, config=preview_drive_config,
@@ -916,8 +945,9 @@ def run_ros2(args: argparse.Namespace) -> int:
     segmenter = BestSoFarSegmenter(_runtime_config(args))
     if task_mode and segmenter.device.type != "cuda":
         raise RuntimeError("task-drive mode requires a CUDA model device")
+    execution_config = _path_execution_config_from_args(args)
     smoothers = {
-        mask_class: LocalPathSmoother(local_config)
+        mask_class: make_path_tracker(local_config, execution_config, mask_class)
         for mask_class in (PATH_MASK_CLASSES if task_mode else (args.path_mask_class,))
     }
     latest = LatestFrameQueue(enabled=not task_mode)
@@ -1309,7 +1339,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 # Replace path histories instead of locking an old smoother:
                 # SIGTERM may have interrupted its current() call on this thread.
                 for mask_class in smoothers:
-                    smoothers[mask_class] = LocalPathSmoother(local_config)
+                    smoothers[mask_class] = make_path_tracker(local_config, execution_config, mask_class)
                 for key in (
                     "last_image_at", "last_image_stamp_ns", "last_inference_at",
                     "last_inference_stamp_ns", "camera_fault_reason",
@@ -1374,7 +1404,14 @@ def run_ros2(args: argparse.Namespace) -> int:
                 last_inference_at = state["last_inference_at"]
                 last_image_stamp_ns = state["last_image_stamp_ns"]
                 last_inference_stamp_ns = state["last_inference_stamp_ns"]
+                if isinstance(smoothers[mask_class], PathExecution):
+                    smoothers[mask_class].advance(now, self.road_pose())
                 path = smoothers[mask_class].current(now)
+                execution_path_lost = (isinstance(smoothers[mask_class], PathExecution)
+                                      and smoothers[mask_class].path_loss_at is not None)
+                recovery_candidate = (smoothers[mask_class].recovery_candidate(now)
+                    if isinstance(smoothers[mask_class], PathExecution) and self.path_search.active
+                    else None)
                 self.path_recovery_inferences = state["path_recovery_inferences"][mask_class]
                 recovering = (self.drive_config.path_loss_recovery_enabled and (
                     state["semantic_path_missing"][mask_class]
@@ -1385,8 +1422,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                 road_path_unconfirmed = mask_class == 1 and (state["road_path_unconfirmed"] or
                     (path is None and state["road_path_analysis"].get("status") in
                      ("calculation_failed", "insufficient_observation")))
-                if recovering and (path is None or path.stop_reason is None):
+                if recovering and not clearance_blocked and (
+                        path is None or path.stop_reason is None or execution_path_lost):
                     path = None
+                    if mask_class == 1:
+                        road_path_unconfirmed = True
                 self.path_unavailable_inferences = state["path_unavailable_inferences"][
                     mask_class
                 ]
@@ -1395,6 +1435,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path = compensate_road_path(path, self.road_pose())
                 if capture_path is not None and path is None:
                     road_path_unconfirmed = True
+                if recovery_candidate is not None:
+                    recovery_candidate = compensate_road_path(recovery_candidate, self.road_pose())
             clock_now_ns = self.get_clock().now().nanoseconds
             camera_age_sec = _effective_source_age_sec(
                 last_image_at, last_image_stamp_ns, now, clock_now_ns
@@ -1439,6 +1481,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                     sensors_ready=sensor_reason is None,
                     sensor_reason=sensor_reason or "inputs_not_ready",
                     path_confidence=path.confidence if path is not None else None,
+                    recovery_candidate_confidence=(recovery_candidate.confidence
+                        if recovery_candidate is not None else None),
                 )
                 if self.path_search.active and (path is None or path.stop_reason is None):
                     path = None
@@ -1647,6 +1691,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 tag_status = self.apriltags.snapshot(now=now)
             task_active = self.tasks.active if self.tasks is not None else None
             mask_class = active_path_mask_class(task_active, args.path_mask_class)
+            if not task_mode and isinstance(smoothers[mask_class], PathExecution):
+                with state_lock:
+                    smoothers[mask_class].advance(now, self.road_pose())
             with state_lock:
                 header = state["header"]
                 inference_count = int(state["inference_count"])
@@ -1739,6 +1786,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_surface": PATH_MASK_CLASSES[mask_class],
                 "selected_mask": task_active.selected_mask if task_active is not None else args.path_mask_class,
                 "path_tracked": path is not None and path.stop_reason is None,
+                "path_execution": (smoothers[mask_class].metrics(now)
+                    if isinstance(smoothers[mask_class], PathExecution)
+                    else {"enabled": False}),
                 "road_motion": {"odom_frame": self.road_odom_frame,
                     "capture_pose_available": bool(path and path.road_geometry and path.road_geometry.get("observation_pose") is not None),
                     "control_compensated": bool(path and path.road_geometry and path.road_geometry.get("control_motion_compensated"))},
@@ -1892,16 +1942,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
-                    detect_vegetation = (
-                        2 in smoothers and local_config.sidewalk_vegetation_bias_m > 0
-                        and (not task_mode or (node.tasks.active is not None
-                                               and node.tasks.active.selected_mask == 2)))
                     detect_road_hazards = (local_config.road_clearance_enabled and
                         (not task_mode or (node.tasks.active is not None
                                           and node.tasks.active.selected_mask == 1)))
                 segment_kwargs = {"color_order": "rgb"}
-                if detect_vegetation:
-                    segment_kwargs["detect_vegetation"] = True
                 if detect_road_hazards:
                     segment_kwargs.update(detect_road_hazards=True,
                         road_hazard_min_confidence=local_config.road_hazard_min_confidence)
@@ -1918,20 +1962,30 @@ def run_ros2(args: argparse.Namespace) -> int:
                     getattr(result, "vegetation_mask", None),
                     getattr(result, "road_hazard_mask", None), road_analysis)
                 path_updated_at = time.monotonic()
+                source_stamp = _stamp_ns(packet.source_header) if packet.source_header is not None else 0
+                source_age = ((node.get_clock().now().nanoseconds-source_stamp)/1e9
+                              if source_stamp else None)
+                if source_age is not None and -.05 <= source_age < 0:
+                    source_age = 0.  # Match the live camera clock-skew tolerance.
+                observed_at = path_updated_at-source_age if source_age is not None else path_updated_at
                 recovery_enabled = task_mode and node.drive_config.path_loss_recovery_enabled
                 semantic_missing = {key: recovery_enabled and estimates[key] is None for key in smoothers}
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
                     for mask_class, smoother in smoothers.items():
-                        if mask_class == 1 and local_config.road_clearance_enabled:
-                            smoother.update_road(road_analysis["result"], path_updated_at,
-                                                 node.road_pose(packet.source_header))
-                            semantic_missing[mask_class] = smoother.current(path_updated_at) is None
-                        else:
-                            if estimates[mask_class] is None:
-                                smoother.reset(preserve_branch=True)
-                            smoother.update(estimates[mask_class], path_updated_at)
+                        _update_path_tracker(smoother, mask_class, estimates[mask_class],
+                            road_analysis, result.selected_mask,
+                            getattr(result, "road_hazard_mask", None), local_config,
+                            path_updated_at,
+                            node.road_pose(packet.source_header) if mask_class == 1 else None,
+                            observed_at=observed_at, frame_key=source_stamp or None)
+                        if isinstance(smoother, PathExecution):
+                            semantic_missing[mask_class] = (recovery_enabled
+                                and smoother.path_loss_at == path_updated_at)
+                        elif mask_class == 1:
+                            current = smoother.current(path_updated_at)
+                            semantic_missing[mask_class] = recovery_enabled and current is None
                     if node.obstacles is not None:
                         node.obstacles.set_reference(result.selected_mask, packet.source_header,
                             (packet.image_message.height, packet.image_message.width), path_updated_at)
@@ -1949,11 +2003,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                             )
                             current = smoother.current(inference_finished_at)
                             missing = semantic_missing[mask_class] and (
-                                current is None or current.stop_reason is None
+                                isinstance(smoother, PathExecution)
+                                or current is None or current.stop_reason is None
                             )
                             state["semantic_path_missing"][mask_class] = missing
                             recovery_counts = state["path_recovery_inferences"]
-                            if available and current.stop_reason is None:
+                            if ((available and current.stop_reason is None)
+                                    or (isinstance(smoother, PathExecution) and not missing)):
                                 recovery_counts[mask_class] = 0
                             elif missing:
                                 recovery_counts[mask_class] += 1
@@ -2040,7 +2096,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--vegetation-max-lateral-mps", type=float,
         default=_env_float("LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS", 0.05),
-        help="maximum sideways speed while following a vegetation-biased sidewalk path (yaw=0)",
+        help="legacy compatibility option; sidewalk vegetation bias has been removed",
     )
     parser.add_argument("--avoidance-enabled", action=argparse.BooleanOptionalAction,
                         default=_env_bool("LINE_TRACKING_AVOIDANCE_ENABLED", False),
@@ -2154,18 +2210,18 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--sidewalk-vegetation-bias-m", type=float,
-        default=_env_float("SWIN_L_SIDEWALK_VEGETATION_BIAS_M", 0.20),
-        help="maximum in-sidewalk offset toward adjacent Vegetation; 0 disables",
+        default=_env_float("SWIN_L_SIDEWALK_VEGETATION_BIAS_M", 0.0),
+        help="legacy compatibility option; sidewalk vegetation bias has been removed",
     )
     parser.add_argument(
         "--sidewalk-vegetation-max-gap-m", type=float,
         default=_env_float("SWIN_L_SIDEWALK_VEGETATION_MAX_GAP_M", 0.30),
-        help="maximum ground-grid gap from the sidewalk edge to Vegetation",
+        help="legacy compatibility option; no effect on sidewalk tracking",
     )
     parser.add_argument(
         "--sidewalk-vegetation-edge-margin-m", type=float,
         default=_env_float("SWIN_L_SIDEWALK_VEGETATION_EDGE_MARGIN_M", 0.45),
-        help="minimum path-center clearance from the observed sidewalk edge",
+        help="legacy compatibility option; no effect on sidewalk tracking",
     )
     parser.add_argument(
         "--smoothing-time-constant-sec",
@@ -2188,6 +2244,16 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--inference-hz", type=float, default=_env_float("SWIN_L_INFERENCE_HZ", 4.0)
     )
+    for name, default in PathExecutionConfig.__dataclass_fields__.items():
+        option = '--path-execution-' + name.replace('_', '-')
+        env_name = 'LINE_TRACKING_PATH_EXECUTION_' + name.upper()
+        if name == 'enabled':
+            parser.add_argument(option, action=argparse.BooleanOptionalAction,
+                                default=_env_bool(env_name, default.default))
+        else:
+            kind = int if name == 'confirm_frames' else float
+            value = _env_int(env_name, default.default) if kind is int else _env_float(env_name, default.default)
+            parser.add_argument(option, type=kind, default=value)
     parser.add_argument(
         "--unrestricted-path-mode",
         action=argparse.BooleanOptionalAction,
@@ -2402,6 +2468,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.mode != "mcap" or args.overlay_mode == "local-path":
         try:
             _local_path_config_from_args(args).validate()
+            _path_execution_config_from_args(args).validate()
         except ValueError as error:
             parser.error(str(error))
     if args.mode == "task-drive" and "LINE_TRACKING_BYPASS_PATH_STOPS" in ENV:

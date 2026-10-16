@@ -24,7 +24,7 @@ class Simulation:
         self.recovery.record_command(TRACK, now=self.now)
 
     def tick(self, normal=LOST, *, new_frame=True, fresh=True, source_at=None,
-             confidence=.9, override=None, dt=.1):
+             confidence=.9, override=None, dt=.1, candidate_confidence=None):
         self.now += dt
         self.angle += self.command.yaw_rate * dt
         self.frame += int(new_frame)
@@ -33,6 +33,7 @@ class Simulation:
             inference_source_at=self.now if source_at is None else source_at,
             sensors_ready=fresh, sensor_reason="inference_stale",
             path_confidence=confidence,
+            recovery_candidate_confidence=candidate_confidence,
         )
         self.command = result if override is None else override
         self.recovery.record_command(self.command, now=self.now)
@@ -98,6 +99,27 @@ def test_resume_requires_distinct_confident_results_captured_after_stopping():
     assert not sim.recovery.active
     # A subsequent loss receives its own complete waiting window.
     assert sim.tick().reason == "path_recovery_waiting"
+
+
+def test_road_candidates_stop_search_but_cannot_move_before_commitment():
+    sim = Simulation()
+    sim.tick()
+    pending = DriveDecision.stop('path_execution_invalidated')
+    assert sim.tick(pending, confidence=None, candidate_confidence=.9).reason == 'path_recovery_confirming'
+    assert sim.tick(pending, confidence=None, candidate_confidence=.9).reason == 'path_recovery_confirming'
+    assert sim.recovery.active  # Even two candidates cannot override the guard.
+    assert sim.tick(TRACK).reason == 'tracking'
+    assert not sim.recovery.active
+
+
+@pytest.mark.parametrize('reason', ['camera_stale', 'branch_path_lost',
+    'road_clearance_blocked', 'path_execution_pose_discontinuity',
+    'path_execution_waiting_connected_candidate'])
+def test_candidate_confidence_does_not_bypass_explicit_stops(reason):
+    sim = Simulation()
+    sim.tick()
+    assert sim.tick(DriveDecision.stop(reason), candidate_confidence=.9).reason == reason
+    assert sim.recovery.confirmed_frames == 0
 
 
 @pytest.mark.parametrize("guard", ["branch_path_lost", "lidar_path_unavailable",

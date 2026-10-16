@@ -275,6 +275,7 @@ class PathLossRecovery:
         self, normal: DriveDecision, *, now: float, inference_id: int,
         inference_source_at: float | None, sensors_ready: bool,
         sensor_reason: str, path_confidence: float | None,
+        recovery_candidate_confidence: float | None = None,
     ) -> DriveDecision:
         self._advance(now)
         if normal.reason == "road_clearance_blocked":
@@ -292,7 +293,15 @@ class PathLossRecovery:
             self.last_inference = inference_id
 
         # Explicit stops, branch guards and obstacle exclusions take priority.
-        if normal.reason not in (
+        candidate_usable = (
+            normal.reason in ("path_execution_waiting_initial_candidate",
+                "path_execution_invalidated", "path_execution_observation_expired",
+                "path_execution_waiting_replan_candidate")
+            and recovery_candidate_confidence is not None
+            and math.isfinite(recovery_candidate_confidence)
+            and recovery_candidate_confidence >= self.config.min_confidence
+        )
+        if not candidate_usable and normal.reason not in (
             "tracking", "tracking_slow_turn", "tracking_path_hold", "tracking_path_recovery",
             "path_recovery_waiting", "waiting_for_path",
         ):
@@ -308,7 +317,8 @@ class PathLossRecovery:
             self.last_inference = inference_id
             return DriveDecision.stop(sensor_reason)
 
-        usable = (normal.reason in ("tracking", "tracking_slow_turn")
+        tracking = normal.reason in ("tracking", "tracking_slow_turn")
+        usable = candidate_usable or (tracking
                   and path_confidence is not None and math.isfinite(path_confidence)
                   and path_confidence >= self.config.min_confidence)
         if inference_id != self.last_inference:
@@ -327,7 +337,7 @@ class PathLossRecovery:
                 self.confirmed_frames += 1
                 self.confirm_source_at = inference_source_at
         if usable and self.confirmed_frames:
-            if self.confirmed_frames >= self.config.path_recovery_confirm_frames:
+            if tracking and self.confirmed_frames >= self.config.path_recovery_confirm_frames:
                 self.phase = "idle"
                 self.confirmed_frames = 0
                 self.confirm_since = None
@@ -391,7 +401,9 @@ def decide_drive(
     config.validate()
     if obstacle_stop_reason is not None:
         return DriveDecision.stop(obstacle_stop_reason)
-    if path is not None and path.stop_reason is not None:
+    if road_clearance_blocked:
+        return DriveDecision.stop("road_clearance_blocked")
+    if path is not None and path.stop_reason is not None and not path.stop_reason.startswith('path_execution_'):
         return DriveDecision.stop(path.stop_reason)
     for name, age, maximum in (
         ("camera", camera_age_sec, config.max_camera_age_sec),
@@ -401,13 +413,13 @@ def decide_drive(
             age is None or not math.isfinite(age) or age < 0.0 or age > maximum
         ):
             return DriveDecision.stop(f"{name}_stale")
+    if path is not None and path.stop_reason is not None:
+        return DriveDecision.stop(path.stop_reason)
     if path is not None and config.stop_on_low_confidence and (
         not math.isfinite(path.confidence)
         or path.confidence < config.min_confidence
     ):
         return DriveDecision.stop("path_low_confidence")
-    if road_clearance_blocked:
-        return DriveDecision.stop("road_clearance_blocked")
     lateral = path_target_lateral(path, config.lookahead_m)
     if lateral is None:
         if config.stop_on_path_unavailable or (

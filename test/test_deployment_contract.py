@@ -179,6 +179,23 @@ def test_automatic_stop_switches_are_forwarded_and_default_disabled():
     assert "LINE_TRACKING_BYPASS_PATH_STOPS=" not in example
 
 
+def test_path_execution_settings_reach_both_live_services_and_parser():
+    import yaml
+    import sys
+    sys.path.insert(0, str(ROOT / 'tools'))
+    from path_execution import PathExecutionConfig
+    import swin_l_local_path_debug as debug
+    services = yaml.safe_load((ROOT / 'docker-compose.yml').read_text())['services']
+    example = (ROOT / '.env.example').read_text()
+    args = debug.parse_args(['ros2'])
+    assert debug._path_execution_config_from_args(args) == PathExecutionConfig()
+    for key in PathExecutionConfig.__dataclass_fields__:
+        env = 'LINE_TRACKING_PATH_EXECUTION_'+key.upper()
+        assert env+'=' in example
+        for name in ('actual-activate', 'debugging-swin-l'):
+            assert env in services[name]['environment']
+
+
 def test_jetson_swin_l_base_build_contract():
     compose = (ROOT / "docker-compose.yml").read_text()
     env_example = (ROOT / ".env.example").read_text()

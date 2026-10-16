@@ -31,7 +31,7 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
         def segment(self, frame, *, detect_vegetation=False):
             # The MCAP camera is RGB; the runtime must receive unmodified BGR.
             assert frame[0, 0].tolist() == [3, 2, 1]
-            assert detect_vegetation == (mode == "local-path")
+            assert detect_vegetation is False
             calls.append(frame)
             return SimpleNamespace(
                 selected_mask=np.full((360, 640), 2, np.uint8), total_seconds=0.01

@@ -11,7 +11,7 @@ import pytest
 from test_apriltag_task_stop_ros import Message, RosHarness, SPORT, ZERO, debug
 
 
-def run_recovery(monkeypatch, scenario, *, extra_args=()):
+def run_recovery(monkeypatch, scenario, *, extra_args=(), mask_class=2):
     ros = RosHarness(monkeypatch)
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "true")
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false")
@@ -20,19 +20,25 @@ def run_recovery(monkeypatch, scenario, *, extra_args=()):
     # Exercise the short task safety timeout while running the longer search.
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_UNSAFE_TIMEOUT", "true")
     good = np.zeros((360, 640), np.uint8)
-    good[:, :320] = 2
-    detection = NS(mask=good.copy())
+    if mask_class == 1:
+        good[:] = 1
+    else:
+        good[:, :320] = 2
+    detection = NS(mask=good.copy(), blocked=False)
     monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _: NS(
         device=NS(type="cuda"), reset=lambda: None,
         segment=lambda _frame, **kwargs: NS(
-            selected_mask=detection.mask.copy(), inference_seconds=.01)))
+            selected_mask=detection.mask.copy(),
+            road_hazard_mask=np.full_like(good, detection.blocked, dtype=bool),
+            inference_seconds=.01)))
 
     def exercise(node):
         node.drive_config = replace(node.drive_config, heading_gain=2.)
         ros.start(duration=200)
 
-        def feed(*, visible=False, dt=.1):
+        def feed(*, visible=False, dt=.1, blocked=False):
             detection.mask = good.copy() if visible else np.zeros_like(good)
+            detection.blocked = blocked
             ros.now += dt
             previous = ros.metrics()["inference_count"] if ros.published.get(
                 debug.DEFAULT_METRICS_TOPIC) else 0
@@ -52,7 +58,7 @@ def run_recovery(monkeypatch, scenario, *, extra_args=()):
     ros.run(exercise, "--near-distance-m", ".6", "--far-distance-m", "3",
             "--search-half-width-m", "2",
             "--bev-height-px", "49", "--bev-width-px", "81",
-            "--branch-preference", "center", *extra_args)
+            "--branch-preference", "center", "--path-mask-class", str(mask_class), *extra_args)
 
 
 @pytest.mark.parametrize("recover_phase", ["waiting", "scan_left", "scan_right"])

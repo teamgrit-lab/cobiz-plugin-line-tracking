@@ -244,19 +244,24 @@ LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 | `UNSAFE_TIMEOUT` | 추종할 수 없는 상태가 연속 2초 지속되면 작업 중단 |
 | `TASK_TIMEOUT` | 요청한 작업 시간 도달 시 정지·종료. 기본 500초, 최대 10000초 |
 
-이 직진·좌우 탐색 복구는 `selected_mask=0/1/2`에서
-`LINE_TRACKING_AVOIDANCE_ENABLED=false`인 일반 모드와, LiDAR를 확인용으로만 쓰는
-3번 작업에서 사용한다.
+경로 상실 복구는 `selected_mask=0/1/2`에서
+`LINE_TRACKING_AVOIDANCE_ENABLED=false`인 일반 모드에 적용한다.
 LiDAR 회피가 켜져 있으면 유효한 시각 경로가 사라지는 즉시 정지하며 자동 탐색은 하지 않는다.
 
 `LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED=true`가 기본값이다. 주행 중 영상 검출에서
-선택한 차도/인도 경로를 잃으면 기존처럼 첫 1–2회 실패 동안 `tracking_path_recovery`로
+0·2번의 선택한 경로를 잃으면 첫 1–2회 실패 동안 `tracking_path_recovery`로
 마지막 유효 전진 속도를 유지하고 회전 명령은 0으로 바꾼다. 급회전 때문에 줄어든
 전진 속도도 유지한다. 3번째 추론에서 경로가 다시 보이면 즉시 추종을 재개한다.
 3번째도 실패하면 전진·회전을 0으로 바꾸고 `path_recovery_waiting`으로 대기한다.
 기본 대기 시간은 **정지 명령을 발행한 뒤부터 1초**이며, 최초 소실부터 세지 않는다.
+차도 1번은 새 허용 영역에서 기존 경로도 검증할 수 없다면 첫 실패부터 정지한다.
+소실이 새 추론 3회 연속이면 같은 대기·탐색 절차를 시작한다. 풀·연석으로 통로가
+차단되었다고 판정한 경우는 탐색하지 않고 정지를 유지한다. 차도 구간 실행의 후보
+확인·연결 대기도 자동 탐색으로 바꾸지 않는다.
 실패 횟수는 선택한 클래스의 완료된 추론 결과로만 증가하고 제어 발행은 추가로 세지 않는다.
-작업 시작부터 경로가 없었다면 `waiting_for_path`로 대기하며 자동 회전하지 않는다.
+작업 시작부터 경로가 없었다면 대기하며 자동 회전하지 않는다. 차도 구간 실행에서는
+`path_execution_waiting_initial_candidate`/`road_path_unconfirmed`, 그 외에는
+`waiting_for_path`로 표시한다.
 
 대기 후 제자리에서 정지 당시 방향을 기준으로 **왼쪽 +90° → 오른쪽 -90° → 원래 0°**를
 기본 순서로 탐색한다. `.env`의 `LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION=right`로
@@ -656,41 +661,14 @@ row selects a contiguous region at least 0.12 m wide, favoring width and
 continuity with the preceding row. Its center contributes to a quadratic fit,
 which is sampled into 20 path points and clipped to +/-3.5 m laterally.
 
-인도 전용 주행(`selected_mask=2`)에서는 가까운 식생 쪽으로 Path 중심을 기본 최대
-0.20 m 편향한다. 현재 모델의 `Vegetation` 라벨을 사용하므로 풀밭만 따로 구분하지는
-못하며 수풀·나무도 포함한다. 추가 모델 추론 없이 현재 프레임의 우승 클래스와
-정규화한 semantic score 0.5 이상인 픽셀만 별도 마스크로 전달한다. 식생을 주행 가능
-영역에 합치지는 않는다. 차도(`1`), 차도+인도(`0`), 기둥 시나리오(`3`)는 기존
-경로를 사용한다.
-
-식생과 인도는 같은 지면 격자로 투영하며, closing 이전의 인도 경계를 기준으로
-좌우를 비교한다. 경계에서 0.30 m 이내에 폭 0.15 m 이상의 식생이 있어야 근접
-증거로 사용한다. 전체 경로점 대비 한쪽의 순 지지율이 30% 이상일 때 그 방향으로
-이동량을 적용하며, 양쪽에 식생이 있으면 해당 점은 편향하지 않는다. 경계 구간의
-이동량은 공간적으로 완화하고, 각 점은 감지된 인도 경계에서 중심 기준 0.45 m 여유를
-유지하도록 제한한다. 이미 이 여유가 없는 점이나 인도가 관측되지 않은 점은 그대로
-둔다. 좁은 인도에서는 이동량이 줄어들거나 0이 된다. 식생이 사라지면 새 추정은
-기존 중심 경로로 돌아오며, 일반 평활화 모드에서는 기존 EMA를 따른다.
-
-편향이 적용된 경로를 추종하는 동안은 전진 속도를 유지하면서 회전 명령을 `0`으로
-두고 횡이동한다. 이 동안에는 곡선·분기에서도 몸체를 회전하지 않는다. 4 m 목표점의
-현재 로봇 기준 횡오차에 `0.5`를 곱한 횡속도를 사용하고, 기본 최대 `0.05 m/s`로
-제한한다. 횡오차가 `0.02 m` 이내이면 횡속도는 `0`이다. 계속 갱신되는 카메라 경로로
-오차를 계산하므로 목표에 도달한 뒤에도 일정 속도로 옆으로 밀지 않는다. 전진 속도는
-기존 목표각에 따른 감속·상한을 유지한다. 편향이 적용되지 않으면 기존 전진·회전
-추종으로 돌아간다. `LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS`(기본 `0.05`,
-허용 범위 `0` 초과~`0.15`) 또는 `--vegetation-max-lateral-mps`로 횡속도를 조절한다.
-LiDAR 회피가 활성화되어 있으면 회피·외곽 충돌·미관측 공간 검사가 계속 우선하며,
-장애물 회피에 필요한 횡속도는 회피 설정의 별도 제한을 사용한다.
-
-확인된 분기는 기존 좌우 선택과 식별을 유지한 채 선택한 인도 구간 안에서만 편향한다.
-분기 경로의 기울기·구간 내부 검사를 통과하지 못하면 원래 분기 경로를 사용한다.
-`SWIN_L_SIDEWALK_VEGETATION_BIAS_M`(기본 `0.20`, `0`이면 해제),
-`SWIN_L_SIDEWALK_VEGETATION_MAX_GAP_M`(기본 `0.30`),
-`SWIN_L_SIDEWALK_VEGETATION_EDGE_MARGIN_M`(기본 `0.45`)으로 조정한다.
-오프라인 `mcap --overlay-mode local-path --path-mask-class 2`에도 동일하게 적용된다.
-설정 변경은 프로세스 재시작 또는 컨테이너 재생성 후 적용된다. 거리와 여유는 기존
-카메라 지면 투영 보정에 의존하며, 실물 주행은 아직 검증하지 않았다.
+인도 전용 주행(`selected_mask=2`)의 풀숲 편향은 제거했다. 인도 경로는 식생의
+유무나 방향에 관계없이 감지한 인도 중심을 기존 방식으로 추종한다. 인도에서는
+별도 식생 마스크를 요청하지 않으며, 횡이동 편향 대신 기존 전진·회전 추종을 유지한다.
+실시간 주행과 오프라인 MCAP 경로 생성에 동일하게 적용된다. 과거 `.env`/CLI와의
+호환을 위해 `SWIN_L_SIDEWALK_VEGETATION_*`,
+`LINE_TRACKING_VEGETATION_MAX_LATERAL_MPS` 옵션은 읽지만 인도 주행에 사용하지 않는다.
+기존 설정에 편향 값이 남아 있어도 다시 활성화되지 않는다.
+차도(`selected_mask=1`)의 풀·연석 회피와 허용 영역 안의 경로 생성은 유지한다.
 
 For road mode 1, valid-row filtering and temporal smoothing remain active
 even with `SWIN_L_UNRESTRICTED_PATH_MODE=true`. The existing camera/inference
@@ -721,12 +699,69 @@ the lateral target. Holding a saved command never creates an invented Path messa
 Path age is measured from inference-result availability. Camera and inference
 freshness metrics also account for the original sensor timestamp; repeating a
 path at 10 Hz never resets them. Their stop flags determine whether stale values
-block motion. The heading calculation uses the 4 m lookahead; when enabled,
+block motion. With section execution enabled for road mode 1, path age instead
+uses the last verified image capture, and the section's observation-age guard
+also applies as described below. The heading calculation uses the 4 m lookahead; when enabled,
 the default 60° target-angle limit corresponds to about ±6.93 m laterally.
 Union/sidewalk tracking sends heading-regulated forward speed (default ceiling
-0.50 m/s), zero lateral velocity except during vegetation bias, and yaw capped
+0.50 m/s), zero lateral velocity, and yaw capped
 at ±0.18 rad/s. Disabling angle stopping
 does not repair an inaccurate path or guarantee a sharp bend can be followed.
+
+### 차도 전용 경로 구간 실행
+
+`selected_mask=1`만 추론으로 갱신되는 후보와 실제 추종할 확정 경로를 분리한다.
+추론은 주행 중에도 계속하며, 후보가 연속 두 추론에서 일관되게 확인된 뒤 채택된다.
+제어 출력은 기존 10Hz를 유지한다. 새 추론이 나왔다는 이유만으로 구간 중간의 경로를
+교체하지 않는다. 가까운 최대 2m 구간부터 확정해 먼 영역의 노이즈가 바로 현재 구간을
+바꾸지 않도록 한다. 구간 거리나 연결 길이를 늘리면 관측 경로 범위도 함께 늘어난다.
+인도 2번과 0번은 이번 구간 실행을 적용하지 않고 기존 추종 방식을 유지한다.
+인도는 새 추론마다 중심 경로를 갱신하고 기존 경로 상실 복구를 유지한다. 풀숲 편향은 적용하지 않는다.
+
+유효한 `LINE_TRACKING_ROAD_ODOM_FRAME`의 TF가 있으면 차도에서 실제 전진 이동량
+1m를 기준으로 다음 경로를 검토하고 경로 좌표도 보정한다.
+인도에는 진행량 측정이나 경로 좌표 보정을 적용하지 않는다. TF가 없으면 차도는 1.5초 시간 창을 사용한다.
+이때 속도 명령을 적분해 실제 이동 거리를 추정하지 않으며, metrics의
+`path_execution.progress_source`는 `time`으로 표시한다. TF가 급격히 불연속해지면 대기한다.
+
+구간 끝에서는 촬영 시각이 신선하고 연속 확인된 후보를 기존 경로에 부드럽게 연결한다.
+연결 곡선도 현재 허용 영역을 벗어나면 채택하지 않는다. 연결 가능한 후보가 없으면
+`path_execution_waiting_next_candidate` 또는 `path_execution_waiting_connected_candidate`로
+정지·대기한다. 기존 차도 차단 판정이나 분기·장애물 정지는 구간 끝을 기다리지 않는다.
+연결 대기가 1초 지속되면 이전 기준을 버리고 정지 상태에서 새 촬영 두 장으로 경로를
+다시 확정한다. 오래된 기준에 연결하지 못해 영구 대기하는 것을 방지한다.
+차도 관측이 오래되면 마지막 검증 시각에서 최대 2.5초까지만 유지하며,
+새 마스크에서 기존 차도 경로를 검증할 수 없으면 즉시 무효화한다.
+같은 촬영 프레임 재처리, 오래된 영상, 출력 타이머 호출은 확인 횟수나 검증 유효 시간을
+갱신하지 않는다. 작업 종료·취소·새 작업 시작 시 확정 경로와 후보를 모두 초기화한다.
+실행 계층에서 실제 유효 경로가 사라진 경우에도 경로 상실 복구를 사용한다.
+차도는 첫 실패부터 `road_path_unconfirmed`로 정지하며, 유효 경로가 없는 새 추론이
+3회 연속 완료되면 1초 정지 대기 후 좌우 탐색한다. 계산에 실패해도 이전 구간이
+새 허용 영역에서 검증되면 그 구간을 유지하고 소실로 세지 않는다. 통로 차단,
+분기·TF 오류, 유효 후보의 확인·연결 대기는 경로 상실 탐색으로 바꾸지 않는다.
+탐색 중 첫 신선한 경로 후보를 찾으면 회전을 멈춰 확인하고, 기본 두 새 프레임에서
+구간 확정과 복구 확인이 모두 끝난 뒤 재개한다. 어느 쪽의 확인 횟수를 늘려도 그
+확인까지 기다린다. 카메라·추론 신선도, LiDAR 회피, 명시적 정지는 계속 우선한다.
+
+```dotenv
+LINE_TRACKING_PATH_EXECUTION_ENABLED=true
+LINE_TRACKING_PATH_EXECUTION_SEGMENT_M=1.0
+LINE_TRACKING_PATH_EXECUTION_SEGMENT_SEC=1.5
+LINE_TRACKING_PATH_EXECUTION_CONFIRM_FRAMES=2
+LINE_TRACKING_PATH_EXECUTION_CANDIDATE_MAX_AGE_SEC=1.5
+LINE_TRACKING_PATH_EXECUTION_MAX_UNVERIFIED_SEC=2.5
+LINE_TRACKING_PATH_EXECUTION_JOIN_LENGTH_M=1.0
+LINE_TRACKING_PATH_EXECUTION_MAX_JOIN_OFFSET_M=0.6
+LINE_TRACKING_PATH_EXECUTION_MAX_JOIN_HEADING_DEG=25.0
+LINE_TRACKING_PATH_EXECUTION_REPLAN_WAIT_SEC=1.0
+```
+
+`SWIN_L_UNRESTRICTED_PATH_MODE`와 별도로 적용되며, `SWIN_L_PATH_DURATION_SEC`는
+구간 실행 시간을 설정하지 않는다. `path_execution` metrics에는 경로 세대 번호,
+후보 확인 횟수, 채택 횟수, 구간 진행량·경과 시간, 대기 사유를 발행한다.
+횡단보도 진입·출구 목적지를 판단하는 별도 상태 머신은
+이 기능에 포함되지 않는다. 따라서 경로 유지 기능만으로 횡단보도 연결 성공을 보장하지 않는다.
+MP4 재생은 TF를 사용하지 않는 시간 기준 실행이며 실제 이동량이나 실주행 성능의 검증은 아니다.
 
 차도 1번은 중앙 추종을 유지한다.
 

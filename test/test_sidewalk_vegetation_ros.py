@@ -1,4 +1,4 @@
-"""Check vegetation reaches the task Path and translates without body rotation."""
+"""Sidewalk tracking stays centered even with legacy vegetation settings."""
 
 import json
 from types import SimpleNamespace as NS
@@ -12,8 +12,9 @@ from test_lidar_obstacles_ros import complete_inference
 
 @pytest.mark.parametrize("mask_class", [0, 1, 2])
 @pytest.mark.parametrize("sign", [1, -1])
-def test_task_path_bias_is_sidewalk_only_and_clears_with_vegetation(monkeypatch, mask_class, sign):
+def test_task_path_is_unbiased_with_or_without_vegetation(monkeypatch, mask_class, sign):
     ros = RosHarness(monkeypatch)
+    monkeypatch.setitem(debug.ENV, "SWIN_L_SIDEWALK_VEGETATION_BIAS_M", "0.20")
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "false")
     selected = np.zeros((360, 640), np.uint8)
@@ -40,23 +41,17 @@ def test_task_path_bias_is_sidewalk_only_and_clears_with_vegetation(monkeypatch,
         first_yaw = json.loads(ros.published[SPORT][-1].parameter)["z"]
         first_move = json.loads(ros.published[SPORT][-1].parameter)
         assert first_move["x"] > 0
-        assert requests[-1].get("detect_vegetation", False) == (mask_class == 2)
+        assert not requests[-1].get("detect_vegetation", False)
         scene.vegetation[:] = False
         ros.now += 0.3
         assert complete_inference(node, ros)["drive_reason"] in ("tracking", "tracking_slow_turn")
         centered_path = ros.published["/line_tracking/swin_l/local_path"][-1]
         centered = np.array([pose.pose.position.y for pose in centered_path.poses])
         delta = first - centered
-        if mask_class == 2:
-            np.testing.assert_allclose(delta, sign * 0.20, atol=1e-6)
-            centered_yaw = json.loads(ros.published[SPORT][-1].parameter)["z"]
-            assert first_yaw == 0 and centered_yaw != 0
-            assert 0 < abs(first_move["y"]) <= 0.05
-            assert first_move["y"] * first[0] < 0  # Sport y is negated.
-            assert json.loads(ros.published[SPORT][-1].parameter)["y"] == 0
-            assert ros.metrics()["vegetation_bias_control"]["active"] is False
-        else:
-            np.testing.assert_array_equal(delta, 0)
+        np.testing.assert_allclose(delta, 0., atol=1e-6)
+        assert ros.metrics()["vegetation_bias_control"]["active"] is False
+        if mask_class != 1:
+            assert first_yaw != 0  # Existing heading tracking, no forced yaw=0.
             assert first_move["y"] == 0
 
     ros.run(scenario, "--path-mask-class", str(mask_class), "--branch-preference", "center",
@@ -65,12 +60,13 @@ def test_task_path_bias_is_sidewalk_only_and_clears_with_vegetation(monkeypatch,
 
 
 @pytest.mark.parametrize("sign", [1, -1])
-def test_centered_sidewalk_shifts_toward_vegetation_and_stops_at_target(monkeypatch, sign):
+def test_centered_sidewalk_does_not_move_toward_vegetation(monkeypatch, sign):
     import local_path
     import sidewalk_vegetation
     from test_sidewalk_vegetation import X, Y, corridor
 
     ros = RosHarness(monkeypatch)
+    monkeypatch.setitem(debug.ENV, "SWIN_L_SIDEWALK_VEGETATION_BIAS_M", "0.20")
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "false")
     project = lambda mask, _config: (mask.copy(), X, Y)
@@ -92,20 +88,21 @@ def test_centered_sidewalk_shifts_toward_vegetation_and_stops_at_target(monkeypa
         complete_inference(node, ros)
         move = json.loads(ros.published[SPORT][-1].parameter)
         assert move["x"] > 0 and move["z"] == 0
-        assert -sign * move["y"] == pytest.approx(0.05)
-        # Current image geometry moves opposite to the robot's translation.
+        assert move["y"] == 0
+        assert ros.metrics()["vegetation_bias_control"]["active"] is False
+        # A real center offset still uses the original heading controller.
         scene.center = -sign * 0.14
         ros.now += 0.3
         complete_inference(node, ros)
         near = json.loads(ros.published[SPORT][-1].parameter)
-        assert near["x"] > 0 and near["z"] == 0
-        assert 0 < -sign * near["y"] < 0.05
-        scene.center = -sign * 0.20
+        assert near["x"] > 0 and near["z"] * -sign > 0
+        assert near["y"] == 0
+        scene.center = 0.
         ros.now += 0.3
         complete_inference(node, ros)
         reached = json.loads(ros.published[SPORT][-1].parameter)
         assert reached["x"] > 0 and reached["y"] == reached["z"] == 0
-        assert ros.metrics()["vegetation_bias_control"]["active"] is True
+        assert ros.metrics()["vegetation_bias_control"]["active"] is False
 
     ros.run(scenario, "--path-mask-class", "2", "--branch-preference", "center",
             "--unrestricted-path-mode")

@@ -65,6 +65,9 @@ class RosHarness:
         # Legacy lifecycle/hold scenarios select the former policy explicitly;
         # test_path_loss_recovery_ros covers the new default recovery policy.
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "false")
+        # These tests isolate the original lifecycle; path_execution_ros enables
+        # the committed-section policy and exercises its task boundaries.
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_EXECUTION_ENABLED", "false")
         # Existing lifecycle scenarios explicitly exercise all enabled guards.
         for check in debug.AUTOMATIC_STOP_CHECKS:
             monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "true")

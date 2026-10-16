@@ -148,13 +148,26 @@ def road_path_errors(path: SmoothedPath, lookahead_m: float) -> tuple[float, flo
     if len(xs) < 2 or xs[-1] - xs[0] < 0.1:
         return None
     ys = points[indices, 1]
-    coefficients = np.polyfit(xs, ys, min(2, len(xs) - 1))
-    derivative = np.polyder(coefficients)
-    near = float(np.arctan(np.polyval(derivative, xs[0])))
-    far = float(np.arctan(np.polyval(derivative, xs[-1])))
-    heading = float(np.arctan(np.polyval(derivative, np.clip(lookahead_m, xs[0], xs[-1]))))
-    offset = float(np.median(ys - math.tan(heading) * xs))
-    return offset, heading, abs(far - near)
+    target = float(np.clip(lookahead_m, xs[0], xs[-1]))
+    # Local segment tangents keep a noisy far tip out of the near controller.
+    slopes = np.gradient(ys, xs)
+    heading = float(np.arctan(np.interp(target, xs, slopes)))
+    geometry = getattr(path, "road_geometry", None)
+    if geometry is not None:
+        # Road-edge agreement supplies body direction. The reference curve's
+        # lateral recovery component must not be interpreted as body yaw.
+        heading = float(geometry["direction_heading_rad"])
+    window = (xs >= target - .5) & (xs <= target + 1.)
+    local = np.arctan(slopes[window])
+    curve = float(np.ptp(local)) if len(local) > 1 else 0.
+    # Cross-track error comes from the near tangent, not the far recovery
+    # target. Extrapolating a curved lookahead tangent to x=0 can reverse vy.
+    near_slope = float(slopes[0])
+    if geometry is not None and geometry.get("direction_confidence", 0.) < .5:
+        near_slope = math.tan(heading)
+    offset = float(ys[0] - near_slope * xs[0])
+    return offset, heading, curve
+
 
 
 class RoadCenterState:
@@ -194,10 +207,9 @@ class RoadCenterState:
         vy = float(np.clip(desired.vy, previous_vy - step, previous_vy + step))
         vy = float(np.clip(vy, -config.road_max_lateral_mps, config.road_max_lateral_mps))
         yaw = desired.yaw_rate
-        if not self.translating:
-            step = config.road_max_yaw_accel * elapsed
-            yaw = float(np.clip(yaw, self.command.yaw_rate - step, self.command.yaw_rate + step))
-            yaw = float(np.clip(yaw, -config.max_yaw_rps, config.max_yaw_rps))
+        step = config.road_max_yaw_accel * elapsed
+        yaw = float(np.clip(yaw, self.command.yaw_rate - step, self.command.yaw_rate + step))
+        yaw = float(np.clip(yaw, -config.max_yaw_rps, config.max_yaw_rps))
         return DriveDecision(desired.vx, vy, yaw, desired.reason)
 
 
@@ -463,28 +475,23 @@ def decide_drive(
             target_heading = math.atan2(path_target_lateral(path, target_x), target_x)
             far_heading = math.atan2(path_target_lateral(path, far_x), far_x)
             controller = road_state if road_state is not None else RoadCenterState()
+            # Once road direction has independent evidence, a nearby target
+            # bearing cannot override a genuine body-heading correction.
+            qualified_direction = bool(getattr(path, "road_geometry", None))
             translate = controller.choose_translation(road_heading, curve, config,
-                                                      target_heading=target_heading, far_heading=far_heading)
-            if translate:
-                # Feed forward the slight road direction, then close the loop
-                # on position. Large parallel offsets still return laterally.
-                parallel = (abs(math.degrees(road_heading)) <= config.road_straight_heading_deg + 4
-                            and math.degrees(curve) <= config.road_straight_curve_deg + 4)
-                error = offset if parallel else lateral
-                feedforward = config.max_forward_mps * math.tan(road_heading) if parallel else 0.0
-                correction = 0.0 if abs(error) <= config.road_lateral_deadband_m else error
-                vy = float(np.clip(feedforward
-                                   + config.road_lateral_gain * correction,
-                                   -config.road_max_lateral_mps, config.road_max_lateral_mps))
-                if abs(vy) < 1e-6:
-                    vy = 0.0
-                result = DriveDecision(config.max_forward_mps, vy, 0.0, "tracking")
-            else:
-                requested = config.heading_gain * target_heading
-                yaw = float(np.clip(requested, -config.max_yaw_rps, config.max_yaw_rps))
-                scale = config.max_yaw_rps / max(config.max_yaw_rps, abs(requested))
-                result = DriveDecision(config.max_forward_mps * scale, 0.0, yaw,
-                                       "tracking_slow_turn" if scale < 1.0 else "tracking")
+                target_heading=None if qualified_direction else target_heading,
+                far_heading=None if qualified_direction else far_heading)
+            # Position recovery remains lateral even while a genuine road
+            # direction error needs a gradual body rotation. Both axes can act.
+            correction = 0.0 if abs(offset) <= config.road_lateral_deadband_m else offset
+            feedforward = config.max_forward_mps * math.tan(road_heading) if translate else 0.0
+            vy = float(np.clip(feedforward + config.road_lateral_gain * correction,
+                               -config.road_max_lateral_mps, config.road_max_lateral_mps))
+            if abs(vy) < 1e-6:
+                vy = 0.0
+            yaw = 0.0 if translate else float(np.clip(config.heading_gain * road_heading,
+                                                       -config.max_yaw_rps, config.max_yaw_rps))
+            result = DriveDecision(config.max_forward_mps, vy, yaw, "tracking")
             return road_state.limit(result, now=now, config=config) if road_state is not None and now is not None else result
     if path.vegetation_bias_active:
         # Use current robot-relative path error, not a constant sideways push:

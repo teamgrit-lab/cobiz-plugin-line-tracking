@@ -94,7 +94,8 @@ def test_smoothing_cannot_retain_a_path_inside_new_grass(metric_grid):
     hazard=np.broadcast_to(ys>=0.,road.shape).copy()
     estimate=lp.extract_road_centerline(road,cfg,hazard)
     updated=smoother.update(estimate,.1)
-    assert updated is not None and updated.road_clearance['path_clamped']
+    assert updated is not None and updated.road_clearance['history_replanned']
+    assert not updated.road_clearance['path_clamped']
     assert lp.road_path_within_corridor(updated.points_xy,estimate.road_corridor)
     assert updated.points_xy[:,1].max()<-.55
     assert lp.road_path_within_corridor(smoother.current(.3).points_xy,estimate.road_corridor)

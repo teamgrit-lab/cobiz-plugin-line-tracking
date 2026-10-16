@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Iterable
 
 import cv2
 import numpy as np
-from scipy.optimize import LinearConstraint, minimize
+from road_curve import fit_curve, transform_points
 
 if TYPE_CHECKING:
     from branch_path import BranchObservation
@@ -176,6 +176,7 @@ class LocalPathEstimate:
     road_center_tracking: bool = False
     road_corridor: np.ndarray | None = None  # Rows: forward x, lower y, upper y.
     road_clearance: dict | None = None
+    road_geometry: dict | None = None
 
     @property
     def is_valid(self) -> bool:
@@ -196,6 +197,7 @@ class SmoothedPath:
     road_center_tracking: bool = False
     road_corridor: np.ndarray | None = None
     road_clearance: dict | None = None
+    road_geometry: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -441,57 +443,16 @@ def road_path_within_corridor(points: np.ndarray, corridor: np.ndarray) -> bool:
 
 
 def regenerate_road_path(points: np.ndarray, corridor: np.ndarray) -> tuple[np.ndarray | None, str]:
-    """Fit inside dense bounds, preferring a straight line over new curvature.
-
-    If no single line fits a curved corridor, retain the valid portions of the
-    original fit and insert the offending row knots. Each insertion is bounded
-    by the current corridor; the final segments must pass the same hard check.
-    """
+    """Regenerate as one smooth curve rather than inserting sharp row knots."""
     if len(points) < 2 or not np.isfinite(points).all():
         return None, "nonfinite_fit"
-    if road_path_within_corridor(points, corridor):
-        return points, "original_fit"
-    if (len(corridor) < 2 or not np.isfinite(corridor).all()
-            or np.any(corridor[:, 1] > corridor[:, 2])):
-        return None, "invalid_corridor"
-    xs = corridor[:, 0].astype(np.float64)
-    midpoint = corridor[:, 1:].mean(axis=1).astype(np.float64)
-    # Scale x so numerical conditioning does not depend on forward distance.
-    origin, span = float(xs[0]), float(xs[-1] - xs[0])
-    if span <= 0:
-        return None, "invalid_corridor"
-    design = np.column_stack(((xs - origin) / span, np.ones(len(xs))))
-    inset = np.minimum(.01, (corridor[:, 2] - corridor[:, 1]) * .05)
-    lower, upper = corridor[:, 1] + inset, corridor[:, 2] - inset
-    try:
-        initial = np.linalg.lstsq(design, midpoint, rcond=None)[0]
-        fit = minimize(lambda q: float(np.mean((design @ q - midpoint) ** 2)), initial,
-            jac=lambda q: 2 * design.T @ (design @ q - midpoint) / len(xs),
-            method="SLSQP", constraints=[LinearConstraint(design, lower, upper)],
-            options={"ftol": 1e-9, "maxiter": 60})
-        candidate = np.column_stack((points[:, 0],
-            (points[:, 0] - origin) / span * fit.x[0] + fit.x[1])).astype(np.float32)
-        if fit.success and road_path_within_corridor(candidate, corridor):
-            return candidate, "constrained_line"
-    except (ValueError, FloatingPointError, np.linalg.LinAlgError):
-        pass
-    # An adaptive polyline handles bends that cannot contain a single line.
-    # In the worst case it has one knot per observed row (at most BEV height).
-    knots = {float(x): float(np.clip(y, np.interp(x, xs, lower),
-                                     np.interp(x, xs, upper))) for x, y in points}
-    knots[float(xs[0])] = float(np.clip(np.interp(xs[0], points[:, 0], points[:, 1]), lower[0], upper[0]))
-    knots[float(xs[-1])] = float(np.clip(np.interp(xs[-1], points[:, 0], points[:, 1]), lower[-1], upper[-1]))
-    for _ in range(len(xs) + 1):
-        candidate = np.asarray(sorted(knots.items()), np.float32)
-        if road_path_within_corridor(candidate, corridor):
-            return candidate, "constrained_polyline"
-        values = np.interp(xs, candidate[:, 0], candidate[:, 1])
-        violation = np.maximum(lower - values, values - upper)
-        row = int(np.argmax(violation))
-        if violation[row] <= 1e-6:
-            break
-        knots[float(xs[row])] = float(np.clip(values[row], lower[row], upper[row]))
-    return None, "fit_failed"
+    fitted = fit_curve(corridor, max(40, len(points)))
+    if fitted is None:
+        return None, "smooth_fit_failed"
+    candidate, _ = fitted
+    if not road_path_within_corridor(candidate, corridor):
+        return None, "smooth_fit_failed"
+    return candidate, "constrained_cubic_spline"
 
 
 def _nearest_road_component(region: np.ndarray, ys: np.ndarray) -> np.ndarray:
@@ -594,50 +555,22 @@ def analyze_road_path(road_mask: np.ndarray, config: LocalPathConfig,
         if len(best) >= 12 and raw[best[-1], 0] - raw[best[0], 0] >= 0.5:
             raw, widths = raw[best], np.asarray(widths)[best]
     widths = np.asarray(widths)
-    # Start with a line: segmentation edge jitter must not invent an S bend.
-    # Accept a quadratic only with broad support and a clear improvement.
-    try:
-        coefficients = np.polyfit(raw[:, 0], raw[:, 1], 1)
-    except (ValueError, FloatingPointError, np.linalg.LinAlgError):
-        return result(None, "calculation_failed", "linear_fit_failed")
-    residual = raw[:, 1] - np.polyval(coefficients, raw[:, 0])
-    linear_rms = float(np.sqrt(np.mean(residual ** 2)))
-    if config.fit_degree >= 2 and np.ptp(raw[:, 0]) >= 2.5 and linear_rms > 0.20:
-        try:
-            quadratic = np.polyfit(raw[:, 0], raw[:, 1], 2)
-        except (ValueError, FloatingPointError, np.linalg.LinAlgError):
-            quadratic = coefficients
-        rms = float(np.sqrt(np.mean((raw[:, 1] - np.polyval(quadratic, raw[:, 0])) ** 2)))
-        if rms < linear_rms * 0.65:
-            coefficients = quadratic
-    # Do not extrapolate a quadratic into buildings/vegetation where no road
-    # rows were observed. Constrain the fit to its selected corridor per row.
-    forward = np.linspace(float(raw[0, 0]), float(raw[-1, 0]), config.path_points)
-    centers = np.interp(forward, raw[:, 0], raw[:, 1])
-    half = np.interp(forward, raw[:, 0], widths) / 2
-    margin = np.minimum(0.10, half * 0.2)
-    fitted = np.polyval(coefficients, forward)
-    fitted = np.clip(fitted, centers - half + margin, centers + half - margin)
-    points = np.column_stack((forward, fitted)).astype(np.float32)
-    # Keep dense row constraints so smoothing cannot cut
-    # through a narrow excluded strip between the published path points.
-    corridor = np.column_stack((raw[:, 0], raw[:, 1] - widths / 2,
-                                raw[:, 1] + widths / 2)).astype(np.float32)
-    corridor[:, 1] += 1e-4
-    corridor[:, 2] -= 1e-4
-    if clearance is not None and not road_path_within_corridor(points, corridor):
-        points, method = regenerate_road_path(points, corridor)
-        if points is None:
-            return result(None, "calculation_failed", method)
-        clearance["regeneration_method"] = method
-    elif clearance is not None:
-        clearance["regeneration_method"] = "original_fit"
+    # Optimize the entire curve under the current dense clearance bounds.
+    # A post-fit per-point clamp would destroy tangent/curvature continuity.
+    corridor = np.column_stack((raw[:, 0], raw[:, 1] - widths / 2 + 1e-4,
+                                raw[:, 1] + widths / 2 - 1e-4)).astype(np.float32)
+    fitted = fit_curve(corridor, max(40, config.path_points))
+    if fitted is None:
+        return result(None, "calculation_failed", "smooth_corridor_fit_failed")
+    points, geometry = fitted
+    if clearance is not None:
+        clearance.update(regeneration_method=geometry["method"],
+                         support_truncated=geometry["truncated"])
     estimate = replace(estimate, points_xy=points,
                    raw_points_xy=raw, mean_sidewalk_width_m=float(np.mean(widths)),
                    road_corridor=corridor, road_clearance=clearance,
-                   road_center_tracking=True)
-    return result(estimate, "regenerated" if clearance is not None and
-                  clearance["regeneration_method"] != "original_fit" else "valid", "path_available")
+                   road_geometry=geometry, road_center_tracking=True)
+    return result(estimate, "regenerated", "path_available")
 
 
 def extract_sidewalk_centerline(
@@ -785,6 +718,8 @@ class LocalPathSmoother:
         self._road_corridor = None
         self._road_clearance = None
         self._road_validation_hold = False
+        self._road_geometry = None
+        self._observation_pose = None
 
     def reset(self, *, preserve_branch: bool = False) -> None:
         """Discard path history, retaining a committed fork on sensor loss if requested."""
@@ -801,9 +736,33 @@ class LocalPathSmoother:
             self._road_corridor = None
             self._road_clearance = None
             self._road_validation_hold = False
+            self._road_geometry = None
+            self._observation_pose = None
 
-    def update_road(self, result: RoadPathResult, timestamp_sec: float) -> SmoothedPath | None:
+    def update_road(self, result: RoadPathResult, timestamp_sec: float,
+                    observation_pose: tuple[float, float, float] | None = None) -> SmoothedPath | None:
         """Hold only a recent path revalidated against fresh allowed pixels."""
+        # History lives in the previous image's base frame, never in a fixed
+        # image coordinate system. Missing poses disable the motion assumption.
+        with self._lock:
+            if (self._points is not None and
+                    (observation_pose is None) != (self._observation_pose is None)):
+                # A pose outage/reappearance changes what frame alignment is
+                # known. Start fresh rather than blend two unaligned frames.
+                self._points = None
+                self._road_geometry = None
+            if self._points is not None and observation_pose is not None and self._observation_pose is not None:
+                moved = transform_points(self._points, self._observation_pose, observation_pose)
+                if np.all(np.diff(moved[:, 0]) > 0):
+                    self._points = moved.astype(np.float32)
+                    if self._road_geometry is not None:
+                        self._road_geometry['direction_heading_rad'] += self._observation_pose[2] - observation_pose[2]
+                        if 'observed_heading_rad' in self._road_geometry:
+                            self._road_geometry['observed_heading_rad'] += self._observation_pose[2] - observation_pose[2]
+                        self._road_geometry['observation_pose'] = observation_pose
+                else:
+                    self._points = None
+            self._observation_pose = observation_pose
         if result.estimate is not None:
             return self.update(result.estimate, timestamp_sec)
         with self._lock:
@@ -873,7 +832,49 @@ class LocalPathSmoother:
                 self._vegetation_bias_active = estimate.vegetation_bias_active
                 self._road_center_tracking = estimate.road_center_tracking
                 return self._current_unlocked(timestamp_sec)
+            if road_tracking and estimate.is_valid and self._road_corridor is not None:
+                elapsed = (timestamp_sec - self._last_update if self._last_update is not None else 0.)
+                previous = self._points if 0 < elapsed <= 2. else None
+                # Soft continuity, with no hard per-point displacement clamp.
+                # Without odom, use weaker history so a real body turn can recover.
+                history = (1.5 if self._observation_pose is not None else .35)
+                history *= math.exp(-max(0., elapsed) / self.config.smoothing_time_constant_sec)
+                observed_heading = (estimate.road_geometry or {}).get('direction_heading_rad', 0.)
+                heading = observed_heading
+                previous_geometry = self._road_geometry
+                if previous_geometry is not None and previous is not None:
+                    old_heading = previous_geometry['direction_heading_rad']
+                    prior_observed = previous_geometry.get('observed_heading_rad', old_heading)
+                    # Require two consistent observations for a large change.
+                    # Measured body rotation was removed before this comparison.
+                    confirmed = (abs(observed_heading-old_heading) <= math.radians(8) or
+                                 abs(observed_heading-prior_observed) <= math.radians(8))
+                    alpha = 1-math.exp(-max(elapsed,1/30)/self.config.smoothing_time_constant_sec)
+                    heading = old_heading + alpha*(observed_heading-old_heading) if confirmed else old_heading
+                fitted = fit_curve(self._road_corridor, max(40, self.config.path_points),
+                                   previous, history, direction_hint=heading)
+                points, geometry = fitted if fitted is not None else (estimate.points_xy, estimate.road_geometry)
+                if not road_path_within_corridor(points, self._road_corridor):
+                    self._points = None
+                    self._last_update = None
+                    return None
+                if self._road_clearance is not None:
+                    self._road_clearance['history_replanned'] = previous is not None
+                    self._road_clearance['path_clamped'] = False
+                self._points = points.copy()
+                self._road_geometry = dict(geometry or {})
+                self._road_geometry.update(direction_heading_rad=heading,
+                    observed_heading_rad=observed_heading,
+                    direction_pending=abs(heading-observed_heading) > math.radians(8))
+                self._road_geometry['motion_compensated'] = self._observation_pose is not None
+                self._road_geometry['observation_pose'] = self._observation_pose
+                self._confidence = estimate.confidence
+                self._last_update = timestamp_sec
+                self._vegetation_bias_active = False
+                self._road_center_tracking = True
+                return self._current_unlocked(timestamp_sec)
             if estimate is not None and estimate.is_valid:
+                self._road_geometry = None
                 self._vegetation_bias_active = estimate.vegetation_bias_active
                 self._road_center_tracking = estimate.road_center_tracking
                 target = np.asarray(estimate.points_xy, dtype=np.float32)
@@ -945,4 +946,26 @@ class LocalPathSmoother:
             road_center_tracking=self._road_center_tracking,
             road_corridor=self._road_corridor.copy() if self._road_corridor is not None else None,
             road_clearance=dict(self._road_clearance) if self._road_clearance is not None else None,
+            road_geometry=dict(self._road_geometry) if self._road_geometry is not None else None,
         )
+
+
+def compensate_road_path(path: SmoothedPath | None, current_pose) -> SmoothedPath | None:
+    """Transform a capture-frame road reference for live control only.
+
+    The clearance corridor remains validated at image capture time. Its bounds
+    are not incorrectly relabeled as a newly observed current-frame corridor.
+    """
+    if path is None or not path.road_center_tracking or not path.road_geometry:
+        return path
+    old_pose = path.road_geometry.get("observation_pose")
+    if old_pose is None or current_pose is None:
+        return path
+    points = transform_points(path.points_xy, old_pose, current_pose)
+    if not np.isfinite(points).all() or np.any(np.diff(points[:, 0]) <= 0):
+        return None
+    geometry = {**path.road_geometry, "control_motion_compensated": True,
+                "direction_heading_rad": path.road_geometry["direction_heading_rad"] + old_pose[2] - current_pose[2],
+                "observation_pose": current_pose}
+    return replace(path, points_xy=points.astype(np.float32), road_geometry=geometry,
+                   road_corridor=None)

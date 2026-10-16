@@ -28,6 +28,7 @@ Both live modes require a Jetson ROS/PyTorch environment.
 from __future__ import annotations
 
 import argparse
+from copy import copy
 import json
 import math
 import os
@@ -42,6 +43,7 @@ from typing import Any, Sequence
 import cv2
 import numpy as np
 import torch
+from local_path import compensate_road_path
 from apriltag_stop import (
     AprilTagDecision,
     AprilTagGate,
@@ -368,6 +370,7 @@ def road_center_metrics(path, decision, config, state) -> dict:
         "tangent_change_deg": math.degrees(errors[2]) if errors else None,
         "command_lateral_mps": decision.vy if active else None,
         "clearance": path.road_clearance if enabled else None,
+        "geometry": path.road_geometry if enabled else None,
     }
 
 
@@ -959,6 +962,18 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.base_from_lidar = parse_transform(args.lidar_to_base_transform)
             self.camera_from_base = parse_transform(args.base_to_camera_transform)
             self.tf_buffer = self.tf_listener = None
+            # Independent of obstacle avoidance: optional odom TF compensates
+            # the road path between image capture, inference and control.
+            self.road_tf_buffer = self.road_tf_listener = None
+            self.road_control_stamp = None
+            self.road_odom_frame = ENV.get("LINE_TRACKING_ROAD_ODOM_FRAME", "odom")
+            if self.road_odom_frame:
+                try:
+                    from tf2_ros import Buffer, TransformListener
+                    self.road_tf_buffer = Buffer()
+                    self.road_tf_listener = TransformListener(self.road_tf_buffer, self)
+                except ImportError:
+                    pass
             self.drive_config = _drive_config_from_args(args) if task_mode else None
             self.road_center = RoadCenterState()
             self.obstacles = None
@@ -1121,6 +1136,28 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "Cobiz LINE_TRACKING task listener ready; model loaded, camera "
                     "inference paused until task acceptance; Sport publisher absent"
                 )
+
+        def road_pose(self, header=None):
+            """Exact image timestamp, or a recent odom pose for live control."""
+            if self.road_tf_buffer is None:
+                return None
+            from rclpy.time import Time
+            try:
+                stamp = Time.from_msg(header.stamp) if header is not None else Time()
+                if header is not None and _stamp_ns(header) <= 0:
+                    return None
+                tf = self.road_tf_buffer.lookup_transform(self.road_odom_frame, "base_link", stamp)
+                if header is None:
+                    age = (self.get_clock().now().nanoseconds - _stamp_ns(tf.header)) / 1e9
+                    if not 0 <= age <= .25:
+                        return None
+                    self.road_control_stamp = tf.header.stamp
+                position, q = tf.transform.translation, tf.transform.rotation
+                yaw = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
+                pose = (float(position.x), float(position.y), yaw)
+                return pose if all(math.isfinite(v) for v in pose) else None
+            except Exception:
+                return None
 
         def lookup_lidar_transform(self, target, source, header):
             from rclpy.time import Time
@@ -1353,6 +1390,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.path_unavailable_inferences = state["path_unavailable_inferences"][
                     mask_class
                 ]
+            if mask_class == 1:
+                capture_path = path
+                path = compensate_road_path(path, self.road_pose())
+                if capture_path is not None and path is None:
+                    road_path_unconfirmed = True
             clock_now_ns = self.get_clock().now().nanoseconds
             camera_age_sec = _effective_source_age_sec(
                 last_image_at, last_image_stamp_ns, now, clock_now_ns
@@ -1697,6 +1739,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_surface": PATH_MASK_CLASSES[mask_class],
                 "selected_mask": task_active.selected_mask if task_active is not None else args.path_mask_class,
                 "path_tracked": path is not None and path.stop_reason is None,
+                "road_motion": {"odom_frame": self.road_odom_frame,
+                    "capture_pose_available": bool(path and path.road_geometry and path.road_geometry.get("observation_pose") is not None),
+                    "control_compensated": bool(path and path.road_geometry and path.road_geometry.get("control_motion_compensated"))},
                 "road_center_control": road_center_metrics(
                     path, drive_decision, self.drive_config, self.road_center),
                 "branch_selection": path.branch_status if path else {
@@ -1797,7 +1842,11 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.metrics_publisher.publish(String(data=json.dumps(metrics)))
             if header is None:
                 return
-            path_message = _path_message(path, header, args.path_frame_id)
+            path_header = header
+            if path and path.road_geometry and path.road_geometry.get("control_motion_compensated"):
+                path_header = copy(header)
+                path_header.stamp = self.road_control_stamp
+            path_message = _path_message(path, path_header, args.path_frame_id)
             self.path_publisher.publish(path_message)
 
     rclpy.init(args=[])
@@ -1876,7 +1925,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                         continue
                     for mask_class, smoother in smoothers.items():
                         if mask_class == 1 and local_config.road_clearance_enabled:
-                            smoother.update_road(road_analysis["result"], path_updated_at)
+                            smoother.update_road(road_analysis["result"], path_updated_at,
+                                                 node.road_pose(packet.source_header))
                             semantic_missing[mask_class] = smoother.current(path_updated_at) is None
                         else:
                             if estimates[mask_class] is None:

@@ -154,7 +154,9 @@ def test_livox_obstacle_inputs_and_limits_reach_both_live_services():
         assert env["LIDAR_OBSTACLE_HORIZONTAL_RANGE_M"].endswith(":-1.5}")
         assert env["LIDAR_OBSTACLE_FOV_DEG"].endswith(":-190.0}")
         assert env["LIDAR_OBSTACLE_MAX_AGE_SEC"].endswith(":-0.5}")
-        assert not any("ODOM" in key or "CORRIDOR_MEMORY" in key for key in env)
+        # Road capture-time TF is independent of LiDAR obstacle memory.
+        assert not any("ODOM" in key or "CORRIDOR_MEMORY" in key for key in env
+                       if key != "LINE_TRACKING_ROAD_ODOM_FRAME")
     assert "ros-humble-tf2-ros" in (ROOT / "Dockerfile.swin-l-debug").read_text()
     assert "LIDAR_OBSTACLE_MAX_AGE_SEC=0.5" in (ROOT / ".env.example").read_text()
 
@@ -360,3 +362,11 @@ def test_offline_swin_l_service_reuses_cuda_without_starting_ros():
         mount.endswith(":" + offline["environment"]["HF_HOME"])
         for mount in offline["volumes"]
     )
+
+
+def test_road_motion_compensation_frame_reaches_both_services():
+    import yaml
+    services = yaml.safe_load((ROOT / 'docker-compose.yml').read_text())['services']
+    for name in ('actual-activate', 'debugging-swin-l'):
+        # Single '-' preserves an explicitly empty value to disable TF.
+        assert services[name]['environment']['LINE_TRACKING_ROAD_ODOM_FRAME'] == '${LINE_TRACKING_ROAD_ODOM_FRAME-odom}'

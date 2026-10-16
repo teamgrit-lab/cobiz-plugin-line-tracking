@@ -436,9 +436,11 @@ midpoint; a single image cannot establish the center of an unseen road.
 차도 경계에서 기본 0.60m, 풀·연석에서 기본 0.60m의 경로 중심 여유를 지면 격자에서
 확보하고 남은 연결 영역의 중앙을 추종한다. 연석 너머의 더 큰 차도 조각으로 Path를
 이어 붙이지 않는다. 맞춘 경로가 일부 격자에서 경계를 벗어나면 전체를 버리기 전에
-허용 경계를 제약으로 넣은 직선을 다시 계산한다. 직선이 들어갈 수 없는 곡선 통로는
-필요한 격자 지점에 경로점을 추가하고 모든 선분이 허용 영역 안인지 다시 확인한다.
-기존 평활 경로도 새 허용 영역 안으로 제한한다.
+허용 경계를 제약으로 넣은 3차 B-spline을 계산한다. 위치·접선·곡률이 연속인 곡선으로
+실제 굽은 통로를 따라갈 수 있으며, 계산 뒤 점별로 경계에 밀어 넣거나 급한 다각선으로
+대체하지 않는다. 모든 발행 선분을 현재 허용 픽셀로 재검증한다. 전체 구간을 부드럽게
+연결할 수 없으면 가까운 구간부터 검증된 경로를 사용하고, 그것도 없으면 계산 실패로 구분한다.
+이전 경로는 현재 경계보다 우선할 수 없는 부드러운 연속성 조건으로 사용한다.
 
 제외 전에는 충분한 차도 통로가 있으나 설정한 경계·풀·연석 여유를 확보할 수 없으면
 `road_clearance_blocked`로 즉시 정지한다. 이 상태는 자동 회전 탐색으로 전환하지 않는다.
@@ -451,9 +453,8 @@ midpoint; a single image cannot establish the center of an unseen road.
 기존 경로 소실 복구를 따른다.
 
 이 거리는 기존 영상–지면 보정에 따른 추정이며 차체 외곽에서 측정한 실거리나 모든
-연석의 검출을 보장하지 않는다. 카메라 입력 끊김과 촬영 이후 로봇 이동 보정 문제를
-이 변경으로 해결했다고 판단하지 않는다. `ROAD_CLEARANCE_ENABLED=false`로 이 제한을
-끄고 이전 차도 경로 추출과 비교할 수 있다. 0·2번 모드의 표면 선택·인도 편향은 유지한다.
+연석의 검출을 보장하지 않는다. 카메라 입력 끊김이나 잘못된 영상–지면 보정을 이 변경으로 해결했다고 판단하지 않는다.
+`ROAD_CLEARANCE_ENABLED=false`는 회피 여유 제외만 끄며, 새 곡선 생성 방식은 유지한다. 0·2번 모드의 표면 선택·인도 편향은 유지한다.
 `metrics.road_center_control.clearance`에 적용 여유, 검출 픽셀 수, 허용 영역 크기와
 평활 Path 제한 여부를 기록한다.
 `metrics.road_clearance.status`는 `valid`, `regenerated`, `calculation_failed`,
@@ -691,7 +692,7 @@ LiDAR 회피가 활성화되어 있으면 회피·외곽 충돌·미관측 공�
 설정 변경은 프로세스 재시작 또는 컨테이너 재생성 후 적용된다. 거리와 여유는 기존
 카메라 지면 투영 보정에 의존하며, 실물 주행은 아직 검증하지 않았다.
 
-For road modes 1 and 3, valid-row filtering and temporal smoothing remain active
+For road mode 1, valid-row filtering and temporal smoothing remain active
 even with `SWIN_L_UNRESTRICTED_PATH_MODE=true`. The existing camera/inference
 freshness switches and unrestricted hold policy still apply. Modes 0 and 2
 retain the unrestricted behavior below.
@@ -731,8 +732,13 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 
 차도 중앙 제어는 평행한 위치 오차와 경로 방향을 분리한다. 평행한 직선에서 중앙을
 벗어나면 전진과 횡이동으로 복귀한다. 가까운 목표와 먼 목표의 각도가 모두 작을 때도
-회전을 횡이동으로 대체한다. 실제 곡선이나 큰 방향 차이는 목표 방향으로 회전하며,
-회전 요구가 한도를 넘으면 감속한다. 직선/회전 전환에는 4° 히스테리시스를 적용한다.
+회전을 횡이동으로 대체한다. 양쪽 경계의 방향이 일치하는지 확인하고,
+큰 방향 변화는 연속 두 추론에서 확인한 후 시간에 따라 반영한다. 경계 방향이 불확실해도
+허용 영역 안 곡선의 가까운 접선이 큰 회전을 요구하면 그 접선을 사용해 실제 굽은 통로를 따라간다.
+도로 방향은 경로 전체를
+다시 2차식으로 맞추지 않고 경계 관측으로 구한다. 실제 곡선이나 큰 방향 차이는 서서히
+회전하며 횡방향 중앙 복귀를 동시에 수행할 수 있다. 차도 추종 중 전진은 설정한
+`LINE_TRACKING_MAX_FORWARD_MPS`를 유지하며, 횡속도 상한은 0.25m/s를 유지한다. 직선/회전 전환에는 4° 히스테리시스를 적용한다.
 
 ```dotenv
 LINE_TRACKING_ROAD_LATERAL_ENABLED=true
@@ -743,6 +749,7 @@ LINE_TRACKING_ROAD_STRAIGHT_HEADING_DEG=8.0
 LINE_TRACKING_ROAD_STRAIGHT_CURVE_DEG=10.0
 LINE_TRACKING_ROAD_MAX_LATERAL_ACCEL=0.20
 LINE_TRACKING_ROAD_MAX_YAW_ACCEL=0.30
+LINE_TRACKING_ROAD_ODOM_FRAME=odom
 ```
 
 횡속도는 기본 최대 0.25 m/s, 위치 오차의 0.40배이며 기본 10 cm 이내에서는 위치 보정을 멈춘다.
@@ -752,8 +759,15 @@ LINE_TRACKING_ROAD_MAX_YAW_ACCEL=0.30
 0.30 rad/s²로 제한한다. 정지 조건은 즉시 적용한다. `road_center_control` 상태의 `active`, `mode`,
 `lateral_error_m`, `heading_error_deg`, `tangent_change_deg`로
 중앙 제어를 확인할 수
-있다. `lateral_error_m`는 차도 경로 방향을 기준으로 계산한 위치 오차이며, 지원 범위가 짧거나 방향이
-불안정하면 제어기는 가까운 목표의 횡오차를 대신 사용한다.
+있다. `lateral_error_m`는 가까운 경로 접선을 기준으로 계산한 위치 오차다.
+`geometry`에는 방향 신뢰도, 방향 변경 확인 대기, 곡률, 원거리 지원 축소 여부가 포함된다.
+
+`LINE_TRACKING_ROAD_ODOM_FRAME=odom`을 기준으로 **이미지 촬영 시각**의 `odom→base_link`
+TF가 있으면 이전 경로를 새 이미지 좌표로 옮긴 뒤 연속성을 계산한다. 제어 때는 0.25초 이내의
+최근 TF로 촬영 이후 이동도 보정한다. 보정된 발행 Path는 그 TF 시각을 사용한다.
+TF가 없거나 오래됐으면 이동을 추정해서 만들지 않고 영상 기반 경로로 동작하며,
+`metrics.road_motion`에서 실제 보정 여부를 확인할 수 있다. 빈 ODOM_FRAME 값은 TF 사용을 끈다.
+MP4만으로는 이 이동 보정이나 실제 폐루프 주행을 검증할 수 없다.
 
 이 제어는 영상의 차도 분류와 기존 거리 보정에 의존한다. 차도 경계가 보이지 않거나
 거리 보정이 틀린 경우 실제 중앙을 보장하지 않는다. 오프라인 영상 분석과 운동학

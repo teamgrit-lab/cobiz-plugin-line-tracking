@@ -18,20 +18,22 @@ def test_small_interior_fit_violation_regenerates_without_reducing_clearance():
     points = np.column_stack((np.linspace(3., 8., 20), np.zeros(20)))
     assert not lp.road_path_within_corridor(points, corridor)
     regenerated, method = lp.regenerate_road_path(points, corridor)
-    assert method == 'constrained_line'
+    assert method == 'constrained_cubic_spline'
     assert lp.road_path_within_corridor(regenerated, corridor)
     assert np.interp(xs[77], regenerated[:, 0], regenerated[:, 1]) <= -.0171
 
 
-def test_bent_narrow_corridor_gets_a_verified_polyline_instead_of_rejection():
+def test_bent_narrow_corridor_gets_a_verified_smooth_curve():
     xs = np.linspace(3., 8., 151)
     center = .8 * np.sin((xs - 3) * 2)
     corridor = np.column_stack((xs, center - .08, center + .08))
     points = np.column_stack((np.linspace(3., 8., 20), np.zeros(20)))
     regenerated, method = lp.regenerate_road_path(points, corridor)
-    assert method == 'constrained_polyline'
+    assert method == 'constrained_cubic_spline'
     assert lp.road_path_within_corridor(regenerated, corridor)
-    assert len(regenerated) <= len(xs) + len(points) + 2
+    assert len(regenerated) <= len(xs) + 40
+    assert np.rad2deg(abs(np.diff(np.unwrap(np.arctan2(
+        np.diff(regenerated[:,1]),np.diff(regenerated[:,0])))))).max() < 10.
 
 
 def test_no_corridor_extrapolation_or_nonfinite_path_is_accepted():
@@ -58,9 +60,7 @@ def test_hazards_outside_observed_road_do_not_report_a_blocked_passage():
 
 
 def failed_fit(monkeypatch, road, cfg, hazard=None):
-    def fail(*_args, **_kwargs):
-        raise np.linalg.LinAlgError('simulated numerical failure')
-    monkeypatch.setattr(np, 'polyfit', fail)
+    monkeypatch.setattr(lp, 'fit_curve', lambda *_args, **_kwargs: None)
     result = lp.analyze_road_path(road, cfg, hazard)
     assert result.status == 'calculation_failed' and not result.blocked
     return result

@@ -1090,7 +1090,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     args.profile,
                     PATH_MASK_CLASSES[args.path_mask_class],
                     args.inference_hz,
-                    args.output_hz,
+                    self.control_hz,
                     local_config.near_distance_m,
                     local_config.far_distance_m,
                 )

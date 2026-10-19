@@ -47,6 +47,45 @@ SHA-256·회로 크기·추론 프레임 수와 `trained_waypoint_head=false`가
 20Hz로 명령을 갱신할 수 있다. 입력은 `/dog_odom`, `/dog_imu_raw`이며, frame 변환이
 없거나 센서가 만료되면 정지한다. 설정·검증은 [motion-tracking.md](motion-tracking.md)를 참고한다.
 
+## Jetson 지연 최적화
+
+CUDA/PyTorch R50에서는 `SWIN_L_CUDA_GRAPH=true`, CUDA Flyvis에서는
+`CONNECTOME_CUDA_GRAPH=true`로 같은 모델의 반복 실행을 CUDA graph로 재생한다.
+모델·FP16 설정·ROI·프레임 주기·검사 기준은 바꾸지 않는다. R50 전처리와 표면
+후처리는 그대로이며, 재사용되는 GPU 출력과 시간 EMA의 저장 공간은 분리한다.
+입력 shape/dtype/device가 바뀌거나 capture가 실패하면 오류로 종료하며 다른
+모델이나 CPU로 대체하지 않는다. 첫 프레임의 warmup/capture 동안은 신선한 경로가
+없으므로 이동할 수 없다.
+
+Flyvis는 native `_next_state`의 모든 적분 단계를 재생한다. 내부 dt는 기존처럼
+최대 0.02초이며 입력 시각에 따라 단계 수가 달라진다. 1초 stream gap 제한도 유지한다.
+학습된 파라미터는 고정하고 DecoderGAVP는 native eager CUDA로 실행한다. 장시간 공백은
+회로를 초기화하지만 Mode 0의 선택 표면은 새 작업까지 유지한다.
+
+표면 projection/footprint 격자만 유한 캐시에 저장한다. 매 프레임의 허용 영역과
+hazard는 새로 계산하며 Mode 0과 같은 표면의 후보 평가를 공유한다. 먼 구간이
+막힐 때의 최장 유효 prefix는 같은 선분 검사로 이진 탐색한다. 수신 측의 현재
+마스크 재검증은 유지한다. timer와 추론 worker 사이의 경로/시각도 한 snapshot으로
+교체해 경로 소실 순간의 경쟁을 막는다.
+
+`metrics.pipeline_timing`은 segmentation/planner 시간과 완료 시 촬영 나이를,
+`path_planner.timing`은 Flyvis/표면 계산 시간을 제공한다. 이 수치와 source 나이로
+판정하며 단순 명령 timer 주파수로 인식 성능을 판단하지 않는다.
+
+실행 예시(장비에서 확인한 frame 변환은 별도 설정):
+
+```dotenv
+SWIN_L_CUDA_GRAPH=true
+CONNECTOME_CUDA_GRAPH=true
+LINE_TRACKING_MOTION_ENABLED=true
+```
+
+기본 Compose의 `actual-activate`는 task-drive다. 검사 용도로 만든 로컬 override의
+`SWIN_L_MODE=ros2` 또는 disabled Sport 토픽이 남아 있으면 주행하지 않는다.
+주행 배포는 task-drive와 `/api/sport/request`를 사용하며, 기존 작업 수락 후에만
+명령을 발행한다. `ros2` 성능 검사나 가상 ROS domain 재생은 현장 주행 성공을
+대신하지 않는다.
+
 ## 모델과 실행
 
 기존 `fly_connectom`의 검증된 `flyvis_encoder.pt`를 사용할 수 있다. 모델 바이너리는

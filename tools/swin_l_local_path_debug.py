@@ -356,6 +356,7 @@ def _runtime_config(args: argparse.Namespace) -> BestSoFarConfig:
         tensorrt_engine_path=args.tensorrt_engine,
         tensorrt_manifest_path=args.tensorrt_manifest,
         allow_backend_fallback=args.allow_backend_fallback,
+        cuda_graph=args.cuda_graph,
     )
 
 
@@ -881,6 +882,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         "planner_status": {"backend": "connectome", "ready": False, "reason": "connectome_waiting"}
                           if planner else {"backend": "local"},
         "motion_epoch": None,
+        "pipeline_timing": {},
     }
     worker_error: list[BaseException] = []
 
@@ -1705,6 +1707,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "ready_reason": self.last_ready_reason if task_mode else None,
                 "task_active": self.tasks.active is not None if self.tasks else None,
                 "performance": performance,
+                "pipeline_timing": dict(state['pipeline_timing']),
                 "cuda_memory": cuda_memory_metrics(segmenter.device),
             }
             if tag_status is not None:
@@ -1833,6 +1836,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 if planner:
                     kwargs['detect_road_hazards'] = True
                 result: BestSoFarResult = segmenter.segment(frame_rgb, **kwargs)
+                segmentation_finished_at = time.monotonic()
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
@@ -1885,6 +1889,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                             counts[mask_class] = 0 if available else counts[mask_class] + 1
                     state["header"] = packet.source_header
                     state['motion_epoch'] = packet.motion_epoch
+                    state['pipeline_timing'] = {
+                        'segmentation_ms': (segmentation_finished_at-inference_started_at)*1000,
+                        'planner_ms': (path_updated_at-segmentation_finished_at)*1000,
+                        'source_age_at_completion_sec': ((node.get_clock().now().nanoseconds-
+                            _stamp_ns(packet.source_header))/1e9 if planner else None),
+                        'cuda_graph': args.cuda_graph,
+                    }
                     completed_before = int(state["inference_count"])
                     state["inference_count"] += 1
                     state["last_inference_at"] = inference_finished_at
@@ -1984,6 +1995,8 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         help="Local R50 checkpoint manifest SHA-256; required for task-drive",
     )
     parser.add_argument("--device", default=_env("SWIN_L_DEVICE", "auto"))
+    parser.add_argument('--cuda-graph', action=argparse.BooleanOptionalAction,
+                        default=_env_bool('SWIN_L_CUDA_GRAPH', False))
     parser.add_argument(
         "--backend",
         choices=INFERENCE_BACKENDS,

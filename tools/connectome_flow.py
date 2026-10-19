@@ -15,8 +15,53 @@ import numpy as np
 from connectome_surface import FlowField
 
 
+class FlyvisCudaStep:
+    """Replay the native Flyvis Euler step; retain every integration step."""
+    def __init__(self, encoder):
+        torch, network = encoder.torch, encoder.network
+        D = type(encoder.grey)
+        if set(encoder.grey.nodes) != {'activity'} or len(encoder.grey.edges):
+            raise ValueError('unsupported Flyvis state for CUDA replay')
+        network.clamp()
+        self.params = network._param_api()
+        self.activity = encoder.grey.nodes.activity.clone()
+        self.stimulus = torch.zeros_like(self.activity)
+        self.dt = torch.tensor(.02, device=encoder.device)
+
+        def step():
+            # AutoDeref caches gathered source activity. Recreate that API
+            # INSIDE capture so each replay gathers the evolving activity;
+            # reusing a warmup namespace would freeze recurrent inputs.
+            current = network._state_api(D(nodes=D(activity=self.activity), edges=D()))
+            state = network._next_state(self.params, current, self.stimulus, self.dt)
+            self.activity.copy_(state.nodes.activity)
+
+        stream = torch.cuda.Stream(device=encoder.device)
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.inference_mode(), torch.cuda.stream(stream):
+            for _ in range(3): step()
+        torch.cuda.current_stream().wait_stream(stream)
+        self.graph = torch.cuda.CUDAGraph()
+        with torch.inference_mode(), torch.cuda.graph(self.graph): step()
+        self.activity.copy_(encoder.grey.nodes.activity)
+
+    def advance(self, encoder, receptors, previous, steps, dt):
+        self.dt.fill_(dt)
+        if previous is None:
+            self.activity.copy_(encoder.grey.nodes.activity)
+        for values, count in ((previous, steps-1), (receptors, 1)):
+            if count <= 0: continue
+            encoder.network.stimulus.zero(1, 1)
+            encoder.network.stimulus.add_input(values)
+            self.stimulus.copy_(encoder.network.stimulus()[:, 0])
+            for _ in range(count): self.graph.replay()
+        # DecoderGAVP uses a host-side channel index in Flyvis 1.2.0, so it
+        # remains native eager CUDA. Only the repeated circuit step is captured.
+        return encoder.decoder(self.activity[:, None, :])[0, 0].cpu().numpy().copy()
+
+
 class FlyvisFlow:
-    def __init__(self, bundle_path, expected_sha256, device='cuda', max_gap=1.):
+    def __init__(self, bundle_path, expected_sha256, device='cuda', max_gap=1., cuda_graph=False):
         import torch
         os.environ.setdefault('FLYVIS_ROOT_DIR', '/tmp/line-tracking-flyvis')
         import flyvis
@@ -57,10 +102,12 @@ class FlyvisFlow:
         self.size = int(self.eye.min_frame_size.max().item())
         with torch.inference_mode():
             self.grey = self.network.steady_state(1., .02, batch_size=1)
+            self.cuda_step = FlyvisCudaStep(self) if cuda_graph else None
         self.details = {'backend': 'flyvis', 'version': flyvis.__version__, 'bundle_sha256': actual,
                         'pretrained_task': 'optical_flow', 'flow_decoder_loaded': True,
                         'trained_waypoint_head': False, 'nodes': self.network.n_nodes,
-                        'source': bundle['source'], 'inferred_frames': 0}
+                        'source': bundle['source'], 'inferred_frames': 0,
+                        'execution': 'cuda_graph' if cuda_graph else 'eager'}
         self.reset()
 
     def reset(self):
@@ -82,14 +129,17 @@ class FlyvisFlow:
             receptors = self.eye(torch.as_tensor(canvas, device=self.device)[None, None])
             steps = 1 if self.last_stamp is None else max(1, math.ceil((stamp-self.last_stamp)/.02))
             dt = .02 if self.last_stamp is None else (stamp-self.last_stamp)/steps
-            inputs = receptors if self.last_input is None else self.last_input.expand(1, steps, 1, -1).clone()
-            inputs[:, -1:] = receptors
-            self.network.stimulus.zero(1, steps)
-            self.network.stimulus.add_input(inputs)
-            states = self.network(self.network.stimulus(), dt=dt,
-                                  state=self.grey if self.state is None else self.state, as_states=True)
-            self.state = states[-1]
-            flow = self.decoder(self.state.nodes.activity[:, None, :])[0, 0].cpu().numpy().copy()
+            if self.cuda_step:
+                flow = self.cuda_step.advance(self, receptors, self.last_input, steps, dt)
+            else:
+                inputs = receptors if self.last_input is None else self.last_input.expand(1, steps, 1, -1).clone()
+                inputs[:, -1:] = receptors
+                self.network.stimulus.zero(1, steps)
+                self.network.stimulus.add_input(inputs)
+                states = self.network(self.network.stimulus(), dt=dt,
+                                      state=self.grey if self.state is None else self.state, as_states=True)
+                self.state = states[-1]
+                flow = self.decoder(self.state.nodes.activity[:, None, :])[0, 0].cpu().numpy().copy()
         centers = self.eye.receptor_centers.cpu().numpy()[:, ::-1].astype(float)
         # BoxEye centers are relative to the square input centre, in pixels.
         pixels = (centers+self.size//2-[ox, oy])/scale
@@ -105,4 +155,5 @@ class FlyvisFlow:
         motion = np.clip(motion/max(float(np.percentile(motion, 90)), 1e-8), 0, 1)
         self.last_stamp, self.last_input = stamp, receptors
         self.details['inferred_frames'] += 1
+        self.details.update(integration_steps=steps, integration_dt_sec=dt)
         return FlowField(pixels[visible], motion)

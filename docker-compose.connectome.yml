@@ -16,6 +16,7 @@ services:
       CONNECTOME_BUNDLE: ${CONNECTOME_BUNDLE:-/models/flyvis_encoder.pt}
       CONNECTOME_BUNDLE_SHA256: ${CONNECTOME_BUNDLE_SHA256:?set verified pretrained bundle SHA-256}
       CONNECTOME_DEVICE: ${CONNECTOME_DEVICE:-cuda}
+      CONNECTOME_CUDA_GRAPH: ${CONNECTOME_CUDA_GRAPH:-false}
       OMP_NUM_THREADS: "2"
       OPENBLAS_NUM_THREADS: "2"
     healthcheck:

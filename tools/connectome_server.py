@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import math
 import os
+import time
 
 import cv2
 import numpy as np
@@ -71,15 +72,20 @@ class PlannerService:
             raise ValueError('geometry cannot change within a camera/task stream')
         if self.last_stamp is not None and stamp <= self.last_stamp:
             raise ValueError('duplicate/backwards camera stamp')
+        started = time.perf_counter()
         try:
             flow = self.encoder.advance(frame, stamp)
+            flow_finished = time.perf_counter()
             paths = self.planner.plan(selected, hazard, local, config, flow)
         except Exception:
-            self.encoder.reset(); self.planner = SurfacePlanner(); self.last_stamp = None
+            # A flow interruption does not authorize Mode 0 to switch surface.
+            self.encoder.reset(); self.last_stamp = None
             raise
         self.last_stamp = stamp
         return {'schema': SCHEMA, 'request_id': request['request_id'], 'stream_id': self.stream,
-                'stamp_sec': stamp, 'paths': paths, 'model': dict(self.encoder.details)}
+                'stamp_sec': stamp, 'paths': paths, 'model': dict(self.encoder.details),
+                'timing': {'flow_ms': (flow_finished-started)*1000,
+                           'surface_ms': (time.perf_counter()-flow_finished)*1000}}
 
 
 def make_server(service, address):
@@ -130,10 +136,14 @@ def main():
     parser.add_argument('--bundle', default=os.getenv('CONNECTOME_BUNDLE', '/models/flyvis_encoder.pt'))
     parser.add_argument('--sha256', default=os.getenv('CONNECTOME_BUNDLE_SHA256', ''))
     parser.add_argument('--device', choices=['cpu', 'cuda'], default=os.getenv('CONNECTOME_DEVICE', 'cuda'))
+    parser.add_argument('--cuda-graph', action=argparse.BooleanOptionalAction,
+                        default=os.getenv('CONNECTOME_CUDA_GRAPH', 'false').lower() == 'true')
     args = parser.parse_args()
     from connectome_flow import FlyvisFlow
     cv2.setNumThreads(2)
-    encoder = FlyvisFlow(args.bundle, args.sha256, args.device)
+    if args.cuda_graph and args.device != 'cuda':
+        parser.error('CUDA replay requires --device cuda')
+    encoder = FlyvisFlow(args.bundle, args.sha256, args.device, cuda_graph=args.cuda_graph)
     make_server(PlannerService(encoder), (args.host, args.port)).serve_forever()
 
 

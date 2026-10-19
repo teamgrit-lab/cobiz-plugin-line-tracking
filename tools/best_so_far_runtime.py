@@ -205,8 +205,11 @@ class BestSoFarConfig:
     tensorrt_engine_path: str | None = None
     tensorrt_manifest_path: str | None = None
     allow_backend_fallback: bool = False
+    cuda_graph: bool = False
 
     def validate(self) -> None:
+        if self.cuda_graph and (self.backend != 'pytorch' or self.profile not in R50_PROFILES):
+            raise ValueError('CUDA replay supports only the PyTorch R50 profiles')
         resolve_profile(
             self.profile,
             model_id=self.model_id,
@@ -424,6 +427,9 @@ class BestSoFarSegmenter:
         self._previous_scores: torch.Tensor | None = None
         self._previous_selected: np.ndarray | None = None
         self._surface_lookup: torch.Tensor | None = None
+        self._cuda_replay = None
+        if config.cuda_graph and self.device.type != 'cuda':
+            raise ValueError('CUDA replay requires a CUDA model device')
 
     def _load_pytorch_model(self) -> Any:
         if self.profile.name == FINETUNED_PROFILE:
@@ -492,6 +498,11 @@ class BestSoFarSegmenter:
             inputs = self._move_inputs({"pixel_values": inputs["pixel_values"]})
             return self.tensorrt_backend.semantic_scores(inputs["pixel_values"])
         inputs = self._move_inputs(inputs)
+        if getattr(self.config, 'cuda_graph', False):
+            from cuda_replay import CudaReplay
+            if self._cuda_replay is None:
+                self._cuda_replay = CudaReplay(self._r50_scores, inputs)
+            return self._cuda_replay(inputs)[0].detach()
         with torch.inference_mode():
             assert self.model is not None
             outputs = self.model(**inputs)
@@ -510,22 +521,19 @@ class BestSoFarSegmenter:
                 # Preserve the exact retained FP32 rollback behavior.
                 return scores.float().cpu()
 
-            class_probabilities = outputs.class_queries_logits.softmax(dim=-1)[..., :-1]
-            mask_probabilities = outputs.masks_queries_logits.sigmoid()
-            scores = torch.einsum(
-                "bqc,bqhw->bchw",
-                class_probabilities,
-                mask_probabilities,
-            )
-            scores = functional.interpolate(
-                scores,
-                size=self.evaluation_size,
-                mode="bilinear",
-                align_corners=False,
-            )
+            scores = self._r50_output_scores(outputs)
         # Keep R50 scores on MPS/CUDA. Only maps needed by CPU morphology are
         # transferred in segment(), avoiding a 65-channel copy per frame.
         return scores[0].detach()
+
+    def _r50_scores(self, inputs):
+        return self._r50_output_scores(self.model(**inputs))
+
+    def _r50_output_scores(self, outputs):
+        classes = outputs.class_queries_logits.softmax(dim=-1)[..., :-1]
+        masks = outputs.masks_queries_logits.sigmoid()
+        return functional.interpolate(torch.einsum('bqc,bqhw->bchw', classes, masks),
+            size=self.evaluation_size, mode='bilinear', align_corners=False)
 
     def _synchronize(self) -> None:
         if self.device.type == "mps":
@@ -698,7 +706,7 @@ class BestSoFarSegmenter:
         if self._previous_scores is None:
             # TensorRT owns and reuses its output allocation. Keep temporal
             # state in a separate buffer so the next enqueue cannot overwrite it.
-            smooth_scores = scores.clone() if self.backend == "tensorrt" else scores
+            smooth_scores = scores.clone() if self.backend == "tensorrt" or getattr(self.config, 'cuda_graph', False) else scores
         else:
             smooth_scores = (
                 self.temporal_alpha * scores

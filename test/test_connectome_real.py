@@ -65,3 +65,26 @@ def test_real_pretrained_connectome_mask_path_and_command_contract():
         assert valid > 0
     finally:
         server.shutdown(); server.server_close(); thread.join(2)
+
+
+@pytest.mark.skipif(not os.getenv('CONNECTOME_TEST_BUNDLE'), reason='opt-in pretrained Flyvis bundle required')
+def test_native_cuda_recurrent_replay_matches_eager_across_dt_and_reset():
+    import torch
+    if not torch.cuda.is_available():
+        pytest.skip('CUDA required for circuit replay')
+    from connectome_flow import FlyvisFlow, FlyvisCudaStep
+    encoder = FlyvisFlow(os.environ['CONNECTOME_TEST_BUNDLE'], os.environ['CONNECTOME_TEST_SHA256'], 'cuda')
+    rng = np.random.default_rng(13)
+    frames = [rng.integers(0, 256, (360, 640, 3), dtype=np.uint8) for _ in range(6)]
+    stamps = [1., 1.25, 1.38, 2.13, 2.33, 2.58]
+    expected = []
+    for image, stamp in zip(frames, stamps):
+        flow = encoder.advance(image, stamp)
+        expected.append((encoder.state.nodes.activity.clone(), flow.relative_motion.copy()))
+    with torch.inference_mode(): encoder.cuda_step = FlyvisCudaStep(encoder)
+    for _ in range(2):
+        encoder.reset()
+        for image, stamp, (activity, motion) in zip(frames, stamps, expected):
+            actual = encoder.advance(image, stamp)
+            torch.testing.assert_close(encoder.cuda_step.activity, activity, rtol=1e-4, atol=1e-4)
+            np.testing.assert_allclose(actual.relative_motion, motion, rtol=.005, atol=.005)

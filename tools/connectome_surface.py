@@ -5,6 +5,7 @@ a trained neural waypoint head. Coordinates and distances use the existing
 line-tracking ROI homography, which still needs physical camera calibration.
 """
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 
 import cv2
@@ -50,25 +51,34 @@ def runs(row):
     return [(int(a), int(b)-1) for a, b in edges.reshape(-1, 2)]
 
 
+@lru_cache(maxsize=8)
+def surface_geometry(shape, local, config):
+    """Cache projection/footprint only; never cache a camera's free space."""
+    h = pixel_to_ground_homography(shape, local)
+    xs = np.linspace(local.near_distance_m, local.far_distance_m, local.bev_height_px)
+    ys = np.linspace(local.search_half_width_m, -local.search_half_width_m, local.bev_width_px)
+    x, y = np.meshgrid(xs, ys, indexing='ij')
+    pixels = ground_to_pixel(np.column_stack((x.ravel(), y.ravel())), h).reshape(*x.shape, 2)
+    clearance = config.half_width_m+config.margin_m
+    dx, dy = xs[1]-xs[0], abs(ys[1]-ys[0])
+    kernel_shape = (2*math.ceil(clearance/dx)+1, 2*math.ceil(clearance/dy)+1)
+    if max(kernel_shape) > 1025:
+        raise ValueError('clearance kernel exceeds bounded geometry')
+    arrays = (h, xs, ys, pixels[..., 0].astype(np.float32), pixels[..., 1].astype(np.float32),
+              np.ones(kernel_shape, np.uint8))
+    for a in arrays:
+        a.setflags(write=False)
+    return arrays
+
+
 class SurfaceArea:
     def __init__(self, selected, hazard, surface, local: LocalPathConfig, config: PlannerConfig):
         local.validate(); config.validate()
         self.local, self.config = local, config
-        self.h = pixel_to_ground_homography(selected.shape, local)
-        self.xs = np.linspace(local.near_distance_m, local.far_distance_m, local.bev_height_px)
-        self.ys = np.linspace(local.search_half_width_m, -local.search_half_width_m, local.bev_width_px)
-        x, y = np.meshgrid(self.xs, self.ys, indexing='ij')
-        pixels = ground_to_pixel(np.column_stack((x.ravel(), y.ravel())), self.h).reshape(*x.shape, 2)
-        mx, my = pixels[..., 0].astype(np.float32), pixels[..., 1].astype(np.float32)
+        self.h, self.xs, self.ys, mx, my, kernel = surface_geometry(selected.shape, local, config)
         raw = cv2.remap((selected == surface).astype(np.uint8), mx, my, cv2.INTER_NEAREST)
         excluded = cv2.remap(np.asarray(hazard, np.uint8), mx, my, cv2.INTER_NEAREST)
-        clearance = config.half_width_m+config.margin_m
-        dx, dy = self.xs[1]-self.xs[0], abs(self.ys[1]-self.ys[0])
         # No closing/filling: semantic holes and unknown gaps are not free ground.
-        shape = (2*math.ceil(clearance/dx)+1, 2*math.ceil(clearance/dy)+1)
-        if max(shape) > 1025:
-            raise ValueError('clearance kernel exceeds bounded geometry')
-        kernel = np.ones(shape, np.uint8)
         # The near/far camera crop does not manufacture an obstacle. Lateral
         # crop edges are unknown and explicitly excluded by the padded mask.
         padded = np.pad(raw, ((0, 0), (kernel.shape[1]//2,)*2))
@@ -120,6 +130,25 @@ class SurfaceArea:
             return False
         return True
 
+    def longest_prefix(self, points):
+        """Same longest accepted vertex prefix without quadratic rechecking.
+
+        Containment and centre checks apply to every segment independently.
+        Once a prefix fails, adding segments cannot repair it. Search only
+        prefixes meeting the minimum length, then revalidate the final one.
+        """
+        if len(points) < 2 or self.accepts(points):
+            return points
+        first = int(np.searchsorted(points[:, 0], points[0, 0]+self.config.min_length_m))+1
+        lo, hi, best = max(2, first), len(points)-1, 0
+        while lo <= hi:
+            mid = (lo+hi)//2
+            if self.accepts(points[:mid]):
+                best, lo = mid, mid+1
+            else:
+                hi = mid-1
+        return points[:best]
+
     def plan(self, flow):
         if len(self.rows) < 2:
             return None
@@ -142,8 +171,7 @@ class SurfaceArea:
                     points = points[:bad[0]]
                 # A far ambiguous junction must not discard a verified near
                 # straight section. Never extend across it or invent support.
-                while len(points) >= 2 and not self.accepts(points):
-                    points = points[:-1]
+                points = self.longest_prefix(points)
                 if len(points) < 2 or points[-1, 0]-points[0, 0] < self.config.min_length_m:
                     continue
                 slopes = np.diff(points[:, 1])/np.diff(points[:, 0])
@@ -169,9 +197,12 @@ class SurfacePlanner:
             available = [(a.seed_distance, -s, s) for s, a in areas.items() if len(a.rows)]
             if available:
                 self.union_surface = min(available)[2]
+        # Mode 0 selects one of these same surfaces. Re-evaluating its ten
+        # candidates repeats the entire containment/flow calculation.
+        paths = {s: a.plan(flow) for s, a in areas.items()}
         result = {}
         for mode in (0, 1, 2):
             surface = self.union_surface if mode == 0 else mode
-            path = areas[surface].plan(flow) if surface is not None else None
+            path = paths.get(surface)
             result[str(mode)] = {**path, 'surface_class': surface} if path else None
         return result

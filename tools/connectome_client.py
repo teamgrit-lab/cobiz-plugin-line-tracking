@@ -94,6 +94,7 @@ class ConnectomeClient:
                 raise TimeoutError('planner roundtrip budget exceeded; discard late response')
             self.metrics = {'backend': 'connectome', 'ready': True, 'reason': 'ok', 'model': model,
                             'union_surface': self.union_surface,
+                            'timing': reply.get('timing', {}),
                             'roundtrip_ms': (time.monotonic()-started)*1000}
             return estimates
         except Exception as error:
@@ -118,13 +119,16 @@ class ConnectomePathTracker:
         self.reset()
 
     def reset(self, *, preserve_branch=False):
-        self.estimate = self.at = None
+        self._reference = (None, None)
 
     def update(self, estimate, timestamp_sec):
-        self.estimate, self.at = estimate, timestamp_sec
+        # The inference worker and ROS timer run concurrently. Publish the
+        # estimate and its arrival as one snapshot, including a missing path.
+        self._reference = (estimate, timestamp_sec)
 
     def current(self, timestamp_sec):
-        if self.estimate is None or self.at is None or not 0 <= timestamp_sec-self.at <= self.max_age:
+        estimate, at = self._reference
+        if estimate is None or at is None or not 0 <= timestamp_sec-at <= self.max_age:
             return None
-        return SmoothedPath(self.estimate.points_xy.copy(), self.estimate.confidence,
-                            timestamp_sec-self.at, 'connectome_surface_center')
+        return SmoothedPath(estimate.points_xy.copy(), estimate.confidence,
+                            timestamp_sec-at, 'connectome_surface_center')

@@ -183,3 +183,54 @@ def test_slow_http_response_times_out_without_a_geometric_fallback(endpoint):
 def test_invalid_geometry_is_rejected(kwargs):
     with pytest.raises(ValueError):
         PlannerConfig(**kwargs).validate()
+
+
+def test_prefix_search_preserves_longest_supported_path_at_internal_holes():
+    selected = strip()
+    area = SurfaceArea(selected, np.zeros_like(selected), 1, LocalPathConfig(), PlannerConfig())
+    p = np.column_stack((area.xs[area.rows], area.centers))
+    for row in (35, 65, 100, 140):
+        original = area.allowed.copy()
+        area.allowed[row, :] = 0
+        expected = p
+        while len(expected) >= 2 and not area.accepts(expected):
+            expected = expected[:-1]
+        actual = area.longest_prefix(p)
+        if len(expected) >= 2:
+            np.testing.assert_array_equal(actual, expected)
+        else:
+            assert len(actual) < 2
+        area.allowed = original
+
+
+def test_flow_failure_keeps_union_surface_latched(endpoint):
+    url, service = endpoint
+    client = ConnectomeClient(url, LocalPathConfig())
+    assert invoke(client)[0] is not None
+    advance = service.encoder.advance
+    service.encoder.advance = lambda *_: (_ for _ in ()).throw(ValueError('gap'))
+    assert invoke(client, stamp=1.25, sequence=2)[0] is None
+    service.encoder.advance = advance
+    # Fresh sidewalk must not change the already chosen road after a gap.
+    result = invoke(client, strip(surface=2), stamp=1.5, sequence=3)
+    assert client.metrics['ready']
+    assert result[0] is None and result[2] is not None
+
+
+def test_reference_replacement_is_safe_while_timer_reads():
+    from local_path import LocalPathEstimate
+    tracker = ConnectomePathTracker(1.)
+    p = np.array([[3., 0.], [8., 0.]])
+    estimate = LocalPathEstimate(p, .9, 1., 3., p.copy())
+    errors = []
+    def replace():
+        for _ in range(10000):
+            tracker.update(estimate, 1.)
+            tracker.reset()
+    worker = threading.Thread(target=replace)
+    worker.start()
+    for _ in range(10000):
+        path = tracker.current(1.1)
+        if path is not None:
+            assert path.confidence == .9 and path.age_sec == pytest.approx(.1)
+    worker.join()

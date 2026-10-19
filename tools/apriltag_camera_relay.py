@@ -20,6 +20,35 @@ def camera_info_for_image(image, camera_info):
     return paired
 
 
+class CameraRelayState:
+    """Share untouched input independently of the AprilTag sampling cadence."""
+
+    def __init__(self, period, publish_tag, publish_raw=None, publish_info=None):
+        self.period = period
+        self.publish_tag = publish_tag
+        self.publish_raw = publish_raw
+        self.publish_info = publish_info
+        self.info = None
+        self.last_image_at = -math.inf
+
+    def on_info(self, message):
+        self.info = message
+        if self.publish_info is not None:
+            self.publish_info(message)
+
+    def on_image(self, image, now):
+        if self.publish_raw is not None:
+            self.publish_raw(image)
+        if now - self.last_image_at < self.period:
+            return True
+        info = camera_info_for_image(image, self.info)
+        if info is None:
+            return False
+        self.last_image_at = now
+        self.publish_tag(image, info)
+        return True
+
+
 def main():
     import rclpy
     from rclpy.executors import ExternalShutdownException
@@ -36,33 +65,43 @@ def main():
             info_topic = self.declare_parameter(
                 "input_camera_info_topic", "/a2/front_camera/res_720p/camera_info"
             ).value
-            self.info = None
             rate = float(self.declare_parameter("max_hz", 10.0).value)
             if not math.isfinite(rate) or rate <= 0:
                 raise ValueError("AprilTag max_hz must be finite and positive")
-            self.period = 1.0 / rate
-            self.last_image_at = -math.inf
+            raw_topic = self.declare_parameter("shared_image_topic", "").value
+            raw_info_topic = self.declare_parameter("shared_camera_info_topic", "").value
+            for output, sources in ((raw_topic, (image_topic, "image_rect")),
+                                    (raw_info_topic, (info_topic, "camera_info"))):
+                if output and self.resolve_topic_name(output) in {
+                    self.resolve_topic_name(source) for source in sources
+                }:
+                    raise ValueError("shared camera output must differ from input and tag output")
+            self.raw_pub = (self.create_publisher(Image, raw_topic, qos_profile_sensor_data)
+                            if raw_topic else None)
+            self.raw_info_pub = (self.create_publisher(CameraInfo, raw_info_topic, qos_profile_sensor_data)
+                                 if raw_info_topic else None)
             self.image_pub = self.create_publisher(Image, "image_rect", qos_profile_sensor_data)
             self.info_pub = self.create_publisher(CameraInfo, "camera_info", qos_profile_sensor_data)
+            self.state = CameraRelayState(
+                1.0 / rate, self.publish_tag,
+                self.raw_pub.publish if self.raw_pub else None,
+                self.raw_info_pub.publish if self.raw_info_pub else None,
+            )
             self.create_subscription(CameraInfo, info_topic, self.on_info, qos_profile_sensor_data)
             self.create_subscription(Image, image_topic, self.on_image, qos_profile_sensor_data)
             self.get_logger().info(f"AprilTag input: image={image_topic} info={info_topic}")
 
         def on_info(self, message):
-            self.info = message
+            self.state.on_info(message)
 
         def on_image(self, image):
-            now = time.monotonic()
-            if now - self.last_image_at < self.period:
-                return
-            info = camera_info_for_image(image, self.info)
-            if info is None:
+            if not self.state.on_image(image, time.monotonic()):
                 self.get_logger().warning(
                     "AprilTag waiting for CameraInfo with matching image dimensions",
                     throttle_duration_sec=5.0,
                 )
-                return
-            self.last_image_at = now
+
+        def publish_tag(self, image, info):
             self.info_pub.publish(info)
             self.image_pub.publish(image)
 

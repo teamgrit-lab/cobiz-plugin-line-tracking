@@ -82,12 +82,12 @@ hazard는 새로 계산하며 Mode 0과 같은 표면의 후보 평가를 공유
 SWIN_L_CUDA_GRAPH=true
 CONNECTOME_CUDA_GRAPH=true
 LINE_TRACKING_MOTION_ENABLED=true
-SWIN_L_INFERENCE_HZ=2.0
+SWIN_L_INFERENCE_HZ=2.5
 SWIN_L_TELEMETRY_HZ=5.0
 SWIN_L_INFERENCE_PROCESS=true
 ```
 
-이 장비의 목표는 매초 최소 1회 새 추론을 완료하는 것이다. 2Hz는 마감 여유를
+이 장비의 목표는 매초 최소 1회 새 추론을 완료하는 것이다. 2.5Hz는 마감 여유를
 두기 위한 요청 주기이며 실제 달성률은 완료 간격으로 확인한다. 단순히 요청
 주기를 1Hz로 두면 처리 지연이 더해져 기존 1초 촬영 나이 제한 사이에 정지
 구간이 생길 수 있다. 영상/센서 만료 한계는 늘리지 않는다.
@@ -106,9 +106,21 @@ SWIN_L_INFERENCE_PROCESS=true
 
 `camera_input`은 기존 카메라 구독에서 수신 개수·최대 수신 공백·1초 초과 공백을
 기록한다. 성능 수집기가 원격 raw 영상에 별도 구독자를 추가하면 DDS 송신량을
-늘릴 수 있으므로, 실제 주행 부하 측정은 이 상태 정보를 사용한다. AprilTag를 보류한
-이 장비의 검사/주행 프로필은 `SWIN_L_APRILTAG_DETECTOR_ENABLED=false`로 불필요한
-원격 영상 중복 수신을 줄인다. AprilTag 기능을 쓸 때에는 검출기를 다시 활성화한다.
+늘릴 수 있으므로, 실제 주행 부하 측정은 이 상태 정보를 사용한다. AprilTag 검출기는
+계속 활성화한다. 아래 설정은 relay 하나가 원격 원본을 받아 주행 노드에 그대로
+공유한다. 원본 픽셀·encoding·촬영 stamp·frame과 CameraInfo는 유지하며, 원본 공유는
+AprilTag 6Hz 제한이나 CameraInfo 준비 여부에 묶이지 않는다. AprilTag에는 기존의
+동기화된 영상/보정 정보를 전달한다. 검출·확인·인계와 정지 조건은 변경하지 않는다.
+
+```dotenv
+SWIN_L_APRILTAG_DETECTOR_ENABLED=true
+SWIN_L_APRILTAG_IMAGE_TOPIC=/a2/front_camera/res_360p/image_raw
+SWIN_L_APRILTAG_CAMERA_INFO_TOPIC=/a2/front_camera/res_360p/camera_info
+SWIN_L_SHARED_CAMERA_IMAGE_TOPIC=/line_tracking/camera/image_raw
+SWIN_L_SHARED_CAMERA_INFO_TOPIC=/line_tracking/camera/camera_info
+SWIN_L_IMAGE_TOPIC=/line_tracking/camera/image_raw
+SWIN_L_CAMERA_INFO_TOPIC=/line_tracking/camera/camera_info
+```
 
 기본 Compose의 `actual-activate`는 task-drive다. 검사 용도로 만든 로컬 override의
 `SWIN_L_MODE=ros2` 또는 disabled Sport 토픽이 남아 있으면 주행하지 않는다.

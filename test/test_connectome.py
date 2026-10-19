@@ -222,7 +222,6 @@ def test_reference_replacement_is_safe_while_timer_reads():
     tracker = ConnectomePathTracker(1.)
     p = np.array([[3., 0.], [8., 0.]])
     estimate = LocalPathEstimate(p, .9, 1., 3., p.copy())
-    errors = []
     def replace():
         for _ in range(10000):
             tracker.update(estimate, 1.)
@@ -234,3 +233,18 @@ def test_reference_replacement_is_safe_while_timer_reads():
         if path is not None:
             assert path.confidence == .9 and path.age_sec == pytest.approx(.1)
     worker.join()
+
+
+def test_flow_spatial_index_preserves_brute_force_cost_and_equal_distance_ties():
+    rng = np.random.default_rng(7)
+    receptors = rng.uniform(20, 640, (721, 2))
+    receptors[:2] = [[-1., 0.], [1., 0.]]
+    motion = rng.random(721)
+    queries = np.r_[rng.uniform(0, 640, (160, 2)), [[0., 0.]]]
+    nearest = np.argmin(np.sum((queries[:, None]-receptors[None])**2, axis=2), axis=1)
+    flow = FlowField(receptors, motion)
+    expected = float(np.mean(motion[nearest]))
+    assert flow.cost(queries) == expected
+    receptors.fill(0); motion.fill(0) # Constructor owns an immutable snapshot.
+    assert flow.cost(queries) == expected
+    assert flow.cost(np.array([[0., 0.]])) == flow.relative_motion[0]

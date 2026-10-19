@@ -11,7 +11,7 @@ from best_so_far_runtime import BestSoFarConfig, R50_PROFILE
 
 def test_capture_rejects_cpu_and_unsupported_model_without_fallback():
     with pytest.raises(ValueError, match='CUDA tensor'):
-        CudaReplay(lambda x: x['x']*2, {'x': torch.ones(2)})
+        CudaReplay(lambda x: x['x']*2, {'x': torch.ones(2, device='cpu')})
     with pytest.raises(ValueError, match='PyTorch R50'):
         BestSoFarConfig(cuda_graph=True).validate()
     BestSoFarConfig(profile=R50_PROFILE, cuda_graph=True).validate()

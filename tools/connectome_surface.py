@@ -4,7 +4,7 @@ This is a geometric planner with a pretrained connectome auxiliary signal, not
 a trained neural waypoint head. Coordinates and distances use the existing
 line-tracking ROI homography, which still needs physical camera calibration.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 import math
 
@@ -31,10 +31,19 @@ class PlannerConfig:
             raise ValueError('positive footprint/lookahead and centre offset <= .30m required')
 
 
-@dataclass
+@dataclass(frozen=True)
 class FlowField:
     pixels: np.ndarray
     relative_motion: np.ndarray
+    _tree: object = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        # One immutable field per source frame. The spatial index must not
+        # retain references to a buffer that a decoder/caller can overwrite.
+        for key in ('pixels', 'relative_motion'):
+            values = np.array(getattr(self, key), copy=True)
+            values.setflags(write=False)
+            object.__setattr__(self, key, values)
 
     def cost(self, pixels):
         if (self.pixels.ndim != 2 or self.pixels.shape[1] != 2
@@ -42,7 +51,18 @@ class FlowField:
                 or not np.isfinite(self.pixels).all() or not np.isfinite(self.relative_motion).all()
                 or np.any(self.relative_motion < 0)):
             raise ValueError('invalid connectome flow field')
-        nearest = np.argmin(np.sum((pixels[:, None]-self.pixels[None])**2, axis=2), axis=1)
+        if len(self.pixels) > 32 and np.result_type(pixels, self.pixels) == np.float64:
+            from scipy.spatial import cKDTree
+            if self._tree is None:
+                object.__setattr__(self, '_tree', cKDTree(self.pixels))
+            distances, indices = self._tree.query(pixels, k=2)
+            nearest = indices[:, 0]
+            # Match np.argmin's first-index rule at equidistant receptors.
+            ties = np.isclose(distances[:, 0], distances[:, 1], rtol=1e-12, atol=1e-12)
+            if np.any(ties):
+                nearest[ties] = np.argmin(np.sum((pixels[ties, None]-self.pixels[None])**2, axis=2), axis=1)
+        else:
+            nearest = np.argmin(np.sum((pixels[:, None]-self.pixels[None])**2, axis=2), axis=1)
         return float(np.mean(np.clip(self.relative_motion[nearest], 0, 1)))
 
 

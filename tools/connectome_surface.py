@@ -71,6 +71,18 @@ def runs(row):
     return [(int(a), int(b)-1) for a, b in edges.reshape(-1, 2)]
 
 
+def dense_segments(points, spacing):
+    """Vectorized per-segment linspace, retaining each exact endpoint."""
+    counts = np.maximum(2, np.ceil(np.linalg.norm(np.diff(points, axis=0), axis=1)/spacing).astype(int)+1)
+    ends = np.cumsum(counts)
+    segment = np.repeat(np.arange(len(counts)), counts)
+    offset = np.arange(ends[-1])-np.repeat(ends-counts, counts)
+    step = np.diff(points, axis=0)/(counts-1)[:, None]
+    dense = points[:-1][segment]+step[segment]*offset[:, None]
+    dense[ends-1] = points[1:]
+    return dense
+
+
 @lru_cache(maxsize=8)
 def surface_geometry(shape, local, config):
     """Cache projection/footprint only; never cache a camera's free space."""
@@ -139,8 +151,7 @@ class SurfaceArea:
             return False
         # Sample every crossed grid cell, including diagonal segment interiors.
         spacing = min(self.xs[1]-self.xs[0], abs(self.ys[1]-self.ys[0]))/3
-        dense = np.concatenate([np.linspace(a, b, max(2, math.ceil(np.linalg.norm(b-a)/spacing)+1))
-                                for a, b in zip(p, p[1:])])
+        dense = dense_segments(p, spacing)
         rr = np.rint(np.interp(dense[:, 0], self.xs, np.arange(len(self.xs)))).astype(int)
         cc = np.rint(np.interp(dense[:, 1], self.ys[::-1], np.arange(len(self.ys))[::-1])).astype(int)
         if (np.any(dense[:, 1] < self.ys[-1]) or np.any(dense[:, 1] > self.ys[0])

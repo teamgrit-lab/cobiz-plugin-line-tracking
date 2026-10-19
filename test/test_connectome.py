@@ -248,3 +248,15 @@ def test_flow_spatial_index_preserves_brute_force_cost_and_equal_distance_ties()
     receptors.fill(0); motion.fill(0) # Constructor owns an immutable snapshot.
     assert flow.cost(queries) == expected
     assert flow.cost(np.array([[0., 0.]])) == flow.relative_motion[0]
+
+
+def test_vectorized_segment_sampling_is_identical_including_endpoints():
+    import math
+    from connectome_surface import dense_segments
+    rng = np.random.default_rng(3)
+    for n in (2, 20, 160):
+        points = np.cumsum(rng.uniform(-.1, .1, (n, 2)), axis=0)
+        for spacing in (.008, .03, .1):
+            expected = np.concatenate([np.linspace(a, b, max(2, math.ceil(np.linalg.norm(b-a)/spacing)+1))
+                                       for a, b in zip(points, points[1:])])
+            np.testing.assert_array_equal(dense_segments(points, spacing), expected)

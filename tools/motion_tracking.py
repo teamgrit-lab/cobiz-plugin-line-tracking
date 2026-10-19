@@ -35,6 +35,15 @@ def move_points(points, matrix):
     return np.asarray(points) @ matrix[:2, :2].T + matrix[:2, 2]
 
 
+def inverse_pose(matrix):
+    # _pose_at constructs an SE(2) matrix. Its inverse uses a transpose,
+    # avoiding a BLAS solve on each control tick while sensors are arriving.
+    result = np.eye(3)
+    result[:2, :2] = matrix[:2, :2].T
+    result[:2, 2] = -result[:2, :2] @ matrix[:2, 2]
+    return result
+
+
 @dataclass(frozen=True)
 class MotionConfig:
     control_hz: float = 20.
@@ -88,6 +97,7 @@ class MotionBuffer:
         config.validate()
         self.config, self.lookup = config, lookup
         self.child_transform, self.imu_transform = base_from_child, base_from_imu
+        self.child_inverse = None
         for matrix in (base_from_child, base_from_imu):
             if matrix is not None:
                 validate_transform(matrix)
@@ -163,7 +173,9 @@ class MotionBuffer:
                 # T_odom_base = T_odom_child @ T_child_base, including lever arm.
                 from types import SimpleNamespace
                 odom_child = transform_matrix(SimpleNamespace(translation=p, rotation=q))
-                child_base = np.linalg.inv(base_child)
+                if self.child_inverse is None:
+                    self.child_inverse = np.linalg.inv(base_child)
+                child_base = self.child_inverse
                 world = odom_child @ child_base
                 if world[2, 2] < math.cos(math.radians(20)):
                     raise ValueError('motion_tilt_exceeded')
@@ -257,7 +269,7 @@ class MotionBuffer:
         """T_target_base_from_source_base; never change the original source stamp."""
         with self.lock:
             self._fresh(now, clock_ns)
-            return np.linalg.inv(self._pose_at(target_ns/1e9)) @ self._pose_at(source_ns/1e9)
+            return inverse_pose(self._pose_at(target_ns/1e9)) @ self._pose_at(source_ns/1e9)
 
     def path(self, path, source_ns, epoch, now, clock_ns):
         with self.lock:

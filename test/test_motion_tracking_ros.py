@@ -113,3 +113,32 @@ def test_current_path_stamp_is_not_relabelled_as_old_camera_stamp(monkeypatch):
         assert debug._stamp_ns(published.header)==ros.clock_ns()
         assert ros.metrics()['motion_tracking']['source_stamp_sec']==pytest.approx(102.1)
     ros.run(scenario,*args())
+
+
+def test_slow_telemetry_never_throttles_motion_updates_or_sensor_stops(monkeypatch):
+    ros=setup(monkeypatch)
+    def scenario(node):
+        ros.start()
+        for t in np.arange(1.5,2.101,.05):sensors(node,ros,float(t))
+        # Wait on commands: the normal helper waits on telemetry, while this
+        # fixture deliberately holds ROS/monotonic time inside one report slot.
+        import time
+        from test_lidar_obstacles_ros import image
+        image(node,ros);deadline=time.perf_counter()+4
+        while True:
+            node.publish_state()
+            if json.loads(ros.published[SPORT][-1].parameter)['x']>0:break
+            assert time.perf_counter()<deadline
+            time.sleep(.001)
+        metrics_topic='/line_tracking/swin_l/metrics'
+        count=len(ros.published[metrics_topic]);moves=len(ros.published[SPORT])
+        sensors(node,ros,2.15,y=.03);node.publish_state()
+        assert len(ros.published[metrics_topic])==count
+        assert len(ros.published[SPORT])==moves+1
+        assert json.loads(ros.published[SPORT][-1].parameter)['z']<0
+        ros.now=2.4;node.publish_state()
+        assert len(ros.published[metrics_topic])==count
+        assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
+        node.release_task_control('cancel')
+        assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
+    ros.run(scenario,*args(),'--telemetry-hz','1')

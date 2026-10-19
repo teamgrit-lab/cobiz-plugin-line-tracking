@@ -853,6 +853,9 @@ def run_ros2(args: argparse.Namespace) -> int:
         _validate_task_drive_preflight(args)
     local_config = _local_path_config_from_args(args)
     planner = _connectome_client_from_args(args, local_config)
+    # Morphology must not create an all-core OpenCV pool alongside the ROS
+    # sensor executor and CUDA worker. Match the existing CPU thread budget.
+    cv2.setNumThreads(2)
     segmenter = BestSoFarSegmenter(_runtime_config(args))
     if task_mode and segmenter.device.type != "cuda":
         raise RuntimeError("task-drive mode requires a CUDA model device")
@@ -925,6 +928,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 parse_transform(args.motion_base_from_imu_transform), lookup) if args.motion_enabled else None
             self.motion_limiter = CommandLimiter(self.motion.config) if self.motion else None
             self.motion_preview = None
+            self.next_telemetry_at = 0.
+            self.control_times = deque(maxlen=PERFORMANCE_SAMPLE_WINDOW)
             self.obstacles = LidarRuntime(args, _lidar_config_from_args(args),
                 _avoidance_config_from_args(args), lookup, self.drive_config or DriveConfig(),
                 motion=self.motion) if args.avoidance_enabled else None
@@ -1587,11 +1592,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             with state_lock:
                 header = state["header"]
                 inference_count = int(state["inference_count"])
-                performance = summarize_performance(
-                    list(state["performance_inference_seconds"]),
-                    list(state["performance_processing_seconds"]),
-                    list(state["performance_completion_times"]),
-                )
             drive_decision = None
             if self.drive_config is not None:
                 path, ready_decision = self.drive_readiness(mask_class, now)
@@ -1673,7 +1673,26 @@ def run_ros2(args: argparse.Namespace) -> int:
             # the terminal display independently until control is released.
             if self.terminal_apriltag_status is not None:
                 tag_status = self.terminal_apriltag_status
+            # Motion and final publication gates above always run at control
+            # cadence. Debug serialization/ROS Pose construction must not
+            # starve either sensor callbacks or the inference worker's GIL.
+            self.control_times.append(time.monotonic())
+            if args.telemetry_hz > 0 and now < self.next_telemetry_at:
+                return
+            if args.telemetry_hz > 0:
+                self.next_telemetry_at = now+1/args.telemetry_hz
+            with state_lock:
+                performance = summarize_performance(
+                    list(state["performance_inference_seconds"]),
+                    list(state["performance_processing_seconds"]),
+                    list(state["performance_completion_times"]),
+                )
+            periods = np.diff(self.control_times)
             metrics = {
+                'control_loop': {'target_hz': self.control_hz,
+                    'observed_hz': float(1/np.mean(periods)) if len(periods) and np.mean(periods) > 0 else None,
+                    'gap_max_sec': float(np.max(periods)) if len(periods) else None,
+                    'telemetry_hz': args.telemetry_hz or self.control_hz},
                 "motion_tracking": {"enabled": bool(self.motion), "control_hz": self.control_hz,
                     **(self.motion.snapshot(now, self.get_clock().now().nanoseconds) if self.motion else {}),
                     "source_stamp_sec": _stamp_ns(header)/1e9 if header is not None else None,
@@ -1997,6 +2016,8 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", default=_env("SWIN_L_DEVICE", "auto"))
     parser.add_argument('--cuda-graph', action=argparse.BooleanOptionalAction,
                         default=_env_bool('SWIN_L_CUDA_GRAPH', False))
+    parser.add_argument('--telemetry-hz', type=float, default=_env_float('SWIN_L_TELEMETRY_HZ', 0.),
+                        help='Path/metrics publication rate; 0 follows the command timer')
     parser.add_argument(
         "--backend",
         choices=INFERENCE_BACKENDS,
@@ -2296,6 +2317,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 default=_env_float("LINE_TRACKING_UNSAFE_TIMEOUT_SEC", 2.0),
             )
     args = parser.parse_args(argv)
+    if not math.isfinite(args.telemetry_hz) or not 0 <= args.telemetry_hz <= 50:
+        parser.error('telemetry rate must be finite and 0..50 Hz')
     try:
         _motion_config_from_args(args).validate()
         parse_transform(args.motion_base_from_child_transform)

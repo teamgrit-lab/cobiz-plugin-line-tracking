@@ -175,6 +175,10 @@ def test_detector_configuration_and_compose_use_one_matching_interface():
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     assert services["actual-activate"]["environment"]["SWIN_L_APRILTAG_DETECTOR_ENABLED"].endswith(":-true}")
     assert services["debugging-swin-l"]["environment"]["SWIN_L_APRILTAG_DETECTOR_ENABLED"].endswith(":-false}")
+    # The debug-only tracker can consume the running production relay without
+    # being asked to own its outputs while its internal detector is disabled.
+    assert "SWIN_L_SHARED_CAMERA_IMAGE_TOPIC" not in services["debugging-swin-l"]["environment"]
+    assert "SWIN_L_SHARED_CAMERA_IMAGE_TOPIC" in services["actual-activate"]["environment"]
     for name in ("actual-activate", "debugging-swin-l"):
         assert services[name]["environment"]["SWIN_L_APRILTAG_DETECTIONS_TOPIC"].endswith(":-/detections}")
         assert services[name]["stop_grace_period"] == "15s"

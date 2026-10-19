@@ -78,7 +78,27 @@ hazard는 새로 계산하며 Mode 0과 같은 표면의 후보 평가를 공유
 SWIN_L_CUDA_GRAPH=true
 CONNECTOME_CUDA_GRAPH=true
 LINE_TRACKING_MOTION_ENABLED=true
+SWIN_L_INFERENCE_HZ=2.0
+SWIN_L_TELEMETRY_HZ=5.0
+SWIN_L_INFERENCE_PROCESS=true
 ```
+
+이 장비의 목표는 매초 최소 1회 새 추론을 완료하는 것이다. 2Hz는 마감 여유를
+두기 위한 요청 주기이며 실제 달성률은 완료 간격으로 확인한다. 단순히 요청
+주기를 1Hz로 두면 처리 지연이 더해져 기존 1초 촬영 나이 제한 사이에 정지
+구간이 생길 수 있다. 영상/센서 만료 한계는 늘리지 않는다.
+
+`SWIN_L_TELEMETRY_HZ`는 Path·metrics에만 적용한다(0이면 기존 매 timer 발행).
+상태 직렬화·Pose 생성·GPU 메모리 조회는 5Hz로 줄이고, 이동 명령과 모든 정지
+검사는 20Hz로 계속 실행한다. `control_loop.observed_hz`와 `gap_max_sec`로 실제
+제어 간격을 확인한다. OpenCV 형태학 처리의 CPU pool도 2개 스레드로 제한한다.
+
+`SWIN_L_INFERENCE_PROCESS=true`는 R50·HTTP·현재 마스크 재검증을 spawn 자식
+프로세스에서 실행한다. 부모는 최신 프레임 하나만 보내고 응답의 generation/sequence를
+검사한 뒤 기존 task/epoch/source-age 검사를 적용한다. 자식은 ROS/이동 발행자를
+만들지 않는다. CUDA graph warmup은 ready 이전에 수행하고 모델의 시간 이력은
+초기화한다. 자식 오류·종료·응답 마감 실패는 추론 오류이며 fallback하지 않는다.
+부모의 센서 수신/20Hz 정지 검사는 계산 응답을 기다리지 않는다.
 
 기본 Compose의 `actual-activate`는 task-drive다. 검사 용도로 만든 로컬 override의
 `SWIN_L_MODE=ros2` 또는 disabled Sport 토픽이 남아 있으면 주행하지 않는다.

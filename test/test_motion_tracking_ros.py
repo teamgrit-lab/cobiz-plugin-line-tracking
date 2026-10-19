@@ -142,3 +142,34 @@ def test_slow_telemetry_never_throttles_motion_updates_or_sensor_stops(monkeypat
         node.release_task_control('cancel')
         assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
     ros.run(scenario,*args(),'--telemetry-hz','1')
+
+
+def test_process_results_keep_parent_motion_and_cancellation_gates(monkeypatch):
+    ros=setup(monkeypatch);closed=[]
+    monkeypatch.setattr(debug,'_connectome_client_from_args',lambda *_:NS(
+        url='http://127.0.0.1:8091/v1/plan',config=debug.PlannerConfig(),timeout=.8,
+        metrics={'ready':False}))
+    class Process:
+        device=NS(type='cuda');cuda_memory={}
+        def __init__(self,*_):pass
+        def reset(self):pass
+        def close(self):closed.append(True)
+        def infer(self,rgb,stamp,generation,sequence):
+            p=np.array([[3.,0.],[8.,0.]])
+            estimate=LocalPathEstimate(p,.9,1.,3.,p)
+            return {'result':NS(selected_mask=np.ones((360,640),np.uint8),inference_seconds=.01),
+                'estimates':{m:estimate for m in (0,1,2)},'planner':{'ready':True,'union_surface':1},
+                'segmentation_finished_at':debug.time.monotonic()}
+    monkeypatch.setattr(debug,'PerceptionProcess',Process)
+    def scenario(node):
+        ros.start()
+        for t in np.arange(1.5,2.101,.05):sensors(node,ros,float(t))
+        result=complete_inference(node,ros)
+        assert result['pipeline_timing']['inference_process']
+        assert json.loads(ros.published[SPORT][-1].parameter)['x']>0
+        ros.now=2.4;node.publish_state()
+        assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
+        node.release_task_control('cancel')
+        assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
+    ros.run(scenario,*args(),'--inference-process')
+    assert closed

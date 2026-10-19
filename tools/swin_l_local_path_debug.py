@@ -94,6 +94,7 @@ from local_path import (
     selected_path_region,
 )
 from motion_tracking import MotionBuffer, MotionConfig, CommandLimiter, follow_path
+from perception_process import PerceptionProcess
 from r50_checkpoint import validate_checkpoint
 from swin_l_drive_control import (
     DRIVE_STOP_CHECKS,
@@ -856,8 +857,12 @@ def run_ros2(args: argparse.Namespace) -> int:
     # Morphology must not create an all-core OpenCV pool alongside the ROS
     # sensor executor and CUDA worker. Match the existing CPU thread budget.
     cv2.setNumThreads(2)
-    segmenter = BestSoFarSegmenter(_runtime_config(args))
+    segmenter = (PerceptionProcess(_runtime_config(args), {
+        'url': planner.url, 'local_config': local_config,
+        'planner_config': planner.config, 'timeout': planner.timeout})
+        if args.inference_process else BestSoFarSegmenter(_runtime_config(args)))
     if task_mode and segmenter.device.type != "cuda":
+        if args.inference_process: segmenter.close()
         raise RuntimeError("task-drive mode requires a CUDA model device")
     smoothers = {
         mask_class: (ConnectomePathTracker(args.connectome_max_age_sec) if planner else LocalPathSmoother(local_config))
@@ -1727,7 +1732,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "task_active": self.tasks.active is not None if self.tasks else None,
                 "performance": performance,
                 "pipeline_timing": dict(state['pipeline_timing']),
-                "cuda_memory": cuda_memory_metrics(segmenter.device),
+                "cuda_memory": (dict(segmenter.cuda_memory) if args.inference_process
+                                else cuda_memory_metrics(segmenter.device)),
             }
             if tag_status is not None:
                 metrics["apriltag"] = {
@@ -1809,7 +1815,12 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.path_publisher.publish(path_message)
 
     rclpy.init(args=[])
-    node = DebugNode()
+    try:
+        node = DebugNode()
+    except BaseException:
+        if args.inference_process: segmenter.close()
+        if rclpy.ok(): rclpy.shutdown()
+        raise
     previous_sigterm = signal.getsignal(signal.SIGTERM)
 
     def stop_on_sigterm(_signum: int, _frame: Any) -> None:
@@ -1854,15 +1865,25 @@ def run_ros2(args: argparse.Namespace) -> int:
                 kwargs = {"color_order": "rgb"}
                 if planner:
                     kwargs['detect_road_hazards'] = True
-                result: BestSoFarResult = segmenter.segment(frame_rgb, **kwargs)
-                segmentation_finished_at = time.monotonic()
+                if args.inference_process:
+                    response = segmenter.infer(frame_rgb, _stamp_ns(packet.source_header)/1e9,
+                                               packet.generation, packet.sequence)
+                    result = response['result']
+                    segmentation_finished_at = response['segmentation_finished_at']
+                    estimates = response['estimates']
+                    planner.metrics = response['planner']
+                else:
+                    result = segmenter.segment(frame_rgb, **kwargs)
+                    segmentation_finished_at = time.monotonic()
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
                 # The path becomes usable when this result is available. Using
                 # the camera-arrival timestamp here can expire a path before it
                 # is ever published when inference or rate limiting is slow.
-                if planner:
+                if args.inference_process:
+                    pass  # Same client/mask validation ran with R50 in the child.
+                elif planner:
                     estimates = planner.plan(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR),
                         result.selected_mask, getattr(result, 'road_hazard_mask', np.zeros_like(result.selected_mask)),
                         _stamp_ns(packet.source_header)/1e9, packet.generation, packet.sequence)
@@ -1914,6 +1935,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         'source_age_at_completion_sec': ((node.get_clock().now().nanoseconds-
                             _stamp_ns(packet.source_header))/1e9 if planner else None),
                         'cuda_graph': args.cuda_graph,
+                        'inference_process': args.inference_process,
                     }
                     completed_before = int(state["inference_count"])
                     state["inference_count"] += 1
@@ -1956,6 +1978,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 node.get_logger().error(f"shutdown stop publish failed: {error}")
         latest.close()
         thread.join(timeout=5.0)
+        if args.inference_process:
+            segmenter.close()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
@@ -2018,6 +2042,8 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
                         default=_env_bool('SWIN_L_CUDA_GRAPH', False))
     parser.add_argument('--telemetry-hz', type=float, default=_env_float('SWIN_L_TELEMETRY_HZ', 0.),
                         help='Path/metrics publication rate; 0 follows the command timer')
+    parser.add_argument('--inference-process', action=argparse.BooleanOptionalAction,
+                        default=_env_bool('SWIN_L_INFERENCE_PROCESS', False))
     parser.add_argument(
         "--backend",
         choices=INFERENCE_BACKENDS,
@@ -2319,6 +2345,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if not math.isfinite(args.telemetry_hz) or not 0 <= args.telemetry_hz <= 50:
         parser.error('telemetry rate must be finite and 0..50 Hz')
+    if args.inference_process and (args.path_planner != 'connectome' or args.mode == 'mcap'):
+        parser.error('inference process requires live ros2/task-drive with connectome')
     try:
         _motion_config_from_args(args).validate()
         parse_transform(args.motion_base_from_child_transform)

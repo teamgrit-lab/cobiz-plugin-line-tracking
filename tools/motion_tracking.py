@@ -94,6 +94,7 @@ class MotionBuffer:
         self.lock = threading.RLock()
         self.odom, self.imu = deque(maxlen=8192), deque(maxlen=8192)
         self.epoch = 0
+        self.fault_counts = {}
         self.faults = {'odom': 'motion_waiting_for_odom', 'imu': 'motion_waiting_for_imu'}
         self.metrics = {'ready': False, 'reason': 'motion_waiting_for_odom'}
 
@@ -118,6 +119,8 @@ class MotionBuffer:
         if self.faults[name] is None:
             # Invalidate camera packets already queued before the discontinuity.
             self.epoch += 1
+        if self.faults[name] != reason:
+            self.fault_counts[reason] = self.fault_counts.get(reason, 0)+1
         self.faults[name] = reason
         (self.odom if name == 'odom' else self.imu).clear()
 
@@ -179,13 +182,16 @@ class MotionBuffer:
                 if message.header.frame_id != c.imu_frame:
                     raise ValueError('motion_imu_frame_mismatch')
                 t = self._time(message, arrival, clock_ns, 'imu')
-                matrix = self._transform('imu', message.header.frame_id, message.header)
                 if message.angular_velocity_covariance[0] == -1:
                     raise ValueError('motion_gyro_unavailable')
                 w = message.angular_velocity
-                gyro = matrix[:3, :3] @ [w.x, w.y, w.z]
-                if not np.isfinite(gyro).all() or np.linalg.norm(gyro) > c.max_odom_yaw_rps:
+                values = (w.x, w.y, w.z)
+                if not all(math.isfinite(v) for v in values) or math.sqrt(sum(v*v for v in values)) > c.max_odom_yaw_rps:
                     raise ValueError('motion_gyro_invalid')
+                if self.imu and t-self.imu[-1][0] < .01:
+                    return
+                matrix = self._transform('imu', message.header.frame_id, message.header)
+                gyro = matrix[:3, :3] @ values
                 self.imu.append((t, arrival, float(gyro[2])))
                 while self.imu[0][0] < t-c.history_sec: self.imu.popleft()
                 self.faults['imu'] = None
@@ -201,6 +207,19 @@ class MotionBuffer:
             if not (0 <= now-arrival <= self.config.sensor_max_age_sec
                     and -.02 <= clock_ns/1e9-stamp <= self.config.sensor_max_age_sec):
                 raise ValueError('motion_'+name+'_stale')
+
+    def snapshot(self, now, clock_ns):
+        with self.lock:
+            try:
+                self._fresh(now, clock_ns)
+                reason = 'ok'
+            except ValueError as error:
+                reason = str(error)
+            return {**self.metrics, 'sensor_reason': reason, 'epoch': self.epoch,
+                    'fault_counts': dict(self.fault_counts),
+                    'odom_samples': len(self.odom), 'imu_samples': len(self.imu),
+                    'latest_odom_stamp_sec': self.odom[-1].stamp if self.odom else None,
+                    'latest_imu_stamp_sec': self.imu[-1][0] if self.imu else None}
 
     def _pose_at(self, stamp):
         rows = self.odom

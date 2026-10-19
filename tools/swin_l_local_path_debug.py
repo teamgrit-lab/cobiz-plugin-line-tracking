@@ -1006,7 +1006,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if self.motion:
                 from nav_msgs.msg import Odometry
                 from sensor_msgs.msg import Imu
-                sensor_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=5,
+                sensor_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
                                         reliability=ReliabilityPolicy.BEST_EFFORT)
                 self.motion_odom_subscription = self.create_subscription(
                     Odometry, args.motion_odom_topic, self.on_motion_odom, sensor_qos)
@@ -1673,7 +1673,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 tag_status = self.terminal_apriltag_status
             metrics = {
                 "motion_tracking": {"enabled": bool(self.motion), "control_hz": self.control_hz,
-                    **(self.motion.metrics if self.motion else {}),
+                    **(self.motion.snapshot(now, self.get_clock().now().nanoseconds) if self.motion else {}),
                     "source_stamp_sec": _stamp_ns(header)/1e9 if header is not None else None,
                     "command": asdict(self.motion_limiter.last) if self.motion_limiter else None,
                     "preview_command": self.motion_preview},

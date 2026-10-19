@@ -131,6 +131,7 @@ def test_http_transmits_original_image_and_labels_then_revalidates_and_resets(en
     # A same-frame replay cannot advance the neural state or refresh a path.
     assert all(v is None for v in invoke(client).values())
     assert not client.metrics['ready']
+    assert 'duplicate/backwards camera stamp' in client.metrics['detail']
     assert len(service.encoder.frames) == 1
     assert invoke(client, strip(surface=2), generation=1)[0] is not None
     assert client.union_surface == 2 and service.encoder.resets == 2

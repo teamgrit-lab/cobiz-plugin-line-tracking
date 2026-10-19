@@ -4,6 +4,7 @@ import json
 import math
 import time
 import urllib.request
+import urllib.error
 import uuid
 
 import cv2
@@ -96,8 +97,16 @@ class ConnectomeClient:
                             'roundtrip_ms': (time.monotonic()-started)*1000}
             return estimates
         except Exception as error:
+            detail = f'{type(error).__name__}: {error}'
+            if isinstance(error, urllib.error.HTTPError):
+                try:
+                    detail += ': '+error.read(512).decode('utf-8', errors='replace')
+                except Exception:
+                    pass
+                finally:
+                    error.close()
             self.metrics = {'backend': 'connectome', 'ready': False, 'reason': 'connectome_unavailable',
-                            'detail': f'{type(error).__name__}: {error}'[:300],
+                            'detail': detail[:300],
                             'roundtrip_ms': (time.monotonic()-started)*1000}
             return {mode: None for mode in (0, 1, 2)}
 

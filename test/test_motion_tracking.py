@@ -206,3 +206,14 @@ def test_lidar_and_camera_support_use_inverse_matching_motion_transforms(monkeyp
     runtime._context(1,100.1,100_100_000_000)
     np.testing.assert_allclose(matrices[-1],fixed@delta,atol=1e-8) # Never compound transforms.
     np.testing.assert_allclose(runtime.camera,fixed)
+
+
+def test_sensor_fault_is_visible_when_no_camera_path_exists():
+    b=buffer()
+    b.path(None,0,0,100.,100_000_000_000)
+    assert b.snapshot(100.,100_000_000_000)['sensor_reason']=='motion_waiting_for_odom'
+    feed(b,100.);feed(b,100.3)
+    s=b.snapshot(100.3,100_300_000_000)
+    assert s['sensor_reason']=='motion_odom_discontinuity'
+    assert s['fault_counts']['motion_odom_discontinuity']==1
+    assert s['odom_samples']==0

@@ -212,8 +212,21 @@ def test_sensor_fault_is_visible_when_no_camera_path_exists():
     b=buffer()
     b.path(None,0,0,100.,100_000_000_000)
     assert b.snapshot(100.,100_000_000_000)['sensor_reason']=='motion_waiting_for_odom'
-    feed(b,100.);feed(b,100.3)
-    s=b.snapshot(100.3,100_300_000_000)
+    feed(b,100.);b.on_odom(odom(99.99),100.01,100_010_000_000)
+    s=b.snapshot(100.01,100_010_000_000)
     assert s['sensor_reason']=='motion_odom_discontinuity'
     assert s['fault_counts']['motion_odom_discontinuity']==1
     assert s['odom_samples']==0
+
+
+def test_gap_recovery_uses_measured_endpoints_but_never_interpolates_missing_interval():
+    b=buffer();feed(b,100.);feed(b,100.05,x=.01)
+    _,reason=b.path(path(),100_000_000_000,0,100.3,100_300_000_000)
+    assert reason=='motion_odom_stale'
+    feed(b,100.4,x=.08)
+    assert b.epoch==0
+    moved,reason=b.path(path(),100_000_000_000,0,100.4,100_400_000_000)
+    assert reason is None and moved.points_xy[0,0]==pytest.approx(2.92)
+    _,reason=b.path(path(),100_200_000_000,0,100.4,100_400_000_000)
+    assert reason=='motion_history_gap'
+    assert b.snapshot(100.4,100_400_000_000)['gap_counts']=={'odom':1,'imu':1}

@@ -95,6 +95,8 @@ class MotionBuffer:
         self.odom, self.imu = deque(maxlen=8192), deque(maxlen=8192)
         self.epoch = 0
         self.fault_counts = {}
+        self.gap_counts = {'odom': 0, 'imu': 0}
+        self.last_seen = {'odom': None, 'imu': None}
         self.faults = {'odom': 'motion_waiting_for_odom', 'imu': 'motion_waiting_for_imu'}
         self.metrics = {'ready': False, 'reason': 'motion_waiting_for_odom'}
 
@@ -123,16 +125,22 @@ class MotionBuffer:
             self.fault_counts[reason] = self.fault_counts.get(reason, 0)+1
         self.faults[name] = reason
         (self.odom if name == 'odom' else self.imu).clear()
+        self.last_seen[name] = None
 
     def _time(self, message, arrival, clock_ns, name):
         t = stamp_ns(message.header)/1e9
         if t <= 0 or not -.02 <= clock_ns/1e9-t <= self.config.sensor_max_age_sec:
             raise ValueError('motion_'+name+'_timestamp_invalid')
-        queue = self.odom if name == 'odom' else self.imu
-        if queue:
-            previous = queue[-1].stamp if name == 'odom' else queue[-1][0]
-            if not 0 < t-previous <= self.config.max_sample_gap_sec:
+        previous = self.last_seen[name]
+        if previous is not None:
+            if t <= previous:
                 raise ValueError('motion_'+name+'_discontinuity')
+            if t-previous > self.config.max_sample_gap_sec:
+                self.gap_counts[name] += 1
+        self.last_seen[name] = t
+        # A dropped interval does not reset the odom frame. Fresh measured
+        # endpoints remain usable; _pose_at still forbids interpolation INTO
+        # the missing interval, and _fresh forbids driving during the outage.
         return t
 
     def on_odom(self, message, arrival, clock_ns):
@@ -217,6 +225,7 @@ class MotionBuffer:
                 reason = str(error)
             return {**self.metrics, 'sensor_reason': reason, 'epoch': self.epoch,
                     'fault_counts': dict(self.fault_counts),
+                    'gap_counts': dict(self.gap_counts),
                     'odom_samples': len(self.odom), 'imu_samples': len(self.imu),
                     'latest_odom_stamp_sec': self.odom[-1].stamp if self.odom else None,
                     'latest_imu_stamp_sec': self.imu[-1][0] if self.imu else None}

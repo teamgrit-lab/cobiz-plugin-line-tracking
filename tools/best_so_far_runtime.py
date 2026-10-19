@@ -271,6 +271,7 @@ class BestSoFarResult:
     hysteresis_hold_ratio: float
     road_area_ratio: float
     sidewalk_area_ratio: float
+    road_hazard_mask: np.ndarray | None = None
 
 
 def _changed_pixel_hysteresis_hold_mask(
@@ -417,6 +418,7 @@ class BestSoFarSegmenter:
             self.minimum_sidewalk_ring_ratio = 0.0
         self.road_ids = resolve_ids(id2label, self.road_labels)
         self.sidewalk_ids = resolve_ids(id2label, self.sidewalk_labels)
+        self.road_hazard_ids = tuple(int(k) for k, v in id2label.items() if str(v).casefold() in ('vegetation', 'curb'))
         self.pedestrian_area_id = resolve_ids(id2label, ("Pedestrian Area",))[0]
         self.model_load_seconds = time.perf_counter() - load_started
         self._previous_scores: torch.Tensor | None = None
@@ -668,7 +670,7 @@ class BestSoFarSegmenter:
 
     @torch.inference_mode()
     def segment(
-        self, frame: np.ndarray, *, color_order: str = "bgr"
+        self, frame: np.ndarray, *, color_order: str = "bgr", detect_road_hazards: bool = False
     ) -> BestSoFarResult:
         """Segment a BGR image, or native RGB from the live camera worker."""
 
@@ -684,6 +686,14 @@ class BestSoFarSegmenter:
         scores = self._semantic_scores(frame, color_order=color_order)
         self._synchronize()
         inference_finished = time.perf_counter()
+        hazard = None
+        if detect_road_hazards:
+            # Current logits, before temporal EMA: new grass/curb evidence wins.
+            labels = scores.argmax(dim=0)
+            hazard_tensor = torch.zeros_like(labels, dtype=torch.bool)
+            for label in self.road_hazard_ids:
+                hazard_tensor |= labels == label
+            hazard = hazard_tensor.detach().cpu().numpy()
 
         if self._previous_scores is None:
             # TensorRT owns and reuses its output allocation. Keep temporal
@@ -715,6 +725,7 @@ class BestSoFarSegmenter:
         finished = time.perf_counter()
         return BestSoFarResult(
             selected_mask=selected,
+            road_hazard_mask=hazard,
             inference_seconds=inference_finished - total_started,
             postprocess_seconds=finished - inference_finished,
             total_seconds=finished - total_started,

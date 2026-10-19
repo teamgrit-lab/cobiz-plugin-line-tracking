@@ -17,6 +17,7 @@ models/*.onnx
 models/*.engine
 models/*.plan
 models/*.pth
+models/*.pt
 models/*.plan.json
 models/swin-l-checkpoint/
 models/r50-surface-*/

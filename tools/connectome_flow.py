@@ -41,8 +41,15 @@ class FlyvisCudaStep:
         with torch.inference_mode(), torch.cuda.stream(stream):
             for _ in range(3): step()
         torch.cuda.current_stream().wait_stream(stream)
-        self.graph = torch.cuda.CUDAGraph()
-        with torch.inference_mode(), torch.cuda.graph(self.graph): step()
+        self.graphs = {}
+        # Batch native recurrent steps into one launch without skipping steps
+        # or changing dt. This also avoids CPU scheduling gaps between dozens
+        # of tiny graph submissions on the shared Jetson.
+        for count in (1, 4, 16):
+            graph = torch.cuda.CUDAGraph()
+            with torch.inference_mode(), torch.cuda.graph(graph):
+                for _ in range(count): step()
+            self.graphs[count] = graph
         self.activity.copy_(encoder.grey.nodes.activity)
 
     def advance(self, encoder, receptors, previous, steps, dt):
@@ -54,7 +61,9 @@ class FlyvisCudaStep:
             encoder.network.stimulus.zero(1, 1)
             encoder.network.stimulus.add_input(values)
             self.stimulus.copy_(encoder.network.stimulus()[:, 0])
-            for _ in range(count): self.graph.replay()
+            for batch in (16, 4, 1):
+                launches, count = divmod(count, batch)
+                for _ in range(launches): self.graphs[batch].replay()
         # DecoderGAVP uses a host-side channel index in Flyvis 1.2.0, so it
         # remains native eager CUDA. Only the repeated circuit step is captured.
         return encoder.decoder(self.activity[:, None, :])[0, 0].cpu().numpy().copy()

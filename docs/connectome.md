@@ -104,6 +104,12 @@ SWIN_L_INFERENCE_PROCESS=true
 초기화한다. 자식 오류·종료·응답 마감 실패는 추론 오류이며 fallback하지 않는다.
 부모의 센서 수신/20Hz 정지 검사는 계산 응답을 기다리지 않는다.
 
+`camera_input`은 기존 카메라 구독에서 수신 개수·최대 수신 공백·1초 초과 공백을
+기록한다. 성능 수집기가 원격 raw 영상에 별도 구독자를 추가하면 DDS 송신량을
+늘릴 수 있으므로, 실제 주행 부하 측정은 이 상태 정보를 사용한다. AprilTag를 보류한
+이 장비의 검사/주행 프로필은 `SWIN_L_APRILTAG_DETECTOR_ENABLED=false`로 불필요한
+원격 영상 중복 수신을 줄인다. AprilTag 기능을 쓸 때에는 검출기를 다시 활성화한다.
+
 기본 Compose의 `actual-activate`는 task-drive다. 검사 용도로 만든 로컬 override의
 `SWIN_L_MODE=ros2` 또는 disabled Sport 토픽이 남아 있으면 주행하지 않는다.
 주행 배포는 task-drive와 `/api/sport/request`를 사용하며, 기존 작업 수락 후에만

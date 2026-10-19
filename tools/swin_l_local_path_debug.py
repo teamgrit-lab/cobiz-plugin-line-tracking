@@ -882,6 +882,9 @@ def run_ros2(args: argparse.Namespace) -> int:
         "performance_processing_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_completion_times": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "last_image_at": None,
+        "camera_received": 0,
+        "camera_gap_max_sec": 0.,
+        "camera_gaps_over_sec": 0,
         "camera_fault_reason": None,
         "camera_fault_min_sequence": 0,
         "last_inference_at": None,
@@ -1525,8 +1528,14 @@ def run_ros2(args: argparse.Namespace) -> int:
                         )
                     )
                     if accepted:
+                        arrival = time.monotonic()
+                        if state['last_image_at'] is not None:
+                            gap = arrival-state['last_image_at']
+                            state['camera_gap_max_sec'] = max(state['camera_gap_max_sec'], gap)
+                            state['camera_gaps_over_sec'] += int(gap > 1.)
+                        state['camera_received'] += 1
                         state["sequence"] += 1
-                        state["last_image_at"] = time.monotonic()
+                        state["last_image_at"] = arrival
                         if task_mode:
                             state["last_image_stamp_ns"] = source_stamp_ns
             except Exception as error:  # noqa: BLE001 - safe debug boundary.
@@ -1594,9 +1603,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 tag_status = self.apriltags.snapshot(now=now)
             task_active = self.tasks.active if self.tasks is not None else None
             mask_class = active_path_mask_class(task_active, args.path_mask_class)
-            with state_lock:
-                header = state["header"]
-                inference_count = int(state["inference_count"])
             drive_decision = None
             if self.drive_config is not None:
                 path, ready_decision = self.drive_readiness(mask_class, now)
@@ -1687,6 +1693,15 @@ def run_ros2(args: argparse.Namespace) -> int:
             if args.telemetry_hz > 0:
                 self.next_telemetry_at = now+1/args.telemetry_hz
             with state_lock:
+                header = state['header']
+                inference_count = int(state['inference_count'])
+                pipeline_timing = dict(state['pipeline_timing'])
+                planner_status = dict(state['planner_status'])
+                camera_at = state['last_image_at']
+                camera_input = {'received': state['camera_received'],
+                    'arrival_age_sec': max(0., now-camera_at) if camera_at is not None else None,
+                    'gap_max_sec': state['camera_gap_max_sec'],
+                    'gaps_over_1_sec': state['camera_gaps_over_sec']}
                 performance = summarize_performance(
                     list(state["performance_inference_seconds"]),
                     list(state["performance_processing_seconds"]),
@@ -1694,6 +1709,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 )
             periods = np.diff(self.control_times)
             metrics = {
+                'camera_input': camera_input,
                 'control_loop': {'target_hz': self.control_hz,
                     'observed_hz': float(1/np.mean(periods)) if len(periods) and np.mean(periods) > 0 else None,
                     'gap_max_sec': float(np.max(periods)) if len(periods) else None,
@@ -1703,7 +1719,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "source_stamp_sec": _stamp_ns(header)/1e9 if header is not None else None,
                     "command": asdict(self.motion_limiter.last) if self.motion_limiter else None,
                     "preview_command": self.motion_preview},
-                "path_planner": dict(state['planner_status']),
+                "path_planner": planner_status,
                 "lidar_obstacles": {"enabled": args.avoidance_enabled,
                     "topic": args.lidar_topic, "expected_hz": 10,
                     "control_hz": args.avoidance_control_hz,
@@ -1731,7 +1747,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "ready_reason": self.last_ready_reason if task_mode else None,
                 "task_active": self.tasks.active is not None if self.tasks else None,
                 "performance": performance,
-                "pipeline_timing": dict(state['pipeline_timing']),
+                "pipeline_timing": pipeline_timing,
                 "cuda_memory": (dict(segmenter.cuda_memory) if args.inference_process
                                 else cuda_memory_metrics(segmenter.device)),
             }

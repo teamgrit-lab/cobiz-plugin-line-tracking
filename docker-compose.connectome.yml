@@ -2,6 +2,7 @@
 # up -d --build connectome-planner actual-activate
 services:
   connectome-planner:
+    cpu_shares: ${CONNECTOME_CPU_SHARES:-1024}
     build:
       context: .
       dockerfile: Dockerfile.connectome

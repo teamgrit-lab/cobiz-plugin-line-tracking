@@ -104,6 +104,13 @@ SWIN_L_INFERENCE_PROCESS=true
 초기화한다. 자식 오류·종료·응답 마감 실패는 추론 오류이며 fallback하지 않는다.
 부모의 센서 수신/20Hz 정지 검사는 계산 응답을 기다리지 않는다.
 
+당진 A2에서는 8개 코어의 load average가 35 이상이고, 평균 처리보다 간헐적인
+CPU 대기 지연이 컸다. `LINE_TRACKING_CPU_SHARES=2048`,
+`CONNECTOME_CPU_SHARES=2048`로 두 컨테이너의 CPU 경쟁 가중치를 기본 1024의
+두 배로 설정할 수 있다. [Docker의 CPU shares](https://docs.docker.com/engine/containers/resource_constraints/#cpu)
+는 경쟁 시 상대 가중치이며 코어 예약이나 실시간 마감 보장은 아니다. 다른
+서비스를 종료하거나 CPU 개수를 제한하지 않는다. 기본 Compose 값은 1024다.
+
 `camera_input`은 기존 카메라 구독에서 수신 개수·최대 수신 공백·1초 초과 공백을
 기록한다. 성능 수집기가 원격 raw 영상에 별도 구독자를 추가하면 DDS 송신량을
 늘릴 수 있으므로, 실제 주행 부하 측정은 이 상태 정보를 사용한다. AprilTag 검출기는

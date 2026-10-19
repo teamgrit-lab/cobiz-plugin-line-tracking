@@ -138,6 +138,7 @@ services:
   # Swin-L or R50 task-driving mode. It listens for Cobiz custom actions and creates
   # direct Sport requests only for an accepted LINE_TRACKING task.
   actual-activate:
+    cpu_shares: ${LINE_TRACKING_CPU_SHARES:-1024}
     build: *swin-l-build
     image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
     container_name: cobiz-plugin-line-tracking-actual-activate

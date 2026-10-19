@@ -41,6 +41,12 @@ line-tracking 현재 마스크 재검사 → Path → 기존 추종·LiDAR·작�
 `metrics.path_planner`에는 준비 상태·거부 이유·왕복 지연·선택 표면, 실제 bundle
 SHA-256·회로 크기·추론 프레임 수와 `trained_waypoint_head=false`가 표시된다.
 
+## Odom/IMU 명령 세분화
+
+`LINE_TRACKING_MOTION_ENABLED=true`로 촬영 시각부터 현재까지의 이동·회전을 보정하고
+20Hz로 명령을 갱신할 수 있다. 입력은 `/dog_odom`, `/dog_imu_raw`이며, frame 변환이
+없거나 센서가 만료되면 정지한다. 설정·검증은 [motion-tracking.md](motion-tracking.md)를 참고한다.
+
 ## 모델과 실행
 
 기존 `fly_connectom`의 검증된 `flyvis_encoder.pt`를 사용할 수 있다. 모델 바이너리는

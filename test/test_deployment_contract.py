@@ -143,7 +143,12 @@ def test_livox_obstacle_inputs_and_limits_reach_both_live_services():
         assert env["LIDAR_OBSTACLE_MAX_HEIGHT_M"].endswith(":-0.2}")
         assert env["LIDAR_OBSTACLE_HORIZONTAL_RANGE_M"].endswith(":-1.5}")
         assert env["LIDAR_OBSTACLE_FOV_DEG"].endswith(":-190.0}")
-        assert not any("ODOM" in key or "CORRIDOR_MEMORY" in key for key in env)
+        assert env['LINE_TRACKING_MOTION_ENABLED'].endswith(':-false}')
+        assert env['LINE_TRACKING_MOTION_ODOM_TOPIC'].endswith(':-/dog_odom}')
+        assert env['LINE_TRACKING_MOTION_IMU_TOPIC'].endswith(':-/dog_imu_raw}')
+        assert env['LINE_TRACKING_MOTION_BASE_FROM_CHILD_TRANSFORM'].endswith(':-}')
+        assert not any(("ODOM" in key and not key.startswith('LINE_TRACKING_MOTION_'))
+                       or "CORRIDOR_MEMORY" in key for key in env)
     assert "ros-humble-tf2-ros" in (ROOT / "Dockerfile.swin-l-debug").read_text()
 
 

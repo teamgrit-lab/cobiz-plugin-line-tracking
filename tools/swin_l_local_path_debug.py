@@ -93,6 +93,7 @@ from local_path import (
     pixel_to_ground_homography,
     selected_path_region,
 )
+from motion_tracking import MotionBuffer, MotionConfig, CommandLimiter, follow_path
 from r50_checkpoint import validate_checkpoint
 from swin_l_drive_control import (
     DRIVE_STOP_CHECKS,
@@ -279,6 +280,14 @@ def _avoidance_config_from_args(args):
                               for name in AvoidanceConfig.__dataclass_fields__})
 
 
+def _motion_config_from_args(args):
+    values = {name: getattr(args, 'motion_'+name)
+              for name in MotionConfig.__dataclass_fields__ if name != 'base_frame'}
+    values['base_frame'] = args.path_frame_id
+    values['max_reference_age_sec'] = min(values['max_reference_age_sec'], args.connectome_max_age_sec)
+    return MotionConfig(**values)
+
+
 def _camera_info_topic(image_topic: str) -> str:
     return image_topic.rsplit("/", 1)[0] + "/camera_info"
 
@@ -391,6 +400,7 @@ class FramePacket:
     sequence: int
     source_header: Any = None
     generation: int = 0
+    motion_epoch: int | None = None
 
 
 def validate_camera_image(message: Any, bridge: Any) -> None:
@@ -745,12 +755,12 @@ def _effective_source_age_sec(
     )
 
 
-def _path_message(path: SmoothedPath | None, header: Any, frame_id: str) -> Any:
+def _path_message(path: SmoothedPath | None, header: Any, frame_id: str, *, stamp=None) -> Any:
     from geometry_msgs.msg import PoseStamped
     from nav_msgs.msg import Path
 
     message = Path()
-    message.header.stamp = header.stamp
+    message.header.stamp = stamp if stamp is not None else header.stamp
     message.header.frame_id = frame_id
     if path is None:
         return message
@@ -870,6 +880,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         "last_inference_stamp_ns": None,
         "planner_status": {"backend": "connectome", "ready": False, "reason": "connectome_waiting"}
                           if planner else {"backend": "local"},
+        "motion_epoch": None,
     }
     worker_error: list[BaseException] = []
 
@@ -890,9 +901,11 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.base_from_lidar = parse_transform(args.lidar_to_base_transform)
             self.camera_from_base = parse_transform(args.base_to_camera_transform)
             self.tf_buffer = self.tf_listener = None
-            if args.avoidance_enabled and args.lidar_calibration_profile == "tf" and (
+            need_motion_tf = args.motion_enabled and (
+                not args.motion_base_from_child_transform or not args.motion_base_from_imu_transform)
+            if need_motion_tf or (args.avoidance_enabled and args.lidar_calibration_profile == "tf" and (
                 self.base_from_lidar is None or self.camera_from_base is None
-            ):
+            )):
                 from tf2_ros import Buffer, TransformListener
 
                 self.tf_buffer = Buffer()
@@ -905,8 +918,14 @@ def run_ros2(args: argparse.Namespace) -> int:
                         target, source, Time.from_msg(header.stamp)).transform)
                 except Exception as error:
                     raise ValueError("lidar_transform_unavailable") from error
+            self.motion = MotionBuffer(_motion_config_from_args(args),
+                parse_transform(args.motion_base_from_child_transform),
+                parse_transform(args.motion_base_from_imu_transform), lookup) if args.motion_enabled else None
+            self.motion_limiter = CommandLimiter(self.motion.config) if self.motion else None
+            self.motion_preview = None
             self.obstacles = LidarRuntime(args, _lidar_config_from_args(args),
-                _avoidance_config_from_args(args), lookup, self.drive_config or DriveConfig()) if args.avoidance_enabled else None
+                _avoidance_config_from_args(args), lookup, self.drive_config or DriveConfig(),
+                motion=self.motion) if args.avoidance_enabled else None
             self.path_search = (
                 PathLossRecovery(self.drive_config, output_hz=args.output_hz)
                 if task_mode else None
@@ -984,6 +1003,15 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.image_subscription = self.create_subscription(
                 Image, args.image_topic, self.on_image, input_qos
             )
+            if self.motion:
+                from nav_msgs.msg import Odometry
+                from sensor_msgs.msg import Imu
+                sensor_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=5,
+                                        reliability=ReliabilityPolicy.BEST_EFFORT)
+                self.motion_odom_subscription = self.create_subscription(
+                    Odometry, args.motion_odom_topic, self.on_motion_odom, sensor_qos)
+                self.motion_imu_subscription = self.create_subscription(
+                    Imu, args.motion_imu_topic, self.on_motion_imu, sensor_qos)
             if args.avoidance_enabled:
                 from sensor_msgs.msg import CameraInfo, Imu, PointCloud2
 
@@ -1049,6 +1077,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                         ),
                     )
             control_hz = args.avoidance_control_hz if args.avoidance_enabled else args.output_hz
+            if self.motion:
+                control_hz = max(control_hz, self.motion.config.control_hz)
+            self.control_hz = control_hz
             self.timer = self.create_timer(1.0 / control_hz, self.publish_state)
             self.started = time.monotonic()
             self.get_logger().info(
@@ -1192,6 +1223,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 }
                 state["path_recovery_inferences"] = {key: 0 for key in smoothers}
                 state["semantic_path_missing"] = {key: False for key in smoothers}
+                state['motion_epoch'] = None
                 for key in (
                     "performance_inference_seconds", "performance_processing_seconds",
                     "performance_completion_times",
@@ -1205,6 +1237,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.path_recovery_inferences = 0
             if self.path_search is not None:
                 self.path_search.reset()
+            if self.motion_limiter:
+                self.motion_limiter.reset()
 
         def release_task_control(self, reason: str) -> None:
             self.set_task_inference(False)
@@ -1264,6 +1298,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                     (camera_age_sec, inference_age_sec), args.connectome_max_age_sec)
                 if reason:
                     self.last_valid_forward_mps = self.last_valid_yaw_rate = None
+                    if self.motion:
+                        self.motion.metrics.update(ready=False, reason=reason)
+                    return None, DriveDecision.stop(reason)
+            if self.motion:
+                path, reason = self.motion_path(mask_class, now, clock_now_ns)
+                if reason:
                     return None, DriveDecision.stop(reason)
             decision = decide_drive(
                 path,
@@ -1275,6 +1315,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path_unavailable_inferences=self.path_unavailable_inferences,
                 path_recovery_inferences=self.path_recovery_inferences if recovering else None,
             )
+            if self.motion:
+                decision = follow_path(path, decision, self.drive_config)
             if self.obstacles is not None:
                 surface_class = (planner_status.get('union_surface', mask_class)
                                  if planner and mask_class == 0 else mask_class)
@@ -1405,6 +1447,15 @@ def run_ros2(args: argparse.Namespace) -> int:
                         current, state['planner_status'].get('ready'), ages, args.connectome_max_age_sec)
                 if reason:
                     decision = DriveDecision.stop(reason)
+            if self.motion:
+                now = time.monotonic()
+                if decision.vx or decision.vy or decision.yaw_rate:
+                    active = self.tasks.active if self.tasks else None
+                    mask_class = active_path_mask_class(active, args.path_mask_class)
+                    _, reason = self.motion_path(mask_class, now, self.get_clock().now().nanoseconds)
+                    if reason:
+                        decision = DriveDecision.stop(reason)
+                decision = self.motion_limiter.limit(decision, now)
             if self.obstacles is not None:
                 active = self.tasks.active if self.tasks is not None else None
                 surface_class = active_path_mask_class(active, args.path_mask_class)
@@ -1422,6 +1473,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 ),
             )
             self.command_publisher.publish(message)
+            if self.motion_limiter:
+                self.motion_limiter.record(decision, time.monotonic())
             self.path_search.record_command(decision, now=time.monotonic())
             return decision
 
@@ -1456,6 +1509,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                             image_message=message,
                             sequence=int(state["sequence"]),
                             source_header=message.header,
+                            motion_epoch=self.motion.epoch if self.motion else None,
                         )
                     )
                     if accepted:
@@ -1468,6 +1522,18 @@ def run_ros2(args: argparse.Namespace) -> int:
 
         def on_lidar(self, message):
             self.obstacles.on_cloud(message, time.monotonic(), self.get_clock().now().nanoseconds)
+
+        def on_motion_odom(self, message):
+            self.motion.on_odom(message, time.monotonic(), self.get_clock().now().nanoseconds)
+
+        def on_motion_imu(self, message):
+            self.motion.on_imu(message, time.monotonic(), self.get_clock().now().nanoseconds)
+
+        def motion_path(self, mask_class, now, clock_ns):
+            with state_lock:
+                path = smoothers[mask_class].current(now)
+                header, epoch = state['header'], state['motion_epoch']
+            return self.motion.path(path, _stamp_ns(header) if header else 0, epoch, now, clock_ns)
 
         def on_lidar_imu(self, message):
             self.obstacles.on_imu(message, time.monotonic())
@@ -1584,7 +1650,21 @@ def run_ros2(args: argparse.Namespace) -> int:
                     drive_decision = self.publish_drive(drive_decision)
             else:
                 path = smoothers[mask_class].current(now)
-                if self.obstacles is not None:
+                if self.motion:
+                    clock_ns = self.get_clock().now().nanoseconds
+                    path, reason = self.motion_path(mask_class, now, clock_ns)
+                    preview_config = DriveConfig(max_forward_mps=_env_float('LINE_TRACKING_MAX_FORWARD_MPS', .5))
+                    nominal = decide_drive(path, camera_age_sec=0., inference_age_sec=0., config=preview_config)
+                    preview = (DriveDecision.stop(reason) if reason else follow_path(path, nominal, preview_config))
+                    if self.obstacles is not None:
+                        surface = state['planner_status'].get('union_surface', mask_class) if mask_class == 0 else mask_class
+                        preview = self.obstacles.apply(preview, path, surface, now, clock_ns)
+                    preview = self.motion_limiter.limit(preview, now)
+                    if self.obstacles is not None:
+                        preview = self.obstacles.guard(preview, surface, now, clock_ns)
+                    self.motion_limiter.record(preview, now)
+                    self.motion_preview = asdict(preview)
+                elif self.obstacles is not None:
                     preview = decide_drive(path, camera_age_sec=0., inference_age_sec=0., config=DriveConfig())
                     self.obstacles.apply(preview, path, mask_class, now, self.get_clock().now().nanoseconds)
             # Real callbacks keep refreshing liveness after completion. Retain
@@ -1592,6 +1672,11 @@ def run_ros2(args: argparse.Namespace) -> int:
             if self.terminal_apriltag_status is not None:
                 tag_status = self.terminal_apriltag_status
             metrics = {
+                "motion_tracking": {"enabled": bool(self.motion), "control_hz": self.control_hz,
+                    **(self.motion.metrics if self.motion else {}),
+                    "source_stamp_sec": _stamp_ns(header)/1e9 if header is not None else None,
+                    "command": asdict(self.motion_limiter.last) if self.motion_limiter else None,
+                    "preview_command": self.motion_preview},
                 "path_planner": dict(state['planner_status']),
                 "lidar_obstacles": {"enabled": args.avoidance_enabled,
                     "topic": args.lidar_topic, "expected_hz": 10,
@@ -1695,7 +1780,10 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.metrics_publisher.publish(String(data=json.dumps(metrics)))
             if header is None:
                 return
-            path_message = _path_message(path, header, args.path_frame_id)
+            # Compensated coordinates belong to the CURRENT body pose. Keep
+            # the camera source stamp separately in metrics, never relabel it.
+            path_message = _path_message(path, header, args.path_frame_id,
+                stamp=self.get_clock().now().to_msg() if self.motion else None)
             self.path_publisher.publish(path_message)
 
     rclpy.init(args=[])
@@ -1796,6 +1884,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                                 recovery_counts[mask_class] += 1
                             counts[mask_class] = 0 if available else counts[mask_class] + 1
                     state["header"] = packet.source_header
+                    state['motion_epoch'] = packet.motion_epoch
                     completed_before = int(state["inference_count"])
                     state["inference_count"] += 1
                     state["last_inference_at"] = inference_finished_at
@@ -1852,6 +1941,17 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--connectome-url', default=_env('LINE_TRACKING_CONNECTOME_URL', 'http://127.0.0.1:8091/v1/plan'))
     parser.add_argument('--connectome-timeout-sec', type=float, default=_env_float('LINE_TRACKING_CONNECTOME_TIMEOUT_SEC', .8))
     parser.add_argument('--connectome-max-age-sec', type=float, default=_env_float('LINE_TRACKING_CONNECTOME_MAX_AGE_SEC', 1.))
+    parser.add_argument('--motion-enabled', action=argparse.BooleanOptionalAction,
+                        default=_env_bool('LINE_TRACKING_MOTION_ENABLED', False))
+    parser.add_argument('--motion-odom-topic', default=_env('LINE_TRACKING_MOTION_ODOM_TOPIC', '/dog_odom'))
+    parser.add_argument('--motion-imu-topic', default=_env('LINE_TRACKING_MOTION_IMU_TOPIC', '/dog_imu_raw'))
+    for name in ('child', 'imu'):
+        parser.add_argument('--motion-base-from-'+name+'-transform',
+                            default=_env('LINE_TRACKING_MOTION_BASE_FROM_'+name.upper()+'_TRANSFORM', ''))
+    for name, value in asdict(MotionConfig()).items():
+        if name != 'base_frame':
+            parser.add_argument('--motion-'+name.replace('_', '-'), type=type(value),
+                                default=type(value)(_env('LINE_TRACKING_MOTION_'+name.upper(), str(value))))
     parser.add_argument("--path-frame-id", default=_env("SWIN_L_PATH_FRAME_ID", "base_link"))
     parser.add_argument("--avoidance-enabled", action=argparse.BooleanOptionalAction,
                         default=_env_bool("LINE_TRACKING_AVOIDANCE_ENABLED", True))
@@ -2183,6 +2283,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 default=_env_float("LINE_TRACKING_UNSAFE_TIMEOUT_SEC", 2.0),
             )
     args = parser.parse_args(argv)
+    try:
+        _motion_config_from_args(args).validate()
+        parse_transform(args.motion_base_from_child_transform)
+        parse_transform(args.motion_base_from_imu_transform)
+        if args.motion_enabled and (args.path_planner != 'connectome' or args.mode == 'mcap'):
+            raise ValueError('motion tracking requires live ros2/task-drive with the connectome validated path planner')
+    except ValueError as error:
+        parser.error(str(error))
     if not all(math.isfinite(x) and x > 0 for x in (args.connectome_timeout_sec, args.connectome_max_age_sec)):
         parser.error('connectome timeout and max age must be finite and positive')
     args.camera_info_topic = args.camera_info_topic or _camera_info_topic(args.image_topic)

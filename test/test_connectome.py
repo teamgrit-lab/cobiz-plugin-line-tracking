@@ -126,7 +126,8 @@ def test_http_transmits_original_image_and_labels_then_revalidates_and_resets(en
     client = ConnectomeClient(url, LocalPathConfig())
     result = invoke(client)
     assert result[0] is not None and result[1] is not None and result[2] is None
-    np.testing.assert_array_equal(service.encoder.frames[0][0][0, 0], [5, 12, 88])
+    gray = cv2.cvtColor(np.full((2, 2, 3), [5, 12, 88], np.uint8), cv2.COLOR_BGR2GRAY)[0, 0]
+    np.testing.assert_array_equal(service.encoder.frames[0][0][0, 0], [gray]*3)
     assert client.metrics['ready'] and service.encoder.resets == 1
     # A same-frame replay cannot advance the neural state or refresh a path.
     assert all(v is None for v in invoke(client).values())
@@ -260,3 +261,20 @@ def test_vectorized_segment_sampling_is_identical_including_endpoints():
             expected = np.concatenate([np.linspace(a, b, max(2, math.ceil(np.linalg.norm(b-a)/spacing)+1))
                                        for a, b in zip(points, points[1:])])
             np.testing.assert_array_equal(dense_segments(points, spacing), expected)
+
+
+def test_bulk_row_runs_match_individual_rows_without_filling_holes():
+    from connectome_surface import runs,grid_runs
+    rng=np.random.default_rng(8)
+    grid=rng.integers(0,2,(160,280),dtype=np.uint8)
+    grid[0]=0;grid[1]=1;grid[2,10:270]=0
+    assert grid_runs(grid)==[runs(row) for row in grid]
+
+
+def test_lossless_mono_transport_preserves_the_exact_flyvis_input():
+    from connectome_server import encode_image,decode_image
+    rng=np.random.default_rng(4)
+    camera=rng.integers(0,256,(360,640,3),dtype=np.uint8)
+    expected=cv2.cvtColor(camera,cv2.COLOR_BGR2GRAY)
+    decoded=decode_image(encode_image(expected),cv2.IMREAD_COLOR)
+    np.testing.assert_array_equal(cv2.cvtColor(decoded,cv2.COLOR_BGR2GRAY),expected)

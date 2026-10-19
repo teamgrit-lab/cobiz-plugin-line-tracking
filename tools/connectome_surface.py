@@ -71,6 +71,15 @@ def runs(row):
     return [(int(a), int(b)-1) for a, b in edges.reshape(-1, 2)]
 
 
+def grid_runs(grid):
+    """The same exact runs for all rows in one NumPy operation."""
+    rr, edges = np.nonzero(np.diff(np.pad(grid, ((0, 0), (1, 1))), axis=1))
+    result = [[] for _ in range(len(grid))]
+    for row, (a, end) in zip(rr[::2], edges.reshape(-1, 2)):
+        result[row].append((int(a), int(end)-1))
+    return result
+
+
 def dense_segments(points, spacing):
     """Vectorized per-segment linspace, retaining each exact endpoint."""
     counts = np.maximum(2, np.ceil(np.linalg.norm(np.diff(points, axis=0), axis=1)/spacing).astype(int)+1)
@@ -128,8 +137,7 @@ class SurfaceArea:
         self.seed_distance = (min(candidates)[0][1] if candidates else math.inf)
         self.centers, self.intervals, self.rows = [], [], []
         previous = 0.
-        for row in range(len(self.xs)):
-            intervals = runs(self.allowed[row])
+        for row, intervals in enumerate(grid_runs(self.allowed)):
             if not intervals:
                 if self.rows:
                     break

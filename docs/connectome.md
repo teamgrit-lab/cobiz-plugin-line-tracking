@@ -16,7 +16,9 @@ line-tracking 현재 마스크 재검사 → Path → 기존 추종·LiDAR·작�
 ## 경로와 제어
 
 - 참고 채팅 `정리 초파리 커넥톰 순찰 설계`의 제안대로 원본 영상을 실제 pretrained
-  Flyvis 1.2.0 회로·flow decoder에 입력한다. 마스크는 후단 기하 경로 생성기에 준다.
+  Flyvis 1.2.0 회로·flow decoder에 입력한다. 전송은 회로의 첫 연산과 동일한
+  회색조를 무손실 PNG로 보내며 R50의 컬러 입력은 유지한다.
+  마스크는 후단 기하 경로 생성기에 준다.
   **학습된 neural waypoint head가 직접 경로를 출력하는 구현은 아니다.**
 - 회로 state를 프레임 사이에 유지하고 최대 0.02초 간격으로 내부 적분한다.
   camera/task stream 변경 시 초기화한다. 중복·역행 시각과 긴 공백은 거부한다.
@@ -57,12 +59,14 @@ CUDA/PyTorch R50에서는 `SWIN_L_CUDA_GRAPH=true`, CUDA Flyvis에서는
 모델이나 CPU로 대체하지 않는다. 첫 프레임의 warmup/capture 동안은 신선한 경로가
 없으므로 이동할 수 없다.
 
-Flyvis는 native `_next_state`의 모든 적분 단계를 재생한다. 내부 dt는 기존처럼
+Flyvis는 native `_next_state`의 모든 적분 단계를 재생한다. 같은 입력이 유지되는
+단계들은 1/4/16단계 graph로 묶어서 제출하며 적분 횟수는 줄이지 않는다. 내부 dt는 기존처럼
 최대 0.02초이며 입력 시각에 따라 단계 수가 달라진다. 1초 stream gap 제한도 유지한다.
 학습된 파라미터는 고정하고 DecoderGAVP는 native eager CUDA로 실행한다. 장시간 공백은
 회로를 초기화하지만 Mode 0의 선택 표면은 새 작업까지 유지한다.
 
-표면 projection/footprint 격자만 유한 캐시에 저장한다. 매 프레임의 허용 영역과
+표면 projection/footprint 격자만 유한 캐시에 저장한다. 행별 경계와 선분 검사점을
+배열 단위로 계산하고 immutable 광류 receptor의 공간 검색도 재사용한다. 매 프레임의 허용 영역과
 hazard는 새로 계산하며 Mode 0과 같은 표면의 후보 평가를 공유한다. 먼 구간이
 막힐 때의 최장 유효 prefix는 같은 선분 검사로 이진 탐색한다. 수신 측의 현재
 마스크 재검증은 유지한다. timer와 추론 worker 사이의 경로/시각도 한 snapshot으로

@@ -44,7 +44,10 @@ class ConnectomeClient:
             frame = cv2.resize(frame_bgr, (selected.shape[1], selected.shape[0]))
             payload = {'schema': SCHEMA, 'stream_id': stream, 'request_id': identity, 'stamp_sec': stamp,
                        'local_config': asdict(self.local), 'planner_config': asdict(self.config),
-                       'image_png': encode_image(frame), 'selected_png': encode_image(selected.astype(np.uint8)),
+                       # Flyvis's first operation is this exact conversion.
+                       # Lossless mono PNG avoids sending unused colour planes.
+                       'image_png': encode_image(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)),
+                       'selected_png': encode_image(selected.astype(np.uint8)),
                        'hazard_png': encode_image(np.asarray(hazard, np.uint8))}
             data = json.dumps(payload, allow_nan=False).encode()
             if len(data) > MAX_BODY:

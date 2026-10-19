@@ -275,6 +275,7 @@ class BestSoFarResult:
     road_area_ratio: float
     sidewalk_area_ratio: float
     road_hazard_mask: np.ndarray | None = None
+    road_building_mask: np.ndarray | None = None
 
 
 def _changed_pixel_hysteresis_hold_mask(
@@ -422,6 +423,7 @@ class BestSoFarSegmenter:
         self.road_ids = resolve_ids(id2label, self.road_labels)
         self.sidewalk_ids = resolve_ids(id2label, self.sidewalk_labels)
         self.road_hazard_ids = tuple(int(k) for k, v in id2label.items() if str(v).casefold() in ('vegetation', 'curb'))
+        self.road_building_ids = tuple(int(k) for k, v in id2label.items() if str(v).casefold() == 'building')
         self.pedestrian_area_id = resolve_ids(id2label, ("Pedestrian Area",))[0]
         self.model_load_seconds = time.perf_counter() - load_started
         self._previous_scores: torch.Tensor | None = None
@@ -694,7 +696,7 @@ class BestSoFarSegmenter:
         scores = self._semantic_scores(frame, color_order=color_order)
         self._synchronize()
         inference_finished = time.perf_counter()
-        hazard = None
+        hazard = building = None
         if detect_road_hazards:
             # Current logits, before temporal EMA: new grass/curb evidence wins.
             labels = scores.argmax(dim=0)
@@ -702,6 +704,10 @@ class BestSoFarSegmenter:
             for label in self.road_hazard_ids:
                 hazard_tensor |= labels == label
             hazard = hazard_tensor.detach().cpu().numpy()
+            building_tensor = torch.zeros_like(labels, dtype=torch.bool)
+            for label in self.road_building_ids:
+                building_tensor |= labels == label
+            building = building_tensor.detach().cpu().numpy()
 
         if self._previous_scores is None:
             # TensorRT owns and reuses its output allocation. Keep temporal
@@ -734,6 +740,7 @@ class BestSoFarSegmenter:
         return BestSoFarResult(
             selected_mask=selected,
             road_hazard_mask=hazard,
+            road_building_mask=building,
             inference_seconds=inference_finished - total_started,
             postprocess_seconds=finished - inference_finished,
             total_seconds=finished - total_started,

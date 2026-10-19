@@ -90,6 +90,42 @@ def test_extracts_a_centerline_from_a_metric_straight_sidewalk():
     assert 1.0 < mean_lateral < config.max_path_lateral_m
 
 
+def test_image_exclusion_survives_closing_of_a_false_surface_hole():
+    cfg = replace(LocalPathConfig(), roi_polygon=local_path.DEFAULT_ROAD_ROI_POLYGON,
+                  roi_exclusion_polygon=(.49, .47, .51, .47, .51, 1., .49, 1.), close_kernel_px=31)
+    source = np.ones((360, 640), np.uint8)
+    warped, _, _ = local_path._birdseye_sidewalk(source, cfg)
+    geometry = local_path._birdseye_geometry(source.shape, cfg)
+    import cv2
+    excluded = cv2.remap(local_path.roi_exclusion_mask(source.shape, cfg),
+                        geometry.map_x, geometry.map_y, cv2.INTER_NEAREST)
+    assert np.any(warped) and np.any(excluded)
+    assert not np.any(warped[excluded != 0])
+
+
+@pytest.mark.parametrize('shape', [(360, 640), (720, 1280)])
+def test_default_road_trapezoid_widens_common_roi_and_clears_camera_body(shape):
+    import cv2
+
+    base = LocalPathConfig()
+    cfg = replace(base, road_roi_polygon=local_path.DEFAULT_ROAD_ROI_POLYGON,
+                  road_roi_exclusion_polygon=local_path.DEFAULT_ROAD_ROI_EXCLUSION_POLYGON)
+    road = local_path.path_config_for_mode(cfg, 1)
+    # Check the raw quadrilateral so subtraction cannot hide a collision.
+    quad = local_path.path_roi_mask(shape, replace(road, roi_exclusion_polygon=()))
+    common = local_path.path_roi_mask(shape, base)
+    body = local_path.roi_exclusion_mask(shape, road)
+    assert np.all(quad[common != 0])
+    assert np.count_nonzero(quad) > np.count_nonzero(common)
+    clearance = cv2.distanceTransform(1 - body, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    assert clearance[quad != 0].min() >= 4.0 * shape[1] / 640
+    assert np.array_equal(quad, local_path.path_roi_mask(shape, road))
+    for mode in (0, 2):
+        effective = local_path.path_config_for_mode(cfg, mode)
+        assert effective.roi_polygon == base.roi_polygon
+        assert effective.roi_exclusion_polygon == ()
+
+
 def test_smoother_limits_update_and_holds_last_path():
     config = LocalPathConfig(
         smoothing_time_constant_sec=0.8,

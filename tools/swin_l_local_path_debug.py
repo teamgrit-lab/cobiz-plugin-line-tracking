@@ -82,6 +82,8 @@ from local_avoidance import AvoidanceConfig
 from lidar_runtime import LidarRuntime
 from local_path import (
     DEFAULT_ROI_POLYGON,
+    DEFAULT_ROAD_ROI_POLYGON,
+    DEFAULT_ROAD_ROI_EXCLUSION_POLYGON,
     PATH_MASK_CLASSES,
     LocalPathConfig,
     LocalPathEstimate,
@@ -89,12 +91,15 @@ from local_path import (
     SmoothedPath,
     extract_sidewalk_centerline,
     ground_to_pixel,
-    normalized_polygon_pixels,
     pixel_to_ground_homography,
+    path_config_for_mode,
+    path_roi_mask,
+    roi_exclusion_mask,
     selected_path_region,
 )
 from motion_tracking import MotionBuffer, MotionConfig, CommandLimiter, follow_path
 from perception_process import PerceptionProcess
+from surface_path_planner import SurfacePathPlanner, uses_connectome
 from r50_checkpoint import validate_checkpoint
 from swin_l_drive_control import (
     DRIVE_STOP_CHECKS,
@@ -233,7 +238,7 @@ def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
 
 def extract_path_estimates(selected_mask, mask_classes, config):
     """Semantic reference paths are independent of obstacle sensing."""
-    return {key: extract_sidewalk_centerline(selected_path_region(selected_mask, key), config)
+    return {key: extract_sidewalk_centerline(selected_path_region(selected_mask, key), path_config_for_mode(config, key))
             for key in mask_classes}
 
 
@@ -242,7 +247,26 @@ def _connectome_client_from_args(args, local_config):
         return None
     return ConnectomeClient(args.connectome_url, local_config,
         PlannerConfig(half_width_m=args.obstacle_robot_half_width_m,
-                      margin_m=args.obstacle_margin_m), timeout=args.connectome_timeout_sec)
+                      margin_m=args.obstacle_margin_m,
+                      road_corridor_smoothing_m=args.road_corridor_smoothing_m,
+                      road_building_cost_weight=args.road_building_cost_weight,
+                      road_building_distance_m=args.road_building_distance_m), timeout=args.connectome_timeout_sec)
+
+
+def _surface_planner_from_args(args, local_config):
+    client = _connectome_client_from_args(args, local_config)
+    return SurfacePathPlanner(client, local_config) if client is not None else None
+
+
+def _path_smoother(mask_class, args, config, metrics=None):
+    if uses_connectome(mask_class, args.path_planner == 'connectome', metrics):
+        return ConnectomePathTracker(args.connectome_max_age_sec)
+    return LocalPathSmoother(path_config_for_mode(config, mask_class))
+
+
+def _waiting_planner_status(args, mask_class):
+    backend = 'connectome' if uses_connectome(mask_class, args.path_planner == 'connectome') else 'local'
+    return {'backend': backend, 'ready': False, 'reason': backend+'_waiting'}
 
 
 def update_path_smoothers(
@@ -269,6 +293,15 @@ def _parse_polygon(value: str) -> tuple[float, ...]:
     if len(values) != 8:
         raise ValueError("SWIN_L_ROI_POLYGON must contain eight values")
     return values
+
+
+def _parse_exclusion_polygon(value: str) -> tuple[float, ...]:
+    if not value.strip():
+        return ()
+    try:
+        return tuple(float(item.strip()) for item in value.replace(';', ',').split(','))
+    except ValueError as error:
+        raise ValueError('SWIN_L_ROAD_ROI_EXCLUSION_POLYGON must be comma-separated floats') from error
 
 
 def _lidar_config_from_args(args):
@@ -307,6 +340,12 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         ground_half_width_m=args.ground_half_width_m,
         search_half_width_m=args.search_half_width_m,
         roi_polygon=polygon,
+        road_roi_polygon=tuple(args.road_roi_polygon) if args.road_roi_polygon is not None else _parse_polygon(
+            _env("SWIN_L_ROAD_ROI_POLYGON", ",".join(map(str, DEFAULT_ROAD_ROI_POLYGON)))),
+        road_roi_exclusion_polygon=(tuple(args.road_roi_exclusion_polygon)
+            if args.road_roi_exclusion_polygon is not None else _parse_exclusion_polygon(
+                _env('SWIN_L_ROAD_ROI_EXCLUSION_POLYGON',
+                     ','.join(map(str, DEFAULT_ROAD_ROI_EXCLUSION_POLYGON))))),
         path_points=args.path_points,
         bev_width_px=args.bev_width_px,
         bev_height_px=args.bev_height_px,
@@ -539,6 +578,7 @@ def render_local_path_overlay(
     """Render segmentation, raw/final path and optional status on the camera frame."""
 
     overlay = frame_bgr.copy()
+    config = path_config_for_mode(config, path_mask_class)
     mask = upscale_mask(selected_mask, frame_bgr)
     road = overlay.copy()
     road[mask == 1] = (40, 180, 40)
@@ -548,8 +588,14 @@ def render_local_path_overlay(
     overlay = cv2.addWeighted(overlay, 0.70, sidewalk, 0.30, 0.0)
 
     if metric_projector is None:
-        roi = normalized_polygon_pixels(config.roi_polygon, frame_bgr.shape[:2])
-        cv2.polylines(overlay, [roi.reshape(-1, 1, 2)], True, (255, 180, 0), 2)
+        shape = frame_bgr.shape[:2]
+        roi = path_roi_mask(shape, config)
+        contours, _ = cv2.findContours(roi, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        if config.roi_exclusion_polygon:
+            excluded = roi_exclusion_mask(shape, config) != 0
+            overlay[excluded] = (overlay[excluded] * .45).astype(np.uint8)
+        cv2.drawContours(overlay, contours, -1,
+                         (0, 165, 255) if path_mask_class == 1 else (255, 180, 0), 2)
         homography = pixel_to_ground_homography(frame_bgr.shape[:2], config)
     if estimate is not None:
         raw_pixels = (metric_projector(estimate.points_xy) if metric_projector
@@ -624,9 +670,8 @@ def run_mcap(args):
     with_path = args.overlay_mode == "local-path"
     local_config = _local_path_config_from_args(args) if with_path else None
     segmenter = BestSoFarSegmenter(_runtime_config(args))
-    planner = _connectome_client_from_args(args, local_config) if with_path else None
-    smoother = (ConnectomePathTracker(args.connectome_max_age_sec) if planner
-                else LocalPathSmoother(local_config)) if with_path else None
+    planner = _surface_planner_from_args(args, local_config) if with_path else None
+    smoother = _path_smoother(args.path_mask_class, args, local_config) if with_path else None
     sensors = LidarRuntime(args, _lidar_config_from_args(args), _avoidance_config_from_args(args),
                            drive_config=DriveConfig()) if with_path and args.avoidance_enabled else None
     topics = [args.image_topic]
@@ -673,8 +718,11 @@ def run_mcap(args):
                     previous_mask = result.selected_mask
                     if planner:
                         estimates = planner.plan(frame, previous_mask, result.road_hazard_mask,
-                                                 now, 0, count+1)
+                                                 now, 0, count+1, mode=args.path_mask_class,
+                                                 building=getattr(result, 'road_building_mask', None))
                         estimate = estimates[args.path_mask_class]
+                        if uses_connectome(args.path_mask_class, True, planner.metrics) != isinstance(smoother, ConnectomePathTracker):
+                            smoother = _path_smoother(args.path_mask_class, args, local_config, planner.metrics)
                     else:
                         estimate = extract_path_estimates(previous_mask, (args.path_mask_class,), local_config)[args.path_mask_class]
                     smoother.update(estimate, now)
@@ -853,19 +901,19 @@ def run_ros2(args: argparse.Namespace) -> int:
     if task_mode:
         _validate_task_drive_preflight(args)
     local_config = _local_path_config_from_args(args)
-    planner = _connectome_client_from_args(args, local_config)
+    planner = _surface_planner_from_args(args, local_config)
     # Morphology must not create an all-core OpenCV pool alongside the ROS
     # sensor executor and CUDA worker. Match the existing CPU thread budget.
     cv2.setNumThreads(2)
     segmenter = (PerceptionProcess(_runtime_config(args), {
-        'url': planner.url, 'local_config': local_config,
-        'planner_config': planner.config, 'timeout': planner.timeout})
+        'url': planner.client.url, 'local_config': local_config,
+        'planner_config': planner.client.config, 'timeout': planner.client.timeout})
         if args.inference_process else BestSoFarSegmenter(_runtime_config(args)))
     if task_mode and segmenter.device.type != "cuda":
         if args.inference_process: segmenter.close()
         raise RuntimeError("task-drive mode requires a CUDA model device")
     smoothers = {
-        mask_class: (ConnectomePathTracker(args.connectome_max_age_sec) if planner else LocalPathSmoother(local_config))
+        mask_class: _path_smoother(mask_class, args, local_config)
         for mask_class in (PATH_MASK_CLASSES if task_mode else (args.path_mask_class,))
     }
     latest = LatestFrameQueue(enabled=not task_mode)
@@ -890,8 +938,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         "last_inference_at": None,
         "last_image_stamp_ns": None,
         "last_inference_stamp_ns": None,
-        "planner_status": {"backend": "connectome", "ready": False, "reason": "connectome_waiting"}
-                          if planner else {"backend": "local"},
+        "planner_status": _waiting_planner_status(args, args.path_mask_class),
         "motion_epoch": None,
         "pipeline_timing": {},
     }
@@ -1221,10 +1268,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                 # Replace path histories instead of locking an old smoother:
                 # SIGTERM may have interrupted its current() call on this thread.
                 for mask_class in smoothers:
-                    smoothers[mask_class] = (ConnectomePathTracker(args.connectome_max_age_sec)
-                                            if planner else LocalPathSmoother(local_config))
+                    smoothers[mask_class] = _path_smoother(mask_class, args, local_config)
                 if planner:
-                    state['planner_status'] = {'backend': 'connectome', 'ready': False, 'reason': 'connectome_waiting'}
+                    state['planner_status'] = _waiting_planner_status(args,
+                        active_path_mask_class(self.tasks.active if self.tasks else None, args.path_mask_class))
                 for key in (
                     "last_image_at", "last_image_stamp_ns", "last_inference_at",
                     "last_inference_stamp_ns", "camera_fault_reason",
@@ -1306,7 +1353,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             inference_age_sec = _effective_source_age_sec(
                 last_inference_at, last_inference_stamp_ns, now, clock_now_ns
             )
-            if planner:
+            connectome_path = uses_connectome(mask_class, planner is not None, planner_status)
+            if connectome_path:
                 # This gate also overrides optional legacy path-loss recovery:
                 # no stale reference, straight fallback or scan after failure.
                 reason = reference_stop_reason(path, planner_status.get('ready'),
@@ -1340,7 +1388,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "camera_stale", "inference_stale"
             ):
                 decision = DriveDecision.stop(camera_fault_reason)
-            if self.tasks.active is not None and self.obstacles is None and planner is None:
+            if self.tasks.active is not None and self.obstacles is None and not connectome_path:
                 sensor_reason = None
                 # Searching requires live observations even when normal driving's
                 # optional stale-sensor stops are disabled.
@@ -1458,8 +1506,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                     ages = [_effective_source_age_sec(state[received], state[stamp], now, clock_ns)
                             for received, stamp in [('last_image_at', 'last_image_stamp_ns'),
                                                     ('last_inference_at', 'last_inference_stamp_ns')]]
-                    reason = state['camera_fault_reason'] or reference_stop_reason(
-                        current, state['planner_status'].get('ready'), ages, args.connectome_max_age_sec)
+                    reason = state['camera_fault_reason']
+                    if uses_connectome(mask_class, True, state['planner_status']):
+                        reason = reason or reference_stop_reason(
+                            current, state['planner_status'].get('ready'), ages, args.connectome_max_age_sec)
                 if reason:
                     decision = DriveDecision.stop(reason)
             if self.motion:
@@ -1731,6 +1781,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "profile": args.profile,
                 "camera_topic": args.image_topic,
                 "path_mask_class": mask_class,
+                "path_roi_polygon": list(path_config_for_mode(local_config, mask_class).roi_polygon),
+                "path_roi_exclusion_polygon": list(path_config_for_mode(local_config, mask_class).roi_exclusion_polygon),
                 "path_surface": PATH_MASK_CLASSES[mask_class],
                 "path_tracked": path is not None and path.stop_reason is None,
                 "branch_selection": path.branch_status if path else {
@@ -1882,12 +1934,14 @@ def run_ros2(args: argparse.Namespace) -> int:
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
+                    requested_mode = active_path_mask_class(
+                        node.tasks.active if node.tasks else None, args.path_mask_class)
                 kwargs = {"color_order": "rgb"}
                 if planner:
                     kwargs['detect_road_hazards'] = True
                 if args.inference_process:
                     response = segmenter.infer(frame_rgb, _stamp_ns(packet.source_header)/1e9,
-                                               packet.generation, packet.sequence)
+                                               packet.generation, packet.sequence, mode=requested_mode)
                     result = response['result']
                     segmentation_finished_at = response['segmentation_finished_at']
                     estimates = response['estimates']
@@ -1906,7 +1960,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 elif planner:
                     estimates = planner.plan(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR),
                         result.selected_mask, getattr(result, 'road_hazard_mask', np.zeros_like(result.selected_mask)),
-                        _stamp_ns(packet.source_header)/1e9, packet.generation, packet.sequence)
+                        _stamp_ns(packet.source_header)/1e9, packet.generation, packet.sequence, mode=requested_mode,
+                        building=getattr(result, 'road_building_mask', None))
                 else:
                     estimates = extract_path_estimates(result.selected_mask, tuple(smoothers), local_config)
                 path_updated_at = time.monotonic()
@@ -1918,6 +1973,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                     if planner:
                         state['planner_status'] = dict(planner.metrics)
                     for mask_class, smoother in smoothers.items():
+                        if (uses_connectome(mask_class, planner is not None, state['planner_status'])
+                                != isinstance(smoother, ConnectomePathTracker)):
+                            smoother = smoothers[mask_class] = _path_smoother(
+                                mask_class, args, local_config, state['planner_status'])
                         if estimates[mask_class] is None:
                             smoother.reset(preserve_branch=True)
                         smoother.update(estimates[mask_class], path_updated_at)
@@ -2015,6 +2074,12 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--connectome-url', default=_env('LINE_TRACKING_CONNECTOME_URL', 'http://127.0.0.1:8091/v1/plan'))
     parser.add_argument('--connectome-timeout-sec', type=float, default=_env_float('LINE_TRACKING_CONNECTOME_TIMEOUT_SEC', .8))
     parser.add_argument('--connectome-max-age-sec', type=float, default=_env_float('LINE_TRACKING_CONNECTOME_MAX_AGE_SEC', 1.))
+    parser.add_argument('--road-corridor-smoothing-m', type=float,
+        default=_env_float('LINE_TRACKING_ROAD_CORRIDOR_SMOOTHING_M', .30))
+    parser.add_argument('--road-building-cost-weight', type=float,
+        default=_env_float('LINE_TRACKING_ROAD_BUILDING_COST_WEIGHT', 2.))
+    parser.add_argument('--road-building-distance-m', type=float,
+        default=_env_float('LINE_TRACKING_ROAD_BUILDING_DISTANCE_M', 2.))
     parser.add_argument('--motion-enabled', action=argparse.BooleanOptionalAction,
                         default=_env_bool('LINE_TRACKING_MOTION_ENABLED', False))
     parser.add_argument('--motion-odom-topic', default=_env('LINE_TRACKING_MOTION_ODOM_TOPIC', '/dog_odom'))
@@ -2203,6 +2268,14 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar=("BL_X", "BL_Y", "BR_X", "BR_Y", "TR_X", "TR_Y", "TL_X", "TL_Y"),
     )
+    parser.add_argument(
+        "--road-roi-polygon", type=float, nargs=8, default=None,
+        help="Mode 1 ROI only; Mode 0/2 keep --roi-polygon",
+    )
+    parser.add_argument(
+        '--road-roi-exclusion-polygon', type=float, nargs='*', default=None,
+        help='Mode 1 camera-body image exclusion, independent of metric projection; empty disables it',
+    )
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -2377,6 +2450,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(str(error))
     if not all(math.isfinite(x) and x > 0 for x in (args.connectome_timeout_sec, args.connectome_max_age_sec)):
         parser.error('connectome timeout and max age must be finite and positive')
+    try:
+        PlannerConfig(road_corridor_smoothing_m=args.road_corridor_smoothing_m,
+                      road_building_cost_weight=args.road_building_cost_weight,
+                      road_building_distance_m=args.road_building_distance_m).validate()
+    except ValueError as error:
+        parser.error(str(error))
     args.camera_info_topic = args.camera_info_topic or _camera_info_topic(args.image_topic)
     try:
         _lidar_config_from_args(args).validate()

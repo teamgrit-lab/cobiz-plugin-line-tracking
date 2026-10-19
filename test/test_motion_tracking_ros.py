@@ -21,8 +21,8 @@ def setup(monkeypatch):
         monkeypatch.setitem(debug.ENV,'LINE_TRACKING_STOP_ON_'+name.upper(),'false')
     class Client:
         metrics={'ready':True,'union_surface':1}
-        def __init__(self,*_a,**_k):pass
-        def plan(self,*_a):
+        def __init__(self,*_a,**_k):self.config=debug.PlannerConfig()
+        def plan(self,*_a,**_k):
             p=np.column_stack((np.linspace(3.,8.,60),np.zeros(60)))
             return {m:LocalPathEstimate(p,.95,1.,3.,p) for m in (0,1,2)}
     monkeypatch.setattr(debug,'ConnectomeClient',Client)
@@ -154,11 +154,13 @@ def test_process_results_keep_parent_motion_and_cancellation_gates(monkeypatch):
         def __init__(self,*_):pass
         def reset(self):pass
         def close(self):closed.append(True)
-        def infer(self,rgb,stamp,generation,sequence):
+        def infer(self,rgb,stamp,generation,sequence,*,mode):
+            assert mode == 2
             p=np.array([[3.,0.],[8.,0.]])
             estimate=LocalPathEstimate(p,.9,1.,3.,p)
             return {'result':NS(selected_mask=np.ones((360,640),np.uint8),inference_seconds=.01),
-                'estimates':{m:estimate for m in (0,1,2)},'planner':{'ready':True,'union_surface':1},
+                'estimates':{m:estimate if m == mode else None for m in (0,1,2)},
+                'planner':{'backend':'local','ready':True,'surface_class':2},
                 'segmentation_finished_at':debug.time.monotonic()}
     monkeypatch.setattr(debug,'PerceptionProcess',Process)
     def scenario(node):

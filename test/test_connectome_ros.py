@@ -11,7 +11,7 @@ from test_lidar_obstacles_ros import complete_inference
 from local_path import LocalPathEstimate
 
 
-@pytest.mark.parametrize('mode', [0, 1, 2])
+@pytest.mark.parametrize('mode', [0, 1])
 def test_connectome_path_is_followed_and_failure_never_enters_legacy_recovery(monkeypatch, mode):
     ros = RosHarness(monkeypatch)
     for check in debug.AUTOMATIC_STOP_CHECKS:
@@ -21,8 +21,8 @@ def test_connectome_path_is_followed_and_failure_never_enters_legacy_recovery(mo
     requests, enabled = [], [True]
     class Client:
         metrics = {'ready': True, 'backend': 'connectome', 'union_surface': 1}
-        def __init__(self, *_a, **_k): pass
-        def plan(self, frame, mask, hazard, stamp, generation, sequence):
+        def __init__(self, *_a, **_k): self.config = debug.PlannerConfig()
+        def plan(self, frame, mask, hazard, stamp, generation, sequence, **_kwargs):
             requests.append((mask.copy(), hazard.copy(), stamp, generation, sequence))
             self.metrics = {'ready': enabled[0], 'backend': 'connectome', 'union_surface': 1}
             p = np.column_stack((np.linspace(3., 8., 40), np.zeros(40)))
@@ -67,7 +67,7 @@ def test_cancelled_inflight_planner_reply_cannot_repopulate_path_or_move(monkeyp
     class Client:
         metrics = {'ready': True, 'backend': 'connectome', 'union_surface': 1}
         def __init__(self, *_a, **_k): pass
-        def plan(self, *_a):
+        def plan(self, *_a, **_kwargs):
             # Simulate a cancellation while HTTP inference is outstanding.
             ros.node.release_task_control('cancel_during_request')
             p = np.column_stack((np.linspace(3., 8., 40), np.zeros(40)))
@@ -94,6 +94,7 @@ def test_current_hazard_output_overrides_the_surface_ema_without_extra_forward()
     from test_accelerator_postprocess import make_segmenter
     model = make_segmenter(torch.device('cpu')); model.temporal_alpha = .1
     model.road_hazard_ids = (0, 5)
+    model.road_building_ids = ()  # This six-class fixture has no Building class.
     scores = torch.zeros((6, 32, 48)); scores[1] = 10
     calls = []
     def semantic(*_a, **_k): calls.append(1); return scores
@@ -104,3 +105,31 @@ def test_current_hazard_output_overrides_the_surface_ema_without_extra_forward()
     result = model.segment(frame, detect_road_hazards=True)
     assert len(calls) == 2 and result.road_hazard_mask[5:15, 5:15].all()
     assert np.all(result.selected_mask[5:15, 5:15] == 1)
+
+
+@pytest.mark.parametrize('mode', [0, 2])
+def test_local_sidewalk_drives_with_road_service_offline_and_keeps_apriltag_stop(monkeypatch, mode):
+    ros = RosHarness(monkeypatch)
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_STOP_ON_'+check.upper(), 'false')
+    monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_STOP_ON_APRILTAG', 'true')
+    class Client:
+        config = debug.PlannerConfig()
+        metrics = {'ready': False, 'reason': 'connectome_unavailable'}
+        def __init__(self, *_a, **_k): pass
+        def plan(self, *_a, **_k): pytest.fail('sidewalk must not contact Connectome')
+    monkeypatch.setattr(debug, 'ConnectomeClient', Client)
+    def scenario(node):
+        ros.start(); ros.now = 2.1
+        result = complete_inference(node, ros)
+        assert result['path_planner']['backend'] == 'local'
+        assert result['path_planner']['ready']
+        assert json.loads(ros.published[SPORT][-1].parameter)['x'] > 0
+        # An older road-server failure cannot veto the final local publication.
+        command = node.publish_drive(debug.DriveDecision(.2, 0., .05, 'tracking'))
+        assert command.vx == .2
+        ros.detect(11, frame=1)
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        node.release_task_control('cancel')
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+    ros.run(scenario, '--path-planner', 'connectome', '--path-mask-class', str(mode))

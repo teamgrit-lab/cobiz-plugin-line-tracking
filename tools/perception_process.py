@@ -13,9 +13,10 @@ def perception_worker(pipe, config, planner_values):
         import numpy as np
         from best_so_far_runtime import BestSoFarSegmenter
         from connectome_client import ConnectomeClient
+        from surface_path_planner import SurfacePathPlanner
         cv2.setNumThreads(2)
         model = BestSoFarSegmenter(config)
-        planner = ConnectomeClient(**planner_values)
+        planner = SurfacePathPlanner(ConnectomeClient(**planner_values), planner_values['local_config'])
         # Capture the fixed-shape model before announcing readiness. Reset
         # temporal state so the synthetic warmup never supports a live path.
         if config.cuda_graph:
@@ -32,7 +33,8 @@ def perception_worker(pipe, config, planner_values):
             segmented = time.monotonic()
             estimates = planner.plan(cv2.cvtColor(request['rgb'], cv2.COLOR_RGB2BGR),
                 result.selected_mask, result.road_hazard_mask,
-                request['stamp'], request['generation'], request['sequence'])
+                request['stamp'], request['generation'], request['sequence'], mode=request['mode'],
+                building=getattr(result, 'road_building_mask', None))
             memory = {}
             if model.device.type == 'cuda':
                 import torch
@@ -40,6 +42,7 @@ def perception_worker(pipe, config, planner_values):
                     ('allocated', torch.cuda.memory_allocated), ('reserved', torch.cuda.memory_reserved),
                     ('max_allocated', torch.cuda.max_memory_allocated), ('max_reserved', torch.cuda.max_memory_reserved))}
             pipe.send({'sequence': request['sequence'], 'generation': request['generation'],
+                'mode': request['mode'],
                 'result': result, 'estimates': estimates, 'planner': planner.metrics,
                 'segmentation_finished_at': segmented, 'memory': memory})
     except (EOFError, BrokenPipeError):
@@ -80,12 +83,13 @@ class PerceptionProcess:
     def reset(self):
         self.needs_reset = True
 
-    def infer(self, rgb, stamp, generation, sequence):
+    def infer(self, rgb, stamp, generation, sequence, *, mode=2):
         self.pipe.send({'rgb': rgb, 'stamp': stamp, 'generation': generation,
-                        'sequence': sequence, 'reset': self.needs_reset})
+                        'sequence': sequence, 'reset': self.needs_reset, 'mode': mode})
         self.needs_reset = False
         reply = self._receive(self.timeout)
-        if reply.get('sequence') != sequence or reply.get('generation') != generation:
+        if (reply.get('sequence') != sequence or reply.get('generation') != generation
+                or reply.get('mode') != mode):
             raise RuntimeError('perception reply does not match task/frame')
         self.cuda_memory = reply['memory']
         return reply

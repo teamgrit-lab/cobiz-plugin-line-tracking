@@ -1,5 +1,6 @@
 """Mask containment, actual HTTP exchange, failure and semantic policy contracts."""
 from pathlib import Path
+from dataclasses import replace
 import sys
 import threading
 import time
@@ -12,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'tools'))
 from connectome_client import ConnectomeClient, ConnectomePathTracker
 from connectome_server import PlannerService, make_server
 from connectome_surface import FlowField, LocalPathConfig, PlannerConfig, SurfaceArea, SurfacePlanner
-from local_path import ground_to_pixel, pixel_to_ground_homography
+from local_path import (DEFAULT_ROAD_ROI_POLYGON, DEFAULT_ROAD_ROI_EXCLUSION_POLYGON, ground_to_pixel,
+                        pixel_to_ground_homography, path_config_for_mode, roi_exclusion_mask)
 
 
 def strip(left=1.5, right=-1.5, surface=1, near=3., far=8.):
@@ -36,6 +38,86 @@ def test_both_surfaces_get_centred_current_mask_paths(surface):
     points = np.array(p['points_xy'])
     assert abs(np.median(points[:, 1])) < .06
     assert SurfaceArea(selected, np.zeros_like(selected), surface, LocalPathConfig(), PlannerConfig()).accepts(points)
+
+
+def test_mode1_wide_roi_reaches_a_road_outside_the_common_trapezoid(endpoint):
+    url, _ = endpoint
+    cfg = replace(LocalPathConfig(), road_roi_polygon=DEFAULT_ROAD_ROI_POLYGON)
+    selected = np.zeros((360, 640), np.uint8)
+    selected[162:, 40:210] = 1
+    estimates = invoke(ConnectomeClient(url, cfg), selected)
+    assert estimates[1] is not None
+    assert estimates[0] is None and estimates[2] is None
+    points = estimates[1].points_xy
+    hazard = np.zeros_like(selected)
+    assert SurfaceArea(selected, hazard, 1, path_config_for_mode(cfg, 1), PlannerConfig()).accepts(points)
+    assert not SurfaceArea(selected, hazard, 1, cfg, PlannerConfig()).accepts(points)
+
+
+def test_road_roi_does_not_change_mode0_even_when_it_selects_road_or_mode2():
+    cfg = LocalPathConfig()
+    selected = np.ones((360, 640), np.uint8)
+    selected[:, 400:] = 2
+    hazard = np.zeros_like(selected)
+    before = SurfacePlanner().plan(selected, hazard, cfg, PlannerConfig(), FLOW)
+    after = SurfacePlanner().plan(selected, hazard,
+        replace(cfg, road_roi_polygon=DEFAULT_ROAD_ROI_POLYGON), PlannerConfig(), FLOW)
+    assert before['0'] is not None and before['0']['surface_class'] == 1
+    assert after['0'] == before['0'] and after['2'] == before['2']
+    assert after['1'] != before['1']
+
+
+def camera_body_config():
+    # A custom wide rectangle intentionally overlaps the body. The default road
+    # trapezoid now clears it; explicit ROI overrides still need the exclusion.
+    return replace(LocalPathConfig(), road_roi_polygon=(.02, 1., .98, 1., .98, .47, .02, .47),
+                   road_roi_exclusion_polygon=DEFAULT_ROAD_ROI_EXCLUSION_POLYGON)
+
+
+def test_camera_body_cuts_a_falsely_road_labelled_corridor_over_http(endpoint):
+    url, _ = endpoint
+    selected = np.zeros((360, 640), np.uint8)
+    selected[:, 500:625] = 1
+    unmasked = replace(camera_body_config(), road_roi_exclusion_polygon=None)
+    before = invoke(ConnectomeClient(url, unmasked), selected)[1]
+    after = invoke(ConnectomeClient(url, camera_body_config()), selected)[1]
+    assert before is not None
+    if after is not None:
+        assert after.points_xy[-1, 0] < before.points_xy[-1, 0] - 1.
+        cfg = path_config_for_mode(camera_body_config(), 1)
+        pixels = np.rint(ground_to_pixel(after.points_xy, pixel_to_ground_homography(selected.shape, cfg))).astype(int)
+        assert not np.any(roi_exclusion_mask(selected.shape, cfg)[pixels[:, 1], pixels[:, 0]])
+
+
+def test_client_rejects_a_server_that_ignores_the_camera_body_exclusion(endpoint):
+    url, service = endpoint
+    process = service.process
+    def ignore_body(request):
+        request['local_config']['road_roi_exclusion_polygon'] = None
+        return process(request)
+    service.process = ignore_body
+    selected = np.zeros((360, 640), np.uint8)
+    selected[:, 500:625] = 1
+    client = ConnectomeClient(url, camera_body_config())
+    assert all(v is None for v in invoke(client, selected).values())
+    assert 'violates selected surface' in client.metrics['detail']
+
+
+def test_body_exclusion_preserves_projection_and_other_modes():
+    cfg = camera_body_config()
+    effective = path_config_for_mode(cfg, 1)
+    unmasked = path_config_for_mode(replace(cfg, road_roi_exclusion_polygon=None), 1)
+    np.testing.assert_array_equal(pixel_to_ground_homography((360, 640), effective),
+                                  pixel_to_ground_homography((360, 640), unmasked))
+    assert roi_exclusion_mask((360, 640), effective)[240, 560] == 1
+    assert roi_exclusion_mask((360, 640), effective)[359, 560] == 0
+    assert path_config_for_mode(effective, 1) == effective
+    selected = np.ones((360, 640), np.uint8)
+    selected[:, 400:] = 2
+    hazard = np.zeros_like(selected)
+    before = SurfacePlanner().plan(selected, hazard, replace(cfg, road_roi_exclusion_polygon=None), PlannerConfig(), FLOW)
+    after = SurfacePlanner().plan(selected, hazard, cfg, PlannerConfig(), FLOW)
+    assert after['0'] == before['0'] and after['2'] == before['2']
 
 
 def test_narrow_surface_and_close_full_width_hazard_stop():

@@ -12,7 +12,7 @@ import numpy as np
 
 from connectome_server import MAX_BODY, SCHEMA, encode_image
 from connectome_surface import PlannerConfig, SurfaceArea
-from local_path import LocalPathEstimate, SmoothedPath
+from local_path import LocalPathEstimate, SmoothedPath, path_config_for_mode
 
 
 def reference_stop_reason(path, ready, ages, max_age):
@@ -34,21 +34,35 @@ class ConnectomeClient:
         self.session, self.generation, self.union_surface = uuid.uuid4().hex, None, None
         self.metrics = {'backend': 'connectome', 'ready': False, 'reason': 'connectome_waiting'}
 
-    def plan(self, frame_bgr, selected, hazard, stamp, generation, sequence):
+    def plan(self, frame_bgr, selected, hazard, stamp, generation, sequence, *, modes=(0, 1, 2), union_surface=None, building=None):
+        if not modes or any(type(mode) is not int or mode not in (0, 1, 2) for mode in modes):
+            raise ValueError('requested modes must contain 0, 1 or 2')
         if generation != self.generation:
             self.generation, self.union_surface = generation, None
+        if union_surface is not None:
+            if type(union_surface) is not int or union_surface not in (1, 2) or 0 not in modes:
+                raise ValueError('a pinned union surface requires Mode 0 and surface 1 or 2')
+            if self.union_surface not in (None, union_surface):
+                raise ValueError('union surface cannot change within a task')
+            self.union_surface = union_surface
         stream = f'{self.session}:{generation}'
         identity = f'{stream}:{sequence}'
         started = time.monotonic()
         try:
             frame = cv2.resize(frame_bgr, (selected.shape[1], selected.shape[0]))
             payload = {'schema': SCHEMA, 'stream_id': stream, 'request_id': identity, 'stamp_sec': stamp,
+                       'requested_modes': list(modes),
+                       'union_surface': self.union_surface if 0 in modes else None,
                        'local_config': asdict(self.local), 'planner_config': asdict(self.config),
                        # Flyvis's first operation is this exact conversion.
                        # Lossless mono PNG avoids sending unused colour planes.
                        'image_png': encode_image(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)),
                        'selected_png': encode_image(selected.astype(np.uint8)),
                        'hazard_png': encode_image(np.asarray(hazard, np.uint8))}
+            if 1 in modes and building is not None:
+                if np.shape(building) != selected.shape or not np.isin(building, [0, 1]).all():
+                    raise ValueError('aligned binary building mask required')
+                payload['building_png'] = encode_image(np.asarray(building, np.uint8))
             data = json.dumps(payload, allow_nan=False).encode()
             if len(data) > MAX_BODY:
                 raise ValueError('planner request too large')
@@ -62,31 +76,42 @@ class ConnectomeClient:
                     or reply.get('stream_id') != stream or reply.get('stamp_sec') != stamp):
                 raise ValueError('planner response does not match camera/task frame')
             model = reply['model']
+            if ('building_png' in payload and self.config.road_building_cost_weight
+                    and reply.get('building_cost_applied') is not True):
+                raise ValueError('planner does not support requested building cost')
             if (model.get('backend') != 'flyvis' or model.get('pretrained_task') != 'optical_flow'
                     or model.get('flow_decoder_loaded') is not True
                     or len(model.get('bundle_sha256', '')) != 64):
                 raise ValueError('pretrained Flyvis inference required; no planner fallback')
-            areas = {surface: SurfaceArea(selected, hazard, surface, self.local, self.config) for surface in (1, 2)}
-            if self.union_surface is None:
+            common_surfaces = {1, 2} if 0 in modes else ({2} if 2 in modes else set())
+            areas = {surface: SurfaceArea(selected, hazard, surface, self.local, self.config)
+                     for surface in common_surfaces}
+            road_local = path_config_for_mode(self.local, 1)
+            road_area = None
+            if 1 in modes:
+                road_area = areas.get(1) if road_local == self.local and building is None else None
+                if road_area is None:
+                    road_area = SurfaceArea(selected, hazard, 1, road_local, self.config, building=building)
+            if 0 in modes and self.union_surface is None:
                 available = [(a.seed_distance, -s, s) for s, a in areas.items() if len(a.rows)]
                 if available:
                     self.union_surface = min(available)[2]
-            estimates = {}
-            for mode in (0, 1, 2):
+            estimates = {mode: None for mode in (0, 1, 2)}
+            for mode in modes:
                 path = reply['paths'][str(mode)]
                 if path is None:
                     estimates[mode] = None
                     continue
                 surface = self.union_surface if mode == 0 else mode
                 points = np.asarray(path['points_xy'], np.float32)
-                if surface is None or path['surface_class'] != surface or not areas[surface].accepts(points):
+                area = road_area if mode == 1 else areas.get(surface)
+                if area is None or path['surface_class'] != surface or not area.accepts(points):
                     raise ValueError('planner path violates selected surface, centre or fresh mask')
                 confidence = float(path['confidence'])
                 if not math.isfinite(confidence) or not 0 < confidence <= 1:
                     raise ValueError('invalid planner confidence')
                 # Geometry metadata also comes from our own current mask,
                 # rather than trusting arbitrary remote confidence/width data.
-                area = areas[surface]
                 rows = np.asarray(area.rows)
                 visible = (area.xs[rows] >= points[0, 0]-1e-5) & (area.xs[rows] <= points[-1, 0]+1e-5)
                 ratio = float(np.count_nonzero(visible)/len(area.xs))
@@ -97,6 +122,12 @@ class ConnectomeClient:
                 raise TimeoutError('planner roundtrip budget exceeded; discard late response')
             self.metrics = {'backend': 'connectome', 'ready': True, 'reason': 'ok', 'model': model,
                             'union_surface': self.union_surface,
+                            'road_corridor': {'smoothing_m': self.config.road_corridor_smoothing_m,
+                                              'center_band_half_width_m': self.config.max_center_offset_m},
+                            'road_building': {'weight': self.config.road_building_cost_weight,
+                                              'distance_m': self.config.road_building_distance_m,
+                                              'mask_received': 'building_png' in payload,
+                                              'contact_count': len(road_area.building_contacts) if road_area is not None else 0},
                             'timing': reply.get('timing', {}),
                             'roundtrip_ms': (time.monotonic()-started)*1000}
             return estimates

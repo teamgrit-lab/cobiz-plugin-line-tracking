@@ -324,6 +324,30 @@ def test_manhole_mapping_and_other_r50_groups(
     )
 
 
+def test_building_plane_is_current_frame_and_does_not_change_surface_labels(monkeypatch, checkpoint):
+    _fake_hf_loaders(monkeypatch, checkpoint)
+    segmenter = runtime.BestSoFarSegmenter(runtime.BestSoFarConfig(
+        profile=PROFILE, model_id=str(checkpoint.path), device="cpu"))
+    labels = segmenter.model.config.id2label
+    road = next(k for k, v in labels.items() if v == 'Road')
+    building = next(k for k, v in labels.items() if v == 'Building')
+    scores = torch.zeros((65, 32, 48)); scores[road] = 2.
+    scores[building, :16, :24] = 4.
+    monkeypatch.setattr(segmenter, '_semantic_scores', lambda *_a, **_k: scores)
+    image = np.zeros((32,48,3), np.uint8)
+    result = segmenter.segment(image, detect_road_hazards=True)
+    assert result.road_building_mask[:16,:24].all()
+    assert not result.road_building_mask[16:].any()
+    segmenter.reset()
+    plain = segmenter.segment(image)
+    np.testing.assert_array_equal(result.selected_mask, plain.selected_mask)
+    assert plain.road_building_mask is None
+    # A disappearing Building must not be kept alive by the surface EMA.
+    scores[building] = 0.
+    result = segmenter.segment(image, detect_road_hazards=True)
+    assert not result.road_building_mask.any()
+
+
 @pytest.mark.parametrize("profile", [PROFILE, runtime.R50_PROFILE])
 def test_shell_rejects_wrong_r50_backend_before_ros_setup(profile):
     result = subprocess.run(

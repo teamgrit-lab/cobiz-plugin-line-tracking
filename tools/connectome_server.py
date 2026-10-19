@@ -52,6 +52,11 @@ class PlannerService:
             raise ValueError('finite source timestamp required')
         local_values = dict(request['local_config'])
         local_values['roi_polygon'] = tuple(local_values['roi_polygon'])
+        if local_values.get('road_roi_polygon') is not None:
+            local_values['road_roi_polygon'] = tuple(local_values['road_roi_polygon'])
+        for key in ('roi_exclusion_polygon', 'road_roi_exclusion_polygon'):
+            if local_values.get(key) is not None:
+                local_values[key] = tuple(local_values[key])
         local = LocalPathConfig(**local_values)
         local.validate()
         if (local.bev_width_px > 512 or local.bev_height_px > 256
@@ -59,10 +64,18 @@ class PlannerService:
                 or not .1 <= local.search_half_width_m <= 10 or local.far_distance_m > 20):
             raise ValueError('planner geometry exceeds bounded grid')
         config = PlannerConfig(**request['planner_config']); config.validate()
+        modes = request.get('requested_modes', [0, 1, 2])
+        if (not isinstance(modes, list) or not modes or len(modes) > 3
+                or any(type(mode) is not int or mode not in (0, 1, 2) for mode in modes)
+                or len(set(modes)) != len(modes)):
+            raise ValueError('requested_modes must be distinct path modes 0, 1 or 2')
         signature = json.dumps([local_values, request['planner_config']], sort_keys=True)
         frame = decode_image(request['image_png'], cv2.IMREAD_COLOR)
         selected = decode_image(request['selected_png'], cv2.IMREAD_GRAYSCALE)
         hazard = decode_image(request['hazard_png'], cv2.IMREAD_GRAYSCALE)
+        building = decode_image(request['building_png'], cv2.IMREAD_GRAYSCALE) if 'building_png' in request else None
+        if building is not None and (building.shape != selected.shape or not np.isin(building, [0, 1]).all()):
+            raise ValueError('aligned binary building mask required')
         if frame.shape[:2] != selected.shape or hazard.shape != selected.shape or not np.isin(selected, [0, 1, 2]).all():
             raise ValueError('aligned original image and road/sidewalk labels required')
         if request['stream_id'] != self.stream:
@@ -70,13 +83,20 @@ class PlannerService:
             self.stream, self.last_stamp, self.signature = request['stream_id'], None, signature
         if signature != self.signature:
             raise ValueError('geometry cannot change within a camera/task stream')
+        surface = request.get('union_surface')
+        if surface is not None:
+            if type(surface) is not int or surface not in (1, 2) or 0 not in modes:
+                raise ValueError('a pinned union surface requires Mode 0 and surface 1 or 2')
+            if self.planner.union_surface not in (None, surface):
+                raise ValueError('union surface cannot change within a camera/task stream')
+            self.planner.union_surface = surface
         if self.last_stamp is not None and stamp <= self.last_stamp:
             raise ValueError('duplicate/backwards camera stamp')
         started = time.perf_counter()
         try:
             flow = self.encoder.advance(frame, stamp)
             flow_finished = time.perf_counter()
-            paths = self.planner.plan(selected, hazard, local, config, flow)
+            paths = self.planner.plan(selected, hazard, local, config, flow, modes=tuple(modes), building=building)
         except Exception:
             # A flow interruption does not authorize Mode 0 to switch surface.
             self.encoder.reset(); self.last_stamp = None
@@ -84,6 +104,7 @@ class PlannerService:
         self.last_stamp = stamp
         return {'schema': SCHEMA, 'request_id': request['request_id'], 'stream_id': self.stream,
                 'stamp_sec': stamp, 'paths': paths, 'model': dict(self.encoder.details),
+                'building_cost_applied': 1 in modes and building is not None and config.road_building_cost_weight > 0,
                 'timing': {'flow_ms': (flow_finished-started)*1000,
                            'surface_ms': (time.perf_counter()-flow_finished)*1000}}
 

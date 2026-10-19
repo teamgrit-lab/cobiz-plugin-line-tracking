@@ -1,9 +1,11 @@
 # Odom/IMU로 촬영 이후 이동을 보정하는 경로 추종
 
-`LINE_TRACKING_MOTION_ENABLED=true`는 connectome의 검증된 표면 경로를 현재
+`LINE_TRACKING_MOTION_ENABLED=true`는 노면별로 선택된 경로를 현재
 몸체 좌표로 보정하고 기본 20Hz로 상위 속도 명령을 다시 계산한다. Mode 0·1·2에
 동일하게 적용한다. 새 영상/장애물 관측을 20Hz로 만드는 기능은 아니다.
-기존 local planner 및 MCAP 모드에는 적용하지 않으며 기본값은 꺼짐이다.
+`LINE_TRACKING_PATH_PLANNER=connectome` 분리 설정에서 차도는 검증된 커넥톰 경로,
+인도는 기존 로컬 피팅·평활화 경로를 보정한다. 인도 보정은 차도 서버 응답을 요구하지 않는다.
+전체 로컬 설정(`LINE_TRACKING_PATH_PLANNER=local`) 및 MCAP에는 적용하지 않으며 기본값은 꺼짐이다.
 
 ## 입력과 좌표
 

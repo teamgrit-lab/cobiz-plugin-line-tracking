@@ -1580,7 +1580,11 @@ def run_ros2(args: argparse.Namespace) -> int:
 
         def publish_state(self) -> None:
             try:
-                self._publish_state()
+                # A frame commit must not appear in telemetry halfway through
+                # issuing a command based on the previous reference. Use the
+                # existing reentrant lock for one control/publication snapshot.
+                with state_lock:
+                    self._publish_state()
             except Exception as error:  # noqa: BLE001 - stop on any timer fault.
                 try:
                     self.publish_drive(DriveDecision.stop("publish_error"))

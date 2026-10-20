@@ -88,10 +88,13 @@ def test_perception_child_routes_sidewalk_without_any_http(monkeypatch):
         def __init__(self, **_kwargs): pass
         def plan(self, *_args, **_kwargs): pytest.fail('sidewalk reached Connectome HTTP')
     monkeypatch.setattr(connectome_client, 'ConnectomeClient', Client)
+    segment_calls = []
+    def segment(_frame, **kwargs):
+        segment_calls.append(kwargs)
+        return NS(selected_mask=strip(surface=2), road_hazard_mask=np.zeros((360, 640), np.uint8))
     monkeypatch.setattr(best_so_far_runtime, 'BestSoFarSegmenter', lambda _cfg: NS(
         device=NS(type='cpu'), reset=lambda: None,
-        segment=lambda *_a, **_k: NS(selected_mask=strip(surface=2),
-                                    road_hazard_mask=np.zeros((360, 640), np.uint8))))
+        segment=segment))
     packets = iter([{'reset': True, 'rgb': np.zeros((360, 640, 3), np.uint8),
                      'stamp': 1., 'generation': 0, 'sequence': 7, 'mode': 2}, None])
     replies = []
@@ -101,3 +104,4 @@ def test_perception_child_routes_sidewalk_without_any_http(monkeypatch):
     assert 'error' not in replies[1]
     assert replies[1]['planner']['backend'] == 'local'
     assert replies[1]['estimates'][2] is not None
+    assert segment_calls == [{'color_order': 'rgb', 'detect_road_hazards': True, 'path_mask_class': 2}]

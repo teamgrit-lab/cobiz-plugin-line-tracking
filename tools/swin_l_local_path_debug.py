@@ -714,7 +714,8 @@ def run_mcap(args):
                 overlay = segmenter.render_overlay(frame, result.selected_mask, frame_index=count, fps=args.output_fps)
             else:
                 if args.unrestricted_path_mode or now >= next_inference:
-                    result = segmenter.segment(frame, detect_road_hazards=True) if planner else segmenter.segment(frame)
+                    result = segmenter.segment(frame, detect_road_hazards=planner is not None,
+                                               path_mask_class=args.path_mask_class)
                     previous_mask = result.selected_mask
                     if planner:
                         estimates = planner.plan(frame, previous_mask, result.road_hazard_mask,
@@ -1936,7 +1937,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         continue
                     requested_mode = active_path_mask_class(
                         node.tasks.active if node.tasks else None, args.path_mask_class)
-                kwargs = {"color_order": "rgb"}
+                kwargs = {"color_order": "rgb", "path_mask_class": requested_mode}
                 if planner:
                     kwargs['detect_road_hazards'] = True
                 if args.inference_process:

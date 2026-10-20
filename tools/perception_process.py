@@ -29,7 +29,8 @@ def perception_worker(pipe, config, planner_values):
             if request is None: break
             if request['reset']: model.reset()
             started = time.monotonic()
-            result = model.segment(request['rgb'], color_order='rgb', detect_road_hazards=True)
+            result = model.segment(request['rgb'], color_order='rgb', detect_road_hazards=True,
+                                   path_mask_class=request['mode'])
             segmented = time.monotonic()
             estimates = planner.plan(cv2.cvtColor(request['rgb'], cv2.COLOR_RGB2BGR),
                 result.selected_mask, result.road_hazard_mask,

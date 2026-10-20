@@ -72,6 +72,7 @@ R50_FINETUNED_ROAD_LABELS = R50_ROAD_LABELS + ("Manhole",)
 R50_FINETUNED_SIDEWALK_LABELS = tuple(
     label for label in R50_SIDEWALK_LABELS if label != "Manhole"
 )
+CROSSWALK_LABELS = ("Crosswalk - Plain", "Lane Marking - Crosswalk")
 R50_MAXIMUM_ROAD_ISLAND_AREA = 2560
 R50_MINIMUM_SIDEWALK_RING_RATIO = 0.10
 ROAD_ISLAND_ACTIONS = ("drop", "reassign-sidewalk")
@@ -422,6 +423,7 @@ class BestSoFarSegmenter:
             self.minimum_sidewalk_ring_ratio = 0.0
         self.road_ids = resolve_ids(id2label, self.road_labels)
         self.sidewalk_ids = resolve_ids(id2label, self.sidewalk_labels)
+        self.crosswalk_ids = resolve_ids(id2label, CROSSWALK_LABELS)
         self.road_hazard_ids = tuple(int(k) for k, v in id2label.items() if str(v).casefold() in ('vegetation', 'curb'))
         self.road_building_ids = tuple(int(k) for k, v in id2label.items() if str(v).casefold() == 'building')
         self.pedestrian_area_id = resolve_ids(id2label, ("Pedestrian Area",))[0]
@@ -429,6 +431,7 @@ class BestSoFarSegmenter:
         self._previous_scores: torch.Tensor | None = None
         self._previous_selected: np.ndarray | None = None
         self._surface_lookup: torch.Tensor | None = None
+        self._crosswalk_as_sidewalk = False
         self._cuda_replay = None
         if config.cuda_graph and self.device.type != 'cuda':
             raise ValueError('CUDA replay requires a CUDA model device')
@@ -605,6 +608,8 @@ class BestSoFarSegmenter:
         selected = aggregated_selected_mask(
             smooth_map, road_ids=self.road_ids, sidewalk_ids=self.sidewalk_ids
         )
+        if getattr(self, '_crosswalk_as_sidewalk', False):
+            selected[np.isin(smooth_map, self.crosswalk_ids)] = 2
         selected = self._expand_road_into_pedestrian_area(selected, smooth_map)
         hold_ratio = 0.0
         if self._previous_selected is not None and self.temporal_hysteresis_margin > 0.0:
@@ -645,6 +650,8 @@ class BestSoFarSegmenter:
             lookup = torch.zeros(smooth_scores.shape[0], dtype=torch.uint8)
             lookup[self.road_ids] = 1
             lookup[self.sidewalk_ids] = 2
+            if getattr(self, '_crosswalk_as_sidewalk', False):
+                lookup[self.crosswalk_ids] = 2
             self._surface_lookup = lookup.to(smooth_scores.device)
         selected = self._surface_lookup[class_map]
 
@@ -680,9 +687,14 @@ class BestSoFarSegmenter:
 
     @torch.inference_mode()
     def segment(
-        self, frame: np.ndarray, *, color_order: str = "bgr", detect_road_hazards: bool = False
+        self, frame: np.ndarray, *, color_order: str = "bgr", detect_road_hazards: bool = False,
+        path_mask_class: int | None = None,
     ) -> BestSoFarResult:
-        """Segment a BGR image, or native RGB from the live camera worker."""
+        """Segment BGR/native RGB; explicit Mode 2 groups crosswalks as sidewalk.
+
+        Modes 0/1 and callers without a path mode retain the original grouping.
+        This changes surface policy only, without changing model weights.
+        """
 
         # This guard must run in the calling worker thread. eval() alone does
         # not disable autograd in the hybrid model's PyTorch decoders, and the
@@ -691,6 +703,16 @@ class BestSoFarSegmenter:
             raise ValueError("color_order must be 'bgr' or 'rgb'")
         if frame.ndim != 3 or frame.shape[2] != 3:
             raise ValueError("frame must be an HxWx3 image")
+
+        if path_mask_class not in (None, 0, 1, 2):
+            raise ValueError('path_mask_class must be 0, 1, 2 or None')
+        crosswalk_as_sidewalk = path_mask_class == 2
+        if crosswalk_as_sidewalk != getattr(self, '_crosswalk_as_sidewalk', False):
+            # Semantic scores can keep their EMA: only the surface policy has
+            # changed. Old surface hysteresis must not undo the new grouping.
+            self._previous_selected = None
+            self._surface_lookup = None
+            self._crosswalk_as_sidewalk = crosswalk_as_sidewalk
 
         total_started = time.perf_counter()
         scores = self._semantic_scores(frame, color_order=color_order)
@@ -783,6 +805,8 @@ class BestSoFarSegmenter:
                 "surface_aggregate": True,
                 "road_labels": list(self.road_labels),
                 "sidewalk_labels": list(self.sidewalk_labels),
+                "mode2_sidewalk_labels": list(self.sidewalk_labels + CROSSWALK_LABELS),
+                "crosswalk_as_sidewalk": self._crosswalk_as_sidewalk,
                 "model_input_size": [
                     self.profile.input_height,
                     self.profile.input_width,

@@ -32,7 +32,7 @@ def test_sidewalk_stop_spin_nav2_and_road_reuse_one_real_worker(monkeypatch):
             segment=lambda _frame, **kwargs: SimpleNamespace(
                 selected_mask=np.full((360, 640), kwargs["path_mask_class"], np.uint8), inference_seconds=.01))
     monkeypatch.setattr(debug, "BestSoFarSegmenter", load)
-    core = navigation.SurfaceCoordinator()
+    core = navigation.SurfaceCoordinator(navigation.SurfaceConfig(direct_approach_enabled=False))
     events, status_count = [], 0
 
     def goal(req_id, mode, start, end, **extra):
@@ -135,7 +135,8 @@ def test_legacy_sidewalk_spin_nav2_road_and_legacy_share_one_model(monkeypatch):
         return module
     navigation = load_module("surface_navigation_core", directory / "surface_navigation_core.py")
     ownership = load_module("integration_standalone_core", directory / "standalone_control_core.py")
-    control, core = ownership.StandaloneArbiter(0.), navigation.SurfaceCoordinator()
+    control = ownership.StandaloneArbiter(0.)
+    core = navigation.SurfaceCoordinator(navigation.SurfaceConfig(direct_approach_enabled=False))
     ros = RosHarness(monkeypatch)
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "false")
@@ -245,6 +246,104 @@ def test_legacy_sidewalk_spin_nav2_road_and_legacy_share_one_model(monkeypatch):
         assert json.loads(ros.published["/api/sport/request"][-1].parameter)["x"] > 0
         assert len(loads) == 1
 
+    ros.rclpy.spin = scenario
+    assert debug.run_ros2(debug.parse_args(["navigation-worker", "--inference-hz", "1000"])) == 0
+    assert not ros.errors
+
+
+@pytest.mark.skipif(not os.environ.get("TEAMGRIT_NAVIGATION_SOURCE"), reason="requires navigation checkout")
+def test_waypoint_capture_stops_real_worker_before_direct_approach_and_next_road_leg(monkeypatch):
+    directory = Path(os.environ["TEAMGRIT_NAVIGATION_SOURCE"]) / "nav/src/cobiz/scripts"
+    def load_module(name):
+        spec = importlib.util.spec_from_file_location(name, directory / (name+".py"))
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, name, module)
+        spec.loader.exec_module(module)
+        return module
+    navigation = load_module("surface_navigation_core")
+    heading_module = load_module("heading_control_core")
+    approach_module = load_module("approach_control_core")
+    core = navigation.SurfaceCoordinator()
+    heading = heading_module.HeadingControl([.445, .253, .445, -.253, -.383, -.253, -.383, .253])
+    approach = approach_module.ApproachControl(heading)
+    ros = RosHarness(monkeypatch)
+    loads = []
+    def model(_config):
+        loads.append(True)
+        return SimpleNamespace(device=SimpleNamespace(type="cuda"), reset=lambda: None,
+            segment=lambda _frame, **kw: SimpleNamespace(
+                selected_mask=np.full((360, 640), kw["path_mask_class"], np.uint8), inference_seconds=.01))
+    monkeypatch.setattr(debug, "BestSoFarSegmenter", model)
+    events, count = [], 0
+    def transport():
+        nonlocal count
+        while True:
+            for channel, body in core.drain():
+                if channel == "line":
+                    ros.node.on_navigation_command(SimpleNamespace(data=json.dumps(body)))
+                elif channel == "direct":
+                    approach.begin(core.session, (body["target_x"], body["target_y"]), body["radius"],
+                                   body["confirm_s"], body["timeout_s"], ros.now)
+                else:
+                    events.append((channel, body))
+            statuses = ros.published["/line_tracking/segment_status"]
+            for message in statuses[count:]:
+                core.line_status(json.loads(message.data), ros.now, ros.clock_ns()/1e9)
+            count = len(statuses)
+            if not core.events:
+                return
+    def tick(now, pose):
+        ros.now = now
+        stamp = ros.clock_ns()/1e9
+        core.update_pose(pose, stamp)
+        core.lease(dict(req_id=core.goal["req_id"], execution_session="ingress", stamp_sec=stamp), now, stamp)
+        core.tick(now, stamp)
+        transport()
+        heading.update_cloud([], stamp, pose)
+        return stamp
+    def scenario(node):
+        core.update_pose((0., 0., 0., 0.), 100.)
+        core.start(dict(req_id=1, execution_session="ingress", Mode="sidewalk", frame="prior_map",
+            goal_checker_id="waypoint_goal_checker", next_target=dict(x=9.85, y=10.),
+            waypoints=[dict(x=10., y=0., z=0., yaw=0.)]), 0., 100.)
+        transport()
+        ros.camera_ready()
+        node.publish_state()
+        transport()
+        assert core.phase == "LINE_ACTIVE" and node.navigation.active is not None
+        tick(.1, (9.05, 0., 0., 0.))
+        assert core.phase == "DIRECT_ACTIVE" and node.navigation.active is None
+        assert not core.allow("line", .1, 100.1)
+        stamp = tick(.2, (9.05, 0., 0., 0.))
+        speed, rate, terminal = approach.tick(core.pose, stamp, ros.now, stamp)
+        assert 0 < speed <= .3 and rate == 0 and terminal is None
+        stamp = tick(.3, (9.85, 0., 0., 0.))
+        assert approach.tick(core.pose, stamp, ros.now, stamp) == (0., 0., None)
+        stamp = tick(.65, (9.85, 0., 0., 0.))
+        assert approach.tick(core.pose, stamp, ros.now, stamp)[2] == "REACHED"
+        core.direct_result(core.session, True, ros.now, stamp)
+        transport()
+        assert core.phase == "SPIN_START" and core.spin_yaw == pytest.approx(math.pi/2)
+        heading.begin(core.session, core.spin_yaw, core.pose, ros.now)
+        core.spin_accepted(core.session, True, ros.now, stamp)
+        stamp = tick(.75, (9.85, 0., 0., math.pi/2))
+        assert heading.tick(core.pose, stamp, ros.now, stamp)[1] is None
+        stamp = tick(1.1, (9.85, 0., 0., math.pi/2))
+        assert heading.tick(core.pose, stamp, ros.now, stamp)[1] == "REACHED"
+        core.spin_result(core.session, True, ros.now, stamp)
+        transport()
+        assert core.goal is None
+        core.start(dict(req_id=2, execution_session="ingress", Mode="road", frame="prior_map",
+            goal_checker_id="waypoint_goal_checker",
+            waypoints=[dict(x=9.85, y=10., z=0., yaw=math.pi/2)]), ros.now, stamp)
+        transport()
+        ros.camera_ready()
+        node.publish_state()
+        transport()
+        assert core.phase == "LINE_ACTIVE" and node.navigation.active["selected_mask"] == 1
+        assert len(loads) == 1
+        assert not any(channel == "nav2_goal" for channel, _ in events)
+        assert "/api/sport/request" not in ros.published and not ros.published["/task_state"]
     ros.rclpy.spin = scenario
     assert debug.run_ros2(debug.parse_args(["navigation-worker", "--inference-hz", "1000"])) == 0
     assert not ros.errors

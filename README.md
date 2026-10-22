@@ -2,7 +2,9 @@
 
 For waypoint-controlled execution from `teamgrit-navigation`, use the new
 [`navigation-worker` integration](docs/navigation.md). It reuses this engine and
-publishes leased internal commands instead of direct Sport requests or Cobiz task state.
+publishes leased internal commands for Navigation segments. The same worker also accepts
+standalone `LINE_TRACKING` tasks with their existing Sport/task lifecycle after acquiring
+exclusive control from Navigation; the model stays loaded across both task types.
 
 Optional R50-mask + pretrained Flyvis centre-path generation is documented in
 [docs/connectome.md](docs/connectome.md). Its separate planner service returns

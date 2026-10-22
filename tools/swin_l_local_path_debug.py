@@ -75,6 +75,7 @@ from cobiz_line_tracking_task import (
 from connectome_client import ConnectomeClient, ConnectomePathTracker, reference_stop_reason
 from connectome_surface import PlannerConfig
 from navigation_segment import NavigationSegment
+from standalone_control import StandaloneControl
 from evaluate_mapillary_temporal import upscale_mask
 from lidar_common import (
     CALIBRATION_PROFILES, DEFAULT_IMU_TOPIC, DEFAULT_LIDAR_TOPIC,
@@ -892,14 +893,23 @@ def run_ros2(args: argparse.Namespace) -> int:
 
     navigation_mode = args.mode == "navigation-worker"
     task_mode = args.mode in ("task-drive", "navigation-worker")
+    legacy_flags = ({"stop_on_" + name: getattr(args, "stop_on_" + name)
+                     for name in AUTOMATIC_STOP_CHECKS} if task_mode else {})
+    if task_mode:
+        legacy_flags["path_loss_recovery_enabled"] = args.path_loss_recovery_enabled
+
+    def configure_flags(surface):
+        for name, value in legacy_flags.items():
+            setattr(args, name, value)
+        if surface:
+            for name in DRIVE_STOP_CHECKS:
+                setattr(args, "stop_on_" + name, True)
+            for name in (*TASK_STOP_CHECKS, "apriltag"):
+                setattr(args, "stop_on_" + name, False)
+            args.path_loss_recovery_enabled = False
+
     if navigation_mode:
-        # Internal segments must never complete on a tag/timer or retain blind
-        # straight/recovery commands. Navigation alone owns waypoint completion.
-        for name in DRIVE_STOP_CHECKS:
-            setattr(args, "stop_on_" + name, True)
-        for name in (*TASK_STOP_CHECKS, "apriltag"):
-            setattr(args, "stop_on_" + name, False)
-        args.path_loss_recovery_enabled = False
+        configure_flags(True)
     Request = None
     if task_mode:
         try:
@@ -1114,6 +1124,9 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             self.command_publisher = None
             self.navigation = NavigationSegment() if navigation_mode else None
+            self.standalone = StandaloneControl() if navigation_mode else None
+            self.pending_standalone_report = None
+            self.released_sport_publisher = None
             self.navigation_status_publisher = None
             if navigation_mode:
                 self.command_publisher = self.create_publisher(
@@ -1122,16 +1135,21 @@ def run_ros2(args: argparse.Namespace) -> int:
                     String, args.segment_status_topic, output_qos)
                 self.create_subscription(String, args.segment_command_topic,
                                          self.on_navigation_command, output_qos)
+                self.navigation_velocity_publisher = self.command_publisher
+                self.task_request_publisher = self.create_publisher(
+                    String, "/line_tracking/task_request", output_qos)
+                self.create_subscription(String, "/line_tracking/task_control",
+                                         self.on_task_control, output_qos)
             self.task_state_publisher = (
                 self.create_publisher(String, args.task_state_topic, output_qos)
-                if task_mode and not navigation_mode
+                if task_mode
                 else None
             )
             self.task_event_subscription = (
                 self.create_subscription(
                     String, args.task_event_topic, self.on_task_event, output_qos
                 )
-                if task_mode and not navigation_mode
+                if task_mode
                 else None
             )
             if task_mode:
@@ -1204,6 +1222,68 @@ def run_ros2(args: argparse.Namespace) -> int:
                     String(data=json.dumps(body, separators=(",", ":")))
                 )
 
+        def configure_worker_owner(self, surface):
+            configure_flags(surface)
+            self.drive_config = _drive_config_from_args(args)
+            self.path_search = PathLossRecovery(self.drive_config, output_hz=args.output_hz)
+            self.tasks.policy = replace(self.tasks.policy, **{
+                "stop_on_" + name: getattr(args, "stop_on_" + name) for name in TASK_STOP_CHECKS})
+
+        def request_task_control(self, command=None):
+            self.task_request_publisher.publish(String(data=json.dumps(
+                self.standalone.request(self.get_clock().now().nanoseconds / 1e9, command))))
+
+        def on_task_control(self, message):
+            try:
+                body = json.loads(message.data)
+            except (TypeError, ValueError):
+                return
+            with state_lock:
+                effect = self.standalone.receive(body, time.monotonic(),
+                                                self.get_clock().now().nanoseconds / 1e9)
+                if effect in ("REJECTED", "LOST"):
+                    self.abort_active_task(body.get("reason") or "standalone_control_lost")
+                elif effect == "START":
+                    try:
+                        self.configure_worker_owner(False)
+                        self.tasks.active = replace(self.tasks.active, started_at=time.monotonic())
+                        self.command_publisher = self.create_publisher(
+                            Request, args.sport_request_topic, self.command_qos)
+                        self.apriltags.begin_task(
+                            ids=self.latest_apriltag_ids if args.stop_on_apriltag else (),
+                            frame_key=self.latest_apriltag_frame_key, now=time.monotonic())
+                        if not self.publish_hard_stop("standalone_start"):
+                            raise RuntimeError("initial hard stop publication failed")
+                        self.set_task_inference(True)
+                        self.publish_task_state(self.pending_standalone_report)
+                        self.pending_standalone_report = None
+                    except Exception as error:
+                        self.get_logger().error(f"standalone control start failed: {error}")
+                        self.abort_active_task("control_publisher_error")
+
+        def on_shared_task_event(self, event, now):
+            releasing = self.released_sport_publisher is not None
+            rejection = ("navigation_segment_busy" if self.navigation.active is not None else
+                         "control_release_pending" if releasing else None)
+            previous = self.tasks.active
+            body = self.tasks.handle_event(event, now=now, rejection_reason=rejection)
+            if body is None:
+                return
+            if body["type"] == "TASK_STARTED":
+                self.set_task_inference(False)
+                self.apriltags.reset_task()
+                self.terminal_apriltag_status = None
+                self.apriltag_confirmed_range_m = None
+                self.apriltag_window_resolved_at = None
+                self.pending_standalone_report = body
+                self.standalone.begin(self.tasks.active.key, now)
+                self.request_task_control()
+                return
+            if previous is not None and self.tasks.active is None:
+                self.apriltags.reset_task()
+                self.release_task_control("task_aborted_by_server")
+            self.publish_task_state(body)
+
         def navigation_status(self, state, *, context=None, reason=""):
             context = context or self.navigation.active
             if context is not None:
@@ -1229,14 +1309,25 @@ def run_ros2(args: argparse.Namespace) -> int:
                 body = json.loads(message.data)
             except (ValueError, TypeError):
                 return
+            if not isinstance(body, dict):
+                return
             now = time.monotonic()
             with state_lock:
+                if (body.get("command") == "START" and
+                        (self.standalone.context is not None or self.released_sport_publisher is not None)):
+                    effect = NavigationSegment().handle(body, now=now,
+                        ros_now=self.get_clock().now().nanoseconds / 1e9)
+                    if effect is not None:
+                        self.navigation.remember(effect, "REJECTED", "standalone_task_busy")
+                        self.navigation_status("REJECTED", context=effect, reason="standalone_task_busy")
+                    return
                 effect = self.navigation.handle(body, now=now,
                     ros_now=self.get_clock().now().nanoseconds / 1e9)
                 if effect is None:
                     return
                 if effect["effect"] == "START":
                     self.set_task_inference(False)
+                    self.configure_worker_owner(True)
                     context = self.navigation.active
                     key = context["session_id"] + ":" + context["segment_id"]
                     self.tasks.active = ActiveTask(key, key, None, None, now,
@@ -1258,7 +1349,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         def publish_hard_stop(self, reason: str) -> bool:
             if self.command_publisher is None:
                 return True
-            if navigation_mode:
+            if navigation_mode and not (self.standalone.context and self.standalone.granted):
                 self.publish_zero_move(reason)
                 return True
             assert Request is not None
@@ -1289,6 +1380,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             body = self.tasks.finish("TASK_COMPLETED", reason)
             self.set_task_inference(False)
+            if navigation_mode:
+                self.release_task_control(reason)
             self.last_valid_yaw_rate = None
             self.last_valid_forward_mps = None
             if body is not None:
@@ -1385,18 +1478,29 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.set_task_inference(False)
             self.last_valid_yaw_rate = None
             self.last_valid_forward_mps = None
-            if self.command_publisher is not None:
+            if navigation_mode and self.standalone.context is not None:
+                self.publish_hard_stop(reason)
+                self.request_task_control("RELEASE")
+                if self.command_publisher is not self.navigation_velocity_publisher:
+                    self.released_sport_publisher = self.command_publisher
+                    self.stop_until = time.monotonic() + 1.0
+                self.command_publisher = self.navigation_velocity_publisher
+                self.standalone.close()
+                self.pending_standalone_report = None
+                self.configure_worker_owner(True)
+            elif self.command_publisher is not None:
                 self.publish_hard_stop(reason)
                 self.stop_until = time.monotonic() + 1.0
 
         def abort_active_task(self, reason: str) -> None:
-            if navigation_mode:
+            if navigation_mode and self.standalone.context is None:
                 self.stop_navigation_segment(reason, error=True)
                 return
             if self.tasks is None:
                 return
+            kind = "TASK_REJECTED" if self.pending_standalone_report is not None else "TASK_ABORTED"
             self.release_task_control(reason)
-            body = self.tasks.finish("TASK_ABORTED", reason)
+            body = self.tasks.finish(kind, reason)
             if body is not None:
                 self.apriltags.reset_task()
                 self.apriltag_window_resolved_at = None
@@ -1513,6 +1617,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.get_logger().warning("ignored malformed /task_event JSON")
                 return
             now = time.monotonic()
+            if navigation_mode:
+                with state_lock:
+                    self.on_shared_task_event(event, now)
+                return
             rejection_reason = None
             if self.command_publisher is not None and self.tasks.active is None:
                 rejection_reason = "control_release_pending"
@@ -1578,7 +1686,11 @@ def run_ros2(args: argparse.Namespace) -> int:
             if task_mode and not rclpy.ok():
                 # A callback interrupted by SIGTERM can resume after its stop.
                 decision = DriveDecision.stop("shutdown")
-            if navigation_mode and (self.navigation.active is None
+            standalone_ready = (navigation_mode and self.standalone.context is not None
+                                and self.standalone.granted)
+            if standalone_ready and not self.standalone.ready(time.monotonic()):
+                decision = DriveDecision.stop("standalone_control_lease_expired")
+            if navigation_mode and not standalone_ready and (self.navigation.active is None
                                     or self.navigation.expired(time.monotonic())):
                 decision = DriveDecision.stop("navigation_lease_expired")
             if planner and (decision.vx or decision.vy or decision.yaw_rate):
@@ -1615,7 +1727,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     time.monotonic(), self.get_clock().now().nanoseconds)
             assert Request is not None
             move = drive_to_sport_move(vx=decision.vx, vy=decision.vy, yaw_rate=decision.yaw_rate)
-            if navigation_mode:
+            if navigation_mode and not standalone_ready:
                 packet = self.navigation.velocity(move, stamp=self.get_clock().now().nanoseconds / 1e9)
                 if packet is not None:
                     self.command_publisher.publish(String(data=json.dumps(packet)))
@@ -1734,6 +1846,18 @@ def run_ros2(args: argparse.Namespace) -> int:
 
         def _publish_state(self) -> None:
             now = time.monotonic()
+            if navigation_mode:
+                if self.released_sport_publisher is not None:
+                    self.released_sport_publisher.publish(populate_move_request(
+                        Request(), drive_to_sport_move(vx=0, vy=0, yaw_rate=0)))
+                    if now >= self.stop_until:
+                        self.destroy_publisher(self.released_sport_publisher)
+                        self.released_sport_publisher = None
+                failure = self.standalone.failure(now)
+                if failure:
+                    self.abort_active_task(failure)
+                if self.standalone.context is not None:
+                    self.request_task_control()
             if navigation_mode and self.navigation.expired(now):
                 self.stop_navigation_segment("navigation_lease_expired", error=True)
             tag_status = None
@@ -1765,7 +1889,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                     if startup_hold
                     else ready_decision
                 )
-                if navigation_mode:
+                if navigation_mode and self.pending_standalone_report is not None:
+                    drive_decision = DriveDecision.stop("standalone_control_pending")
+                elif navigation_mode and self.standalone.context is None:
                     if task_active is not None:
                         drive_decision = self.publish_drive(drive_decision)
                         self.navigation_status(
@@ -1902,6 +2028,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "ready_reason": self.last_ready_reason if task_mode else None,
                 "task_active": self.tasks.active is not None if self.tasks else None,
                 "navigation_worker": navigation_mode,
+                "standalone_task_control": (dict(self.standalone.context,
+                    granted=self.standalone.granted) if self.standalone and self.standalone.context else None),
                 "navigation_segment": (self.navigation.identity(self.navigation.active)
                     if self.navigation and self.navigation.active else None),
                 "performance": performance,

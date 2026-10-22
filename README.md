@@ -1,5 +1,9 @@
 # cobiz-plugin-line-tracking
 
+For waypoint-controlled execution from `teamgrit-navigation`, use the new
+[`navigation-worker` integration](docs/navigation.md). It reuses this engine and
+publishes leased internal commands instead of direct Sport requests or Cobiz task state.
+
 Optional R50-mask + pretrained Flyvis centre-path generation is documented in
 [docs/connectome.md](docs/connectome.md). Its separate planner service returns
 validated paths; the existing line-tracking process remains the Sport API owner.

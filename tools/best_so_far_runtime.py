@@ -72,6 +72,7 @@ R50_FINETUNED_ROAD_LABELS = R50_ROAD_LABELS + ("Manhole",)
 R50_FINETUNED_SIDEWALK_LABELS = tuple(
     label for label in R50_SIDEWALK_LABELS if label != "Manhole"
 )
+CROSSWALK_LABELS = ("Crosswalk - Plain", "Lane Marking - Crosswalk")
 R50_MAXIMUM_ROAD_ISLAND_AREA = 2560
 R50_MINIMUM_SIDEWALK_RING_RATIO = 0.10
 ROAD_ISLAND_ACTIONS = ("drop", "reassign-sidewalk")
@@ -205,8 +206,11 @@ class BestSoFarConfig:
     tensorrt_engine_path: str | None = None
     tensorrt_manifest_path: str | None = None
     allow_backend_fallback: bool = False
+    cuda_graph: bool = False
 
     def validate(self) -> None:
+        if self.cuda_graph and (self.backend != 'pytorch' or self.profile not in R50_PROFILES):
+            raise ValueError('CUDA replay supports only the PyTorch R50 profiles')
         resolve_profile(
             self.profile,
             model_id=self.model_id,
@@ -271,6 +275,8 @@ class BestSoFarResult:
     hysteresis_hold_ratio: float
     road_area_ratio: float
     sidewalk_area_ratio: float
+    road_hazard_mask: np.ndarray | None = None
+    road_building_mask: np.ndarray | None = None
 
 
 def _changed_pixel_hysteresis_hold_mask(
@@ -417,11 +423,18 @@ class BestSoFarSegmenter:
             self.minimum_sidewalk_ring_ratio = 0.0
         self.road_ids = resolve_ids(id2label, self.road_labels)
         self.sidewalk_ids = resolve_ids(id2label, self.sidewalk_labels)
+        self.crosswalk_ids = resolve_ids(id2label, CROSSWALK_LABELS)
+        self.road_hazard_ids = tuple(int(k) for k, v in id2label.items() if str(v).casefold() in ('vegetation', 'curb'))
+        self.road_building_ids = tuple(int(k) for k, v in id2label.items() if str(v).casefold() == 'building')
         self.pedestrian_area_id = resolve_ids(id2label, ("Pedestrian Area",))[0]
         self.model_load_seconds = time.perf_counter() - load_started
         self._previous_scores: torch.Tensor | None = None
         self._previous_selected: np.ndarray | None = None
         self._surface_lookup: torch.Tensor | None = None
+        self._crosswalk_as_sidewalk = False
+        self._cuda_replay = None
+        if config.cuda_graph and self.device.type != 'cuda':
+            raise ValueError('CUDA replay requires a CUDA model device')
 
     def _load_pytorch_model(self) -> Any:
         if self.profile.name == FINETUNED_PROFILE:
@@ -490,6 +503,11 @@ class BestSoFarSegmenter:
             inputs = self._move_inputs({"pixel_values": inputs["pixel_values"]})
             return self.tensorrt_backend.semantic_scores(inputs["pixel_values"])
         inputs = self._move_inputs(inputs)
+        if getattr(self.config, 'cuda_graph', False):
+            from cuda_replay import CudaReplay
+            if self._cuda_replay is None:
+                self._cuda_replay = CudaReplay(self._r50_scores, inputs)
+            return self._cuda_replay(inputs)[0].detach()
         with torch.inference_mode():
             assert self.model is not None
             outputs = self.model(**inputs)
@@ -508,22 +526,19 @@ class BestSoFarSegmenter:
                 # Preserve the exact retained FP32 rollback behavior.
                 return scores.float().cpu()
 
-            class_probabilities = outputs.class_queries_logits.softmax(dim=-1)[..., :-1]
-            mask_probabilities = outputs.masks_queries_logits.sigmoid()
-            scores = torch.einsum(
-                "bqc,bqhw->bchw",
-                class_probabilities,
-                mask_probabilities,
-            )
-            scores = functional.interpolate(
-                scores,
-                size=self.evaluation_size,
-                mode="bilinear",
-                align_corners=False,
-            )
+            scores = self._r50_output_scores(outputs)
         # Keep R50 scores on MPS/CUDA. Only maps needed by CPU morphology are
         # transferred in segment(), avoiding a 65-channel copy per frame.
         return scores[0].detach()
+
+    def _r50_scores(self, inputs):
+        return self._r50_output_scores(self.model(**inputs))
+
+    def _r50_output_scores(self, outputs):
+        classes = outputs.class_queries_logits.softmax(dim=-1)[..., :-1]
+        masks = outputs.masks_queries_logits.sigmoid()
+        return functional.interpolate(torch.einsum('bqc,bqhw->bchw', classes, masks),
+            size=self.evaluation_size, mode='bilinear', align_corners=False)
 
     def _synchronize(self) -> None:
         if self.device.type == "mps":
@@ -593,6 +608,8 @@ class BestSoFarSegmenter:
         selected = aggregated_selected_mask(
             smooth_map, road_ids=self.road_ids, sidewalk_ids=self.sidewalk_ids
         )
+        if getattr(self, '_crosswalk_as_sidewalk', False):
+            selected[np.isin(smooth_map, self.crosswalk_ids)] = 2
         selected = self._expand_road_into_pedestrian_area(selected, smooth_map)
         hold_ratio = 0.0
         if self._previous_selected is not None and self.temporal_hysteresis_margin > 0.0:
@@ -633,6 +650,8 @@ class BestSoFarSegmenter:
             lookup = torch.zeros(smooth_scores.shape[0], dtype=torch.uint8)
             lookup[self.road_ids] = 1
             lookup[self.sidewalk_ids] = 2
+            if getattr(self, '_crosswalk_as_sidewalk', False):
+                lookup[self.crosswalk_ids] = 2
             self._surface_lookup = lookup.to(smooth_scores.device)
         selected = self._surface_lookup[class_map]
 
@@ -668,9 +687,14 @@ class BestSoFarSegmenter:
 
     @torch.inference_mode()
     def segment(
-        self, frame: np.ndarray, *, color_order: str = "bgr"
+        self, frame: np.ndarray, *, color_order: str = "bgr", detect_road_hazards: bool = False,
+        path_mask_class: int | None = None,
     ) -> BestSoFarResult:
-        """Segment a BGR image, or native RGB from the live camera worker."""
+        """Segment BGR/native RGB; explicit Mode 2 groups crosswalks as sidewalk.
+
+        Modes 0/1 and callers without a path mode retain the original grouping.
+        This changes surface policy only, without changing model weights.
+        """
 
         # This guard must run in the calling worker thread. eval() alone does
         # not disable autograd in the hybrid model's PyTorch decoders, and the
@@ -680,15 +704,37 @@ class BestSoFarSegmenter:
         if frame.ndim != 3 or frame.shape[2] != 3:
             raise ValueError("frame must be an HxWx3 image")
 
+        if path_mask_class not in (None, 0, 1, 2):
+            raise ValueError('path_mask_class must be 0, 1, 2 or None')
+        crosswalk_as_sidewalk = path_mask_class == 2
+        if crosswalk_as_sidewalk != getattr(self, '_crosswalk_as_sidewalk', False):
+            # Semantic scores can keep their EMA: only the surface policy has
+            # changed. Old surface hysteresis must not undo the new grouping.
+            self._previous_selected = None
+            self._surface_lookup = None
+            self._crosswalk_as_sidewalk = crosswalk_as_sidewalk
+
         total_started = time.perf_counter()
         scores = self._semantic_scores(frame, color_order=color_order)
         self._synchronize()
         inference_finished = time.perf_counter()
+        hazard = building = None
+        if detect_road_hazards:
+            # Current logits, before temporal EMA: new grass/curb evidence wins.
+            labels = scores.argmax(dim=0)
+            hazard_tensor = torch.zeros_like(labels, dtype=torch.bool)
+            for label in self.road_hazard_ids:
+                hazard_tensor |= labels == label
+            hazard = hazard_tensor.detach().cpu().numpy()
+            building_tensor = torch.zeros_like(labels, dtype=torch.bool)
+            for label in self.road_building_ids:
+                building_tensor |= labels == label
+            building = building_tensor.detach().cpu().numpy()
 
         if self._previous_scores is None:
             # TensorRT owns and reuses its output allocation. Keep temporal
             # state in a separate buffer so the next enqueue cannot overwrite it.
-            smooth_scores = scores.clone() if self.backend == "tensorrt" else scores
+            smooth_scores = scores.clone() if self.backend == "tensorrt" or getattr(self.config, 'cuda_graph', False) else scores
         else:
             smooth_scores = (
                 self.temporal_alpha * scores
@@ -715,6 +761,8 @@ class BestSoFarSegmenter:
         finished = time.perf_counter()
         return BestSoFarResult(
             selected_mask=selected,
+            road_hazard_mask=hazard,
+            road_building_mask=building,
             inference_seconds=inference_finished - total_started,
             postprocess_seconds=finished - inference_finished,
             total_seconds=finished - total_started,
@@ -757,6 +805,8 @@ class BestSoFarSegmenter:
                 "surface_aggregate": True,
                 "road_labels": list(self.road_labels),
                 "sidewalk_labels": list(self.sidewalk_labels),
+                "mode2_sidewalk_labels": list(self.sidewalk_labels + CROSSWALK_LABELS),
+                "crosswalk_as_sidewalk": self._crosswalk_as_sidewalk,
                 "model_input_size": [
                     self.profile.input_height,
                     self.profile.input_width,

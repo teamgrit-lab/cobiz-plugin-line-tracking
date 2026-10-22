@@ -28,9 +28,11 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
         def __init__(self, config):
             configurations.append(config)
 
-        def segment(self, frame):
+        def segment(self, frame, **kwargs):
             # The MCAP camera is RGB; the runtime must receive unmodified BGR.
             assert frame[0, 0].tolist() == [3, 2, 1]
+            if mode == 'local-path':
+                assert kwargs['path_mask_class'] == 2
             calls.append(frame)
             return SimpleNamespace(
                 selected_mask=np.full((360, 640), 2, np.uint8), total_seconds=0.01
@@ -210,7 +212,7 @@ def test_mcap_updates_obstacles_between_rate_limited_camera_inferences(tmp_path,
     base, _ = a2_livox_front_transforms("livox_frame", "base_link", "camera_optical_frame")
     calls = []
     monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _: SimpleNamespace(
-        segment=lambda frame: (calls.append(frame) or SimpleNamespace(
+        segment=lambda frame, **_kwargs: (calls.append(frame) or SimpleNamespace(
             selected_mask=np.full((360, 640), 2, np.uint8), total_seconds=.01)),
         metadata=lambda: {}))
     frames = []

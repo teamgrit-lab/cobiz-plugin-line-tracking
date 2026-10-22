@@ -51,6 +51,17 @@ DEFAULT_ROI_POLYGON = (
 )
 
 
+# Mode 1 widens the common trapezoid without entering the A2 handle envelope.
+# At 640x360 the right edge retains a five-pixel gap from that envelope.
+DEFAULT_ROAD_ROI_POLYGON = (0.07, 1.00, 0.93, 1.00, 0.68, 0.45, 0.32, 0.45)
+# Camera-mounted handle/decoration, including its motion envelope in the A2 video.
+# This is an image exclusion, never a replacement for the metric homography.
+DEFAULT_ROAD_ROI_EXCLUSION_POLYGON = (
+    0.68, 0.00, 1.00, 0.00, 1.00, 0.95, 0.96, 0.93, 0.91, 0.86,
+    0.84, 0.78, 0.79, 0.65, 0.73, 0.35,
+)
+
+
 @dataclass(frozen=True)
 class LocalPathConfig:
     """Camera-to-ground and local-path settings.
@@ -66,6 +77,9 @@ class LocalPathConfig:
     ground_half_width_m: float = 4.0
     search_half_width_m: float = 3.5
     roi_polygon: tuple[float, ...] = DEFAULT_ROI_POLYGON
+    road_roi_polygon: tuple[float, ...] | None = None
+    roi_exclusion_polygon: tuple[float, ...] = ()
+    road_roi_exclusion_polygon: tuple[float, ...] | None = None
     path_points: int = 20
     bev_width_px: int = 280
     bev_height_px: int = 160
@@ -94,10 +108,22 @@ class LocalPathConfig:
             raise ValueError("ground/search half widths must be positive")
         if self.search_half_width_m > self.ground_half_width_m:
             raise ValueError("search_half_width_m must not exceed ground_half_width_m")
-        if len(self.roi_polygon) != 8:
-            raise ValueError("roi_polygon must contain four normalized x/y points")
-        if any(value < 0.0 or value > 1.0 for value in self.roi_polygon):
-            raise ValueError("roi_polygon values must be normalized to [0, 1]")
+        for name in ("roi_polygon", "road_roi_polygon"):
+            polygon = getattr(self, name)
+            if polygon is None and name == "road_roi_polygon":
+                continue
+            if len(polygon) != 8:
+                raise ValueError(f"{name} must contain four normalized x/y points")
+            if any(not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in polygon):
+                raise ValueError(f"{name} values must be normalized to [0, 1]")
+        for name in ("roi_exclusion_polygon", "road_roi_exclusion_polygon"):
+            polygon = getattr(self, name)
+            if polygon is None and name == "road_roi_exclusion_polygon":
+                continue
+            if len(polygon) and (not 6 <= len(polygon) <= 64 or len(polygon) % 2):
+                raise ValueError(f"{name} must contain 3 to 32 normalized x/y points or be empty")
+            if any(not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in polygon):
+                raise ValueError(f"{name} values must be normalized to [0, 1]")
         if self.path_points < 2:
             raise ValueError("path_points must be at least 2")
         if self.bev_width_px < 8 or self.bev_height_px < 8:
@@ -126,6 +152,17 @@ class LocalPathConfig:
             raise ValueError("branch dimensions/hold must be positive; width must exceed twice the margin")
         if type(self.branch_confirm_frames) is not int or self.branch_confirm_frames < 2:
             raise ValueError("branch_confirm_frames must be an integer of at least 2")
+
+
+def path_config_for_mode(config: LocalPathConfig, mode: int) -> LocalPathConfig:
+    """Select geometry by requested mode, not by Mode 0's latched surface."""
+    if mode == 1 and (config.road_roi_polygon is not None or config.road_roi_exclusion_polygon is not None):
+        return replace(config,
+            roi_polygon=config.road_roi_polygon if config.road_roi_polygon is not None else config.roi_polygon,
+            roi_exclusion_polygon=(config.road_roi_exclusion_polygon if config.road_roi_exclusion_polygon is not None
+                                   else config.roi_exclusion_polygon),
+            road_roi_polygon=None, road_roi_exclusion_polygon=None)
+    return config
 
 
 @dataclass(frozen=True)
@@ -163,12 +200,33 @@ def normalized_polygon_pixels(
 
     height, width = frame_shape[:2]
     values = np.asarray(tuple(float(value) for value in polygon), dtype=np.float32)
-    if values.size != 8:
-        raise ValueError("polygon must contain four x/y points")
-    points = values.reshape(4, 2).copy()
+    if values.size < 6 or values.size % 2:
+        raise ValueError("polygon must contain at least three x/y points")
+    points = values.reshape(-1, 2).copy()
     points[:, 0] *= max(width - 1, 1)
     points[:, 1] *= max(height - 1, 1)
     return np.rint(points).astype(np.int32)
+
+
+@lru_cache(maxsize=16)
+def roi_exclusion_mask(frame_shape: tuple[int, int], config: LocalPathConfig) -> np.ndarray:
+    """Fixed camera occlusion in image pixels, independent of surface labels."""
+    config.validate()
+    mask = np.zeros(frame_shape[:2], np.uint8)
+    if config.roi_exclusion_polygon:
+        cv2.fillPoly(mask, [normalized_polygon_pixels(config.roi_exclusion_polygon, frame_shape)], 1)
+    mask.setflags(write=False)
+    return mask
+
+
+@lru_cache(maxsize=16)
+def path_roi_mask(frame_shape: tuple[int, int], config: LocalPathConfig) -> np.ndarray:
+    """Visible ROI after subtracting the camera body; projection stays unchanged."""
+    mask = np.zeros(frame_shape[:2], np.uint8)
+    cv2.fillPoly(mask, [normalized_polygon_pixels(config.roi_polygon, frame_shape)], 1)
+    mask[roi_exclusion_mask(frame_shape, config) != 0] = 0
+    mask.setflags(write=False)
+    return mask
 
 
 def pixel_to_ground_homography(
@@ -275,8 +333,10 @@ def _birdseye_sidewalk(
     """Warp each fresh mask using the shared metric projection geometry."""
 
     geometry = _birdseye_geometry(sidewalk_mask.shape[:2], config)
+    visible = ((sidewalk_mask > 0) &
+               (roi_exclusion_mask(sidewalk_mask.shape[:2], config) == 0))
     birdseye = cv2.remap(
-        np.where(sidewalk_mask > 0, 255, 0).astype(np.uint8),
+        np.where(visible, 255, 0).astype(np.uint8),
         geometry.map_x,
         geometry.map_y,
         interpolation=cv2.INTER_NEAREST,
@@ -287,6 +347,11 @@ def _birdseye_sidewalk(
         birdseye = cv2.morphologyEx(
             birdseye, cv2.MORPH_CLOSE, geometry.close_kernel
         )
+    if config.roi_exclusion_polygon:
+        # Reapply after closing so a camera-body hole cannot become free ground.
+        excluded = cv2.remap(roi_exclusion_mask(sidewalk_mask.shape[:2], config),
+                            geometry.map_x, geometry.map_y, cv2.INTER_NEAREST)
+        birdseye[excluded != 0] = 0
     return birdseye, geometry.x_values, geometry.y_values
 
 

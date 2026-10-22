@@ -1,5 +1,9 @@
 # cobiz-plugin-line-tracking
 
+Optional R50-mask + pretrained Flyvis centre-path generation is documented in
+[docs/connectome.md](docs/connectome.md). Its separate planner service returns
+validated paths; the existing line-tracking process remains the Sport API owner.
+
 `actual-activate` is a Cobiz `LINE_TRACKING` task listener for the Unitree A2.
 For an accepted task it follows the selected surface-center path, defaulting to
 the pinned Swin-L FP16 TensorRT profile `swin-l-aspect-224x384-fp16`. The existing

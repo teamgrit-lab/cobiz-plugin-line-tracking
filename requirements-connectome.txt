@@ -1,0 +1,2 @@
+# Install in a separate environment/image; preserve the Jetson CUDA torch stack.
+flyvis==1.2.0

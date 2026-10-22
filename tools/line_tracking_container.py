@@ -23,13 +23,20 @@ def detector_enabled(env):
 
 def child_commands(mode, env):
     tracking = ("line tracking", [sys.executable, str(ROOT / "tools/swin_l_local_path_debug.py"), mode])
+    shared_image = env.get("SWIN_L_SHARED_CAMERA_IMAGE_TOPIC", "").strip()
+    shared_info = env.get("SWIN_L_SHARED_CAMERA_INFO_TOPIC", "").strip()
     if not detector_enabled(env):
+        if shared_image or shared_info:
+            raise ValueError("shared camera requires the AprilTag camera relay to be enabled")
         return [tracking]
     image = (env.get("SWIN_L_APRILTAG_IMAGE_TOPIC", "").strip()
              or env.get("SWIN_L_IMAGE_TOPIC", "").strip()
              or "/a2/front_camera/res_720p/image_raw")
     info = (env.get("SWIN_L_APRILTAG_CAMERA_INFO_TOPIC", "").strip()
             or image.rsplit("/", 1)[0] + "/camera_info")
+    if ((shared_image and shared_image in (image, IMAGE))
+            or (shared_info and shared_info in (info, INFO))):
+        raise ValueError("shared camera outputs must differ from source and AprilTag topics")
     topic = env.get("SWIN_L_APRILTAG_DETECTIONS_TOPIC", "/detections").strip()
     family = env.get("SWIN_L_APRILTAG_FAMILY", "36h11").strip()
     threads = int(env.get("SWIN_L_APRILTAG_THREADS", "2"))
@@ -45,6 +52,10 @@ def child_commands(mode, env):
         "-p", "input_camera_info_topic:=" + info,
         "-p", "max_hz:=" + str(max_hz),
         "-r", "image_rect:=" + IMAGE, "-r", "camera_info:=" + INFO])
+    if shared_image:
+        relay[1].extend(["-p", "shared_image_topic:=" + shared_image])
+    if shared_info:
+        relay[1].extend(["-p", "shared_camera_info_topic:=" + shared_info])
     detector = ("AprilTag detector", ["ros2", "run", "apriltag_ros", "apriltag_node",
         "--ros-args", "--params-file", str(ROOT / "docker/apriltag.yaml"),
         "-r", "__node:=line_tracking_apriltag",

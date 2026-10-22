@@ -1,0 +1,362 @@
+"""Mask containment, actual HTTP exchange, failure and semantic policy contracts."""
+from pathlib import Path
+from dataclasses import replace
+import sys
+import threading
+import time
+
+import cv2
+import numpy as np
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'tools'))
+from connectome_client import ConnectomeClient, ConnectomePathTracker
+from connectome_server import PlannerService, make_server
+from connectome_surface import FlowField, LocalPathConfig, PlannerConfig, SurfaceArea, SurfacePlanner
+from local_path import (DEFAULT_ROAD_ROI_POLYGON, DEFAULT_ROAD_ROI_EXCLUSION_POLYGON, ground_to_pixel,
+                        pixel_to_ground_homography, path_config_for_mode, roi_exclusion_mask)
+
+
+def strip(left=1.5, right=-1.5, surface=1, near=3., far=8.):
+    cfg = LocalPathConfig()
+    p = ground_to_pixel(np.array([[near, left], [near, right], [far, right], [far, left]], np.float32),
+                        pixel_to_ground_homography((360, 640), cfg))
+    mask = np.zeros((360, 640), np.uint8)
+    cv2.fillPoly(mask, [np.rint(p).astype(np.int32)], surface)
+    return mask
+
+
+FLOW = FlowField(np.array([[320., 280.]]), np.array([0.]))
+
+
+@pytest.mark.parametrize('surface', [1, 2])
+def test_both_surfaces_get_centred_current_mask_paths(surface):
+    selected = strip(surface=surface)
+    result = SurfacePlanner().plan(selected, np.zeros_like(selected), LocalPathConfig(), PlannerConfig(), FLOW)
+    p = result[str(surface)]
+    assert p is not None and result[str(3-surface)] is None
+    points = np.array(p['points_xy'])
+    assert abs(np.median(points[:, 1])) < .06
+    assert SurfaceArea(selected, np.zeros_like(selected), surface, LocalPathConfig(), PlannerConfig()).accepts(points)
+
+
+def test_mode1_wide_roi_reaches_a_road_outside_the_common_trapezoid(endpoint):
+    url, _ = endpoint
+    cfg = replace(LocalPathConfig(), road_roi_polygon=DEFAULT_ROAD_ROI_POLYGON)
+    selected = np.zeros((360, 640), np.uint8)
+    selected[162:, 40:210] = 1
+    estimates = invoke(ConnectomeClient(url, cfg), selected)
+    assert estimates[1] is not None
+    assert estimates[0] is None and estimates[2] is None
+    points = estimates[1].points_xy
+    hazard = np.zeros_like(selected)
+    assert SurfaceArea(selected, hazard, 1, path_config_for_mode(cfg, 1), PlannerConfig()).accepts(points)
+    assert not SurfaceArea(selected, hazard, 1, cfg, PlannerConfig()).accepts(points)
+
+
+def test_road_roi_does_not_change_mode0_even_when_it_selects_road_or_mode2():
+    cfg = LocalPathConfig()
+    selected = np.ones((360, 640), np.uint8)
+    selected[:, 400:] = 2
+    hazard = np.zeros_like(selected)
+    before = SurfacePlanner().plan(selected, hazard, cfg, PlannerConfig(), FLOW)
+    after = SurfacePlanner().plan(selected, hazard,
+        replace(cfg, road_roi_polygon=DEFAULT_ROAD_ROI_POLYGON), PlannerConfig(), FLOW)
+    assert before['0'] is not None and before['0']['surface_class'] == 1
+    assert after['0'] == before['0'] and after['2'] == before['2']
+    assert after['1'] != before['1']
+
+
+def camera_body_config():
+    # A custom wide rectangle intentionally overlaps the body. The default road
+    # trapezoid now clears it; explicit ROI overrides still need the exclusion.
+    return replace(LocalPathConfig(), road_roi_polygon=(.02, 1., .98, 1., .98, .47, .02, .47),
+                   road_roi_exclusion_polygon=DEFAULT_ROAD_ROI_EXCLUSION_POLYGON)
+
+
+def test_camera_body_cuts_a_falsely_road_labelled_corridor_over_http(endpoint):
+    url, _ = endpoint
+    selected = np.zeros((360, 640), np.uint8)
+    selected[:, 500:625] = 1
+    unmasked = replace(camera_body_config(), road_roi_exclusion_polygon=None)
+    before = invoke(ConnectomeClient(url, unmasked), selected)[1]
+    after = invoke(ConnectomeClient(url, camera_body_config()), selected)[1]
+    assert before is not None
+    if after is not None:
+        assert after.points_xy[-1, 0] < before.points_xy[-1, 0] - 1.
+        cfg = path_config_for_mode(camera_body_config(), 1)
+        pixels = np.rint(ground_to_pixel(after.points_xy, pixel_to_ground_homography(selected.shape, cfg))).astype(int)
+        assert not np.any(roi_exclusion_mask(selected.shape, cfg)[pixels[:, 1], pixels[:, 0]])
+
+
+def test_client_rejects_a_server_that_ignores_the_camera_body_exclusion(endpoint):
+    url, service = endpoint
+    process = service.process
+    def ignore_body(request):
+        request['local_config']['road_roi_exclusion_polygon'] = None
+        return process(request)
+    service.process = ignore_body
+    selected = np.zeros((360, 640), np.uint8)
+    selected[:, 500:625] = 1
+    client = ConnectomeClient(url, camera_body_config())
+    assert all(v is None for v in invoke(client, selected).values())
+    assert 'violates selected surface' in client.metrics['detail']
+
+
+def test_body_exclusion_preserves_projection_and_other_modes():
+    cfg = camera_body_config()
+    effective = path_config_for_mode(cfg, 1)
+    unmasked = path_config_for_mode(replace(cfg, road_roi_exclusion_polygon=None), 1)
+    np.testing.assert_array_equal(pixel_to_ground_homography((360, 640), effective),
+                                  pixel_to_ground_homography((360, 640), unmasked))
+    assert roi_exclusion_mask((360, 640), effective)[240, 560] == 1
+    assert roi_exclusion_mask((360, 640), effective)[359, 560] == 0
+    assert path_config_for_mode(effective, 1) == effective
+    selected = np.ones((360, 640), np.uint8)
+    selected[:, 400:] = 2
+    hazard = np.zeros_like(selected)
+    before = SurfacePlanner().plan(selected, hazard, replace(cfg, road_roi_exclusion_polygon=None), PlannerConfig(), FLOW)
+    after = SurfacePlanner().plan(selected, hazard, cfg, PlannerConfig(), FLOW)
+    assert after['0'] == before['0'] and after['2'] == before['2']
+
+
+def test_narrow_surface_and_close_full_width_hazard_stop():
+    cfg, pc = LocalPathConfig(), PlannerConfig()
+    narrow = strip(.4, -.4)
+    assert SurfacePlanner().plan(narrow, np.zeros_like(narrow), cfg, pc, FLOW)['1'] is None
+    road = strip()
+    hazard = strip(2., -2., near=3.6, far=4.1)
+    assert SurfacePlanner().plan(road, hazard, cfg, pc, FLOW)['1'] is None
+
+
+def test_path_never_extrapolates_over_a_future_gap_or_disconnected_patch():
+    road = strip()
+    road[strip(2., -2., near=5., far=5.4).astype(bool)] = 0
+    p = SurfacePlanner().plan(road, np.zeros_like(road), LocalPathConfig(), PlannerConfig(), FLOW)['1']
+    assert p is not None and np.array(p['points_xy'])[-1, 0] < 4.7
+
+
+def test_union_latches_current_surface_until_new_task_instead_of_crossing_classes():
+    planner = SurfacePlanner()
+    road = strip()
+    first = planner.plan(road, np.zeros_like(road), LocalPathConfig(), PlannerConfig(), FLOW)
+    assert first['0']['surface_class'] == 1
+    sidewalk = strip(surface=2)
+    second = planner.plan(sidewalk, np.zeros_like(road), LocalPathConfig(), PlannerConfig(), FLOW)
+    assert second['0'] is None and second['2'] is not None
+    fresh = SurfacePlanner().plan(sidewalk, np.zeros_like(road), LocalPathConfig(), PlannerConfig(), FLOW)
+    assert fresh['0']['surface_class'] == 2
+
+
+def test_union_prefers_occupied_wide_road_over_a_closer_sidewalk_centroid():
+    selected = strip(6., -.6)
+    sidewalk = strip(-.65, -1.75, surface=2)
+    selected[sidewalk == 2] = 2
+    result = SurfacePlanner().plan(selected, np.zeros_like(selected), LocalPathConfig(), PlannerConfig(), FLOW)
+    assert result['0']['surface_class'] == 1
+
+
+def test_flow_can_rank_candidates_but_cannot_pull_them_out_of_the_centre_band():
+    road, cfg, pc = strip(), LocalPathConfig(), PlannerConfig()
+    area = SurfaceArea(road, np.zeros_like(road), 1, cfg, pc)
+    xs = area.xs[area.rows]
+    pixels, costs = [], []
+    for offset in np.linspace(-.2, .2, 5):
+        p = np.column_stack((xs, area.centers+offset))
+        pixels.extend(ground_to_pixel(p, area.h))
+        costs.extend(np.full(len(xs), 0. if offset > .05 else 1.))
+    path = area.plan(FlowField(np.array(pixels), np.array(costs)))
+    points = np.array(path['points_xy'])
+    assert .05 < np.median(points[:, 1]) <= .20
+    assert area.accepts(points)
+    assert not area.accepts(points+[0, 1.])
+
+
+class EncoderStub:
+    """Only HTTP/geometry tests use this stub; real-model smoke is separate."""
+    def __init__(self):
+        self.resets, self.frames = 0, []
+        self.details = {'backend': 'flyvis', 'pretrained_task': 'optical_flow',
+                        'flow_decoder_loaded': True, 'bundle_sha256': 'a'*64}
+
+    def reset(self):
+        self.resets += 1
+
+    def advance(self, image, stamp):
+        self.frames.append((image.copy(), stamp))
+        return FLOW
+
+
+@pytest.fixture
+def endpoint():
+    service = PlannerService(EncoderStub())
+    server = make_server(service, ('127.0.0.1', 0))
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    yield f'http://127.0.0.1:{server.server_port}/v1/plan', service
+    server.shutdown(); server.server_close(); thread.join(2)
+
+
+def invoke(client, selected=None, **kwargs):
+    selected = strip() if selected is None else selected
+    image = np.full((*selected.shape, 3), [5, 12, 88], np.uint8)
+    return client.plan(image, selected, np.zeros_like(selected), kwargs.get('stamp', 1.),
+                       kwargs.get('generation', 0), kwargs.get('sequence', 1))
+
+
+def test_http_transmits_original_image_and_labels_then_revalidates_and_resets(endpoint):
+    url, service = endpoint
+    client = ConnectomeClient(url, LocalPathConfig())
+    result = invoke(client)
+    assert result[0] is not None and result[1] is not None and result[2] is None
+    gray = cv2.cvtColor(np.full((2, 2, 3), [5, 12, 88], np.uint8), cv2.COLOR_BGR2GRAY)[0, 0]
+    np.testing.assert_array_equal(service.encoder.frames[0][0][0, 0], [gray]*3)
+    assert client.metrics['ready'] and service.encoder.resets == 1
+    # A same-frame replay cannot advance the neural state or refresh a path.
+    assert all(v is None for v in invoke(client).values())
+    assert not client.metrics['ready']
+    assert 'duplicate/backwards camera stamp' in client.metrics['detail']
+    assert len(service.encoder.frames) == 1
+    assert invoke(client, strip(surface=2), generation=1)[0] is not None
+    assert client.union_surface == 2 and service.encoder.resets == 2
+
+
+@pytest.mark.parametrize('mutation', ['wrong_frame', 'wrong_class', 'outside', 'not_flyvis'])
+def test_bad_planner_response_cannot_become_a_reference(endpoint, mutation):
+    url, service = endpoint
+    process = service.process
+    def corrupt(request):
+        reply = process(request)
+        if mutation == 'wrong_frame': reply['request_id'] = 'old-task'
+        if mutation == 'wrong_class': reply['paths']['1']['surface_class'] = 2
+        if mutation == 'outside': reply['paths']['1']['points_xy'][2][1] = 10.
+        if mutation == 'not_flyvis': reply['model']['backend'] = 'classical'
+        return reply
+    service.process = corrupt
+    client = ConnectomeClient(url, LocalPathConfig())
+    assert all(v is None for v in invoke(client).values())
+    assert not client.metrics['ready']
+
+
+def test_offline_planner_drops_reference_instead_of_holding_or_searching(endpoint):
+    url, _ = endpoint
+    client = ConnectomeClient(url, LocalPathConfig())
+    result = invoke(client)
+    tracker = ConnectomePathTracker(.3)
+    tracker.update(result[1], 1.)
+    assert tracker.current(1.1) is not None
+    assert tracker.current(1.31) is None
+    client.url = 'http://127.0.0.1:1/v1/plan'
+    tracker.update(invoke(client)[1], 1.2)
+    assert tracker.current(1.21) is None
+
+
+def test_slow_http_response_times_out_without_a_geometric_fallback(endpoint):
+    url, service = endpoint
+    advance = service.encoder.advance
+    def delayed(image, stamp):
+        time.sleep(.08)
+        return advance(image, stamp)
+    service.encoder.advance = delayed
+    client = ConnectomeClient(url, LocalPathConfig(), timeout=.02)
+    assert all(v is None for v in invoke(client).values())
+    assert not client.metrics['ready'] and 'Timeout' in client.metrics['detail']
+
+
+@pytest.mark.parametrize('kwargs', [{'margin_m': float('nan')}, {'half_width_m': 0}, {'flow_weight': 100}])
+def test_invalid_geometry_is_rejected(kwargs):
+    with pytest.raises(ValueError):
+        PlannerConfig(**kwargs).validate()
+
+
+def test_prefix_search_preserves_longest_supported_path_at_internal_holes():
+    selected = strip()
+    area = SurfaceArea(selected, np.zeros_like(selected), 1, LocalPathConfig(), PlannerConfig())
+    p = np.column_stack((area.xs[area.rows], area.centers))
+    for row in (35, 65, 100, 140):
+        original = area.allowed.copy()
+        area.allowed[row, :] = 0
+        expected = p
+        while len(expected) >= 2 and not area.accepts(expected):
+            expected = expected[:-1]
+        actual = area.longest_prefix(p)
+        if len(expected) >= 2:
+            np.testing.assert_array_equal(actual, expected)
+        else:
+            assert len(actual) < 2
+        area.allowed = original
+
+
+def test_flow_failure_keeps_union_surface_latched(endpoint):
+    url, service = endpoint
+    client = ConnectomeClient(url, LocalPathConfig())
+    assert invoke(client)[0] is not None
+    advance = service.encoder.advance
+    service.encoder.advance = lambda *_: (_ for _ in ()).throw(ValueError('gap'))
+    assert invoke(client, stamp=1.25, sequence=2)[0] is None
+    service.encoder.advance = advance
+    # Fresh sidewalk must not change the already chosen road after a gap.
+    result = invoke(client, strip(surface=2), stamp=1.5, sequence=3)
+    assert client.metrics['ready']
+    assert result[0] is None and result[2] is not None
+
+
+def test_reference_replacement_is_safe_while_timer_reads():
+    from local_path import LocalPathEstimate
+    tracker = ConnectomePathTracker(1.)
+    p = np.array([[3., 0.], [8., 0.]])
+    estimate = LocalPathEstimate(p, .9, 1., 3., p.copy())
+    def replace():
+        for _ in range(10000):
+            tracker.update(estimate, 1.)
+            tracker.reset()
+    worker = threading.Thread(target=replace)
+    worker.start()
+    for _ in range(10000):
+        path = tracker.current(1.1)
+        if path is not None:
+            assert path.confidence == .9 and path.age_sec == pytest.approx(.1)
+    worker.join()
+
+
+def test_flow_spatial_index_preserves_brute_force_cost_and_equal_distance_ties():
+    rng = np.random.default_rng(7)
+    receptors = rng.uniform(20, 640, (721, 2))
+    receptors[:2] = [[-1., 0.], [1., 0.]]
+    motion = rng.random(721)
+    queries = np.r_[rng.uniform(0, 640, (160, 2)), [[0., 0.]]]
+    nearest = np.argmin(np.sum((queries[:, None]-receptors[None])**2, axis=2), axis=1)
+    flow = FlowField(receptors, motion)
+    expected = float(np.mean(motion[nearest]))
+    assert flow.cost(queries) == expected
+    receptors.fill(0); motion.fill(0) # Constructor owns an immutable snapshot.
+    assert flow.cost(queries) == expected
+    assert flow.cost(np.array([[0., 0.]])) == flow.relative_motion[0]
+
+
+def test_vectorized_segment_sampling_is_identical_including_endpoints():
+    import math
+    from connectome_surface import dense_segments
+    rng = np.random.default_rng(3)
+    for n in (2, 20, 160):
+        points = np.cumsum(rng.uniform(-.1, .1, (n, 2)), axis=0)
+        for spacing in (.008, .03, .1):
+            expected = np.concatenate([np.linspace(a, b, max(2, math.ceil(np.linalg.norm(b-a)/spacing)+1))
+                                       for a, b in zip(points, points[1:])])
+            np.testing.assert_array_equal(dense_segments(points, spacing), expected)
+
+
+def test_bulk_row_runs_match_individual_rows_without_filling_holes():
+    from connectome_surface import runs,grid_runs
+    rng=np.random.default_rng(8)
+    grid=rng.integers(0,2,(160,280),dtype=np.uint8)
+    grid[0]=0;grid[1]=1;grid[2,10:270]=0
+    assert grid_runs(grid)==[runs(row) for row in grid]
+
+
+def test_lossless_mono_transport_preserves_the_exact_flyvis_input():
+    from connectome_server import encode_image,decode_image
+    rng=np.random.default_rng(4)
+    camera=rng.integers(0,256,(360,640,3),dtype=np.uint8)
+    expected=cv2.cvtColor(camera,cv2.COLOR_BGR2GRAY)
+    decoded=decode_image(encode_image(expected),cv2.IMREAD_COLOR)
+    np.testing.assert_array_equal(cv2.cvtColor(decoded,cv2.COLOR_BGR2GRAY),expected)

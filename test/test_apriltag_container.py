@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-from apriltag_camera_relay import camera_info_for_image
+from apriltag_camera_relay import CameraRelayState, camera_info_for_image
 from line_tracking_container import child_commands, supervise
 
 
@@ -47,6 +47,56 @@ def test_detector_uses_same_camera_as_tracking_and_is_independent_of_lidar():
     assert "detections:=/other/detections" in commands[1][1]
     env["SWIN_L_APRILTAG_DETECTOR_ENABLED"] = "false"
     assert len(child_commands("task-drive", env)) == 1
+
+
+def test_shared_input_preserves_frames_and_calibration_before_tag_throttle():
+    raw, infos, tags = [], [], []
+    relay = CameraRelayState(1 / 6, lambda image, info: tags.append((image, info)),
+                             raw.append, infos.append)
+    frames = [NS(width=640, height=360, encoding="rgb8", data=bytes([i]),
+                 header=NS(stamp=i, frame_id="camera")) for i in range(20)]
+    # Missing calibration must not interrupt the road inference input.
+    assert relay.on_image(frames[0], 0) is False
+    info = NS(width=640, height=360, header=NS(stamp=-1, frame_id="calibration"),
+              k=list(range(9)), d=[.1, .2, .3, .4])
+    relay.on_info(info)
+    for i, frame in enumerate(frames[1:], 1):
+        assert relay.on_image(frame, i / 20)
+    assert all(a is b for a, b in zip(raw, frames)) and len(raw) == 20
+    assert infos == [info] and infos[0] is info
+    assert 4 <= len(tags) <= 6
+    for image, paired in tags:
+        assert image is frames[image.header.stamp]
+        assert paired.header == image.header
+        assert paired.k == info.k and paired.d == info.d
+    assert info.header.stamp == -1
+
+
+def test_shared_input_continues_when_calibration_size_does_not_match():
+    raw, tags = [], []
+    relay = CameraRelayState(.1, lambda *args: tags.append(args), raw.append)
+    relay.on_info(NS(width=1280, height=720))
+    frame = NS(width=640, height=360)
+    assert relay.on_image(frame, 1) is False
+    assert raw == [frame] and tags == []
+
+
+def test_shared_camera_wiring_keeps_detector_on_and_remote_input_separate():
+    env = {"SWIN_L_APRILTAG_DETECTOR_ENABLED": "true",
+           "SWIN_L_APRILTAG_IMAGE_TOPIC": "/a2/front_camera/res_360p/image_raw",
+           "SWIN_L_SHARED_CAMERA_IMAGE_TOPIC": "/line_tracking/camera/image_raw",
+           "SWIN_L_SHARED_CAMERA_INFO_TOPIC": "/line_tracking/camera/camera_info",
+           "SWIN_L_IMAGE_TOPIC": "/line_tracking/camera/image_raw"}
+    relay, detector, tracking = child_commands("task-drive", env)
+    assert "input_image_topic:=/a2/front_camera/res_360p/image_raw" in relay[1]
+    assert "shared_image_topic:=/line_tracking/camera/image_raw" in relay[1]
+    assert "shared_camera_info_topic:=/line_tracking/camera/camera_info" in relay[1]
+    assert "detections:=/detections" in detector[1]
+    assert tracking[1][-1] == "task-drive"
+    with pytest.raises(ValueError, match="outputs must differ"):
+        child_commands("task-drive", {**env, "SWIN_L_APRILTAG_IMAGE_TOPIC": env["SWIN_L_IMAGE_TOPIC"]})
+    with pytest.raises(ValueError, match="requires the AprilTag"):
+        child_commands("task-drive", {**env, "SWIN_L_APRILTAG_DETECTOR_ENABLED": "false"})
 
 
 @pytest.mark.parametrize("env", [
@@ -125,6 +175,10 @@ def test_detector_configuration_and_compose_use_one_matching_interface():
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     assert services["actual-activate"]["environment"]["SWIN_L_APRILTAG_DETECTOR_ENABLED"].endswith(":-true}")
     assert services["debugging-swin-l"]["environment"]["SWIN_L_APRILTAG_DETECTOR_ENABLED"].endswith(":-false}")
+    # The debug-only tracker can consume the running production relay without
+    # being asked to own its outputs while its internal detector is disabled.
+    assert "SWIN_L_SHARED_CAMERA_IMAGE_TOPIC" not in services["debugging-swin-l"]["environment"]
+    assert "SWIN_L_SHARED_CAMERA_IMAGE_TOPIC" in services["actual-activate"]["environment"]
     for name in ("actual-activate", "debugging-swin-l"):
         assert services[name]["environment"]["SWIN_L_APRILTAG_DETECTIONS_TOPIC"].endswith(":-/detections}")
         assert services[name]["stop_grace_period"] == "15s"

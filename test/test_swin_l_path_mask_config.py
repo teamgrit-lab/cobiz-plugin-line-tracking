@@ -9,11 +9,47 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import swin_l_local_path_debug as debug  # noqa: E402
 from local_path import (  # noqa: E402
+    DEFAULT_ROAD_ROI_POLYGON,
+    DEFAULT_ROAD_ROI_EXCLUSION_POLYGON,
+    DEFAULT_ROI_POLYGON,
+    path_config_for_mode,
     LocalPathConfig,
     LocalPathSmoother,
     extract_sidewalk_centerline,
 )
 from cobiz_line_tracking_task import ActiveTask  # noqa: E402
+
+
+def test_live_config_uses_wide_road_roi_only_for_mode1(monkeypatch):
+    monkeypatch.delitem(debug.ENV, 'SWIN_L_ROAD_ROI_POLYGON', raising=False)
+    monkeypatch.delitem(debug.ENV, 'SWIN_L_ROI_POLYGON', raising=False)
+    monkeypatch.delitem(debug.ENV, 'SWIN_L_ROAD_ROI_EXCLUSION_POLYGON', raising=False)
+    config = debug._local_path_config_from_args(debug.parse_args(['task-drive']))
+    assert path_config_for_mode(config, 1).roi_polygon == DEFAULT_ROAD_ROI_POLYGON
+    assert path_config_for_mode(config, 1).roi_exclusion_polygon == DEFAULT_ROAD_ROI_EXCLUSION_POLYGON
+    for mode in (0, 2):
+        assert path_config_for_mode(config, mode).roi_polygon == DEFAULT_ROI_POLYGON
+        assert path_config_for_mode(config, mode).roi_exclusion_polygon == ()
+
+
+@pytest.mark.parametrize('value', ['.8,0,1,0,1', '.8,0,1,0,nan,1', '.8,0,1,0,1,2'])
+def test_invalid_camera_body_exclusion_fails_before_ros(monkeypatch, value):
+    monkeypatch.setitem(debug.ENV, 'SWIN_L_ROAD_ROI_EXCLUSION_POLYGON', value)
+    with pytest.raises(SystemExit):
+        debug.parse_args(['task-drive'])
+
+
+def test_camera_body_exclusion_can_be_explicitly_disabled(monkeypatch):
+    monkeypatch.setitem(debug.ENV, 'SWIN_L_ROAD_ROI_EXCLUSION_POLYGON', '')
+    config = debug._local_path_config_from_args(debug.parse_args(['task-drive']))
+    assert path_config_for_mode(config, 1).roi_exclusion_polygon == ()
+
+
+@pytest.mark.parametrize('value', ['nan,1,.98,1,.98,.47,.02,.47', '.02,1,.98,1,.98,.47,.02,2'])
+def test_invalid_mode1_roi_is_rejected_before_ros_starts(monkeypatch, value):
+    monkeypatch.setitem(debug.ENV, 'SWIN_L_ROAD_ROI_POLYGON', value)
+    with pytest.raises(SystemExit):
+        debug.parse_args(['task-drive'])
 
 
 @pytest.mark.parametrize("mask_class", [0, 1, 2])

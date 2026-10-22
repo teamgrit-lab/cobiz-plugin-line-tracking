@@ -62,6 +62,7 @@ class RosHarness:
         # These scenarios isolate the original camera/task/AprilTag contract.
         # The obstacle suite enables and feeds the additional sensors.
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false")
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_MOTION_ENABLED", "false")
         # Legacy lifecycle/hold scenarios select the former policy explicitly;
         # test_path_loss_recovery_ros covers the new default recovery policy.
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "false")
@@ -395,9 +396,10 @@ def test_r50_task_drive_accepts_720p_rgb_and_keeps_camera_stop(ros, monkeypatch)
     configurations = []
     frames = []
 
-    def segment(frame, *, color_order):
+    def segment(frame, *, color_order, path_mask_class):
         assert frame.shape == (720, 1280, 3)
         assert color_order == "rgb"
+        assert path_mask_class == 0
         assert frame[0, 0].tolist() == [20, 30, 40]
         frames.append(frame)
         return SimpleNamespace(

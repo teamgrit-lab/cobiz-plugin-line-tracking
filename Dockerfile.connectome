@@ -1,0 +1,16 @@
+ARG CONNECTOME_BASE_IMAGE=cobiz-plugin-line-tracking-swin-l-debug
+FROM ${CONNECTOME_BASE_IMAGE}
+SHELL ["/bin/bash", "-c"]
+# Reuse CUDA PyTorch from the tracking image, constrain its exact versions so
+# pip cannot replace it with a generic PyPI wheel on Jetson.
+RUN /opt/venv/bin/python -m venv --system-site-packages /opt/connectome-venv \
+    && /opt/venv/bin/python -c "import pathlib,sys; p=pathlib.Path('/opt/connectome-venv/lib')/('python'+'.'.join(map(str,sys.version_info[:2])))/'site-packages'; (p/'tracking-base.pth').write_text('\n'.join(dict.fromkeys(s for s in sys.path if s.endswith(('site-packages','dist-packages')) and pathlib.Path(s).is_dir()))+'\n')" \
+    && /opt/venv/bin/python -c "import importlib.metadata as m; open('/tmp/connectome-constraints.txt','w').write('\n'.join(k+'=='+m.version(k) for k in ['torch','torchvision','numpy']))" \
+    && /opt/venv/bin/python -c "import torch,json; json.dump([torch.__file__,torch.__version__,torch.version.cuda],open('/tmp/connectome-torch.json','w'))"
+COPY requirements-connectome.txt /tmp/requirements-connectome.txt
+RUN /opt/connectome-venv/bin/python -m pip install --no-cache-dir \
+        -c /tmp/connectome-constraints.txt -r /tmp/requirements-connectome.txt \
+    && /opt/connectome-venv/bin/python -c "import cv2,torch,json; assert [torch.__file__,torch.__version__,torch.version.cuda]==json.load(open('/tmp/connectome-torch.json')); print('OpenCV',cv2.__version__,'CUDA',torch.version.cuda)"
+ENV MPLBACKEND=Agg MPLCONFIGDIR=/tmp/connectome-matplotlib FLYVIS_ROOT_DIR=/tmp/connectome-flyvis
+COPY tools /workspace/tools
+ENTRYPOINT ["/opt/connectome-venv/bin/python", "/workspace/tools/connectome_server.py"]

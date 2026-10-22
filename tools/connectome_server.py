@@ -10,7 +10,7 @@ import time
 import cv2
 import numpy as np
 
-from connectome_surface import LocalPathConfig, PlannerConfig, SurfacePlanner
+from connectome_surface import LocalPathConfig, PlannerConfig, SurfacePlanner, validate_waypoint_inputs
 
 SCHEMA = 'line_tracking.connectome.v1'
 MAX_BODY = 4*1024*1024
@@ -92,11 +92,16 @@ class PlannerService:
             self.planner.union_surface = surface
         if self.last_stamp is not None and stamp <= self.last_stamp:
             raise ValueError('duplicate/backwards camera stamp')
+        corridor, target_xy = request.get('corridor_xy'), request.get('target_xy')
+        validate_waypoint_inputs(corridor, target_xy)
+        if (corridor is not None or target_xy is not None) and modes != [1]:
+            raise ValueError('waypoint guidance requires explicit road mode')
         started = time.perf_counter()
         try:
             flow = self.encoder.advance(frame, stamp)
             flow_finished = time.perf_counter()
-            paths = self.planner.plan(selected, hazard, local, config, flow, modes=tuple(modes), building=building)
+            paths = self.planner.plan(selected, hazard, local, config, flow, modes=tuple(modes),
+                building=building, corridor=corridor, target_xy=target_xy)
         except Exception:
             # A flow interruption does not authorize Mode 0 to switch surface.
             self.encoder.reset(); self.last_stamp = None
@@ -104,6 +109,7 @@ class PlannerService:
         self.last_stamp = stamp
         return {'schema': SCHEMA, 'request_id': request['request_id'], 'stream_id': self.stream,
                 'stamp_sec': stamp, 'paths': paths, 'model': dict(self.encoder.details),
+                'waypoint_guidance_applied': target_xy is not None,
                 'building_cost_applied': 1 in modes and building is not None and config.road_building_cost_weight > 0,
                 'timing': {'flow_ms': (flow_finished-started)*1000,
                            'surface_ms': (time.perf_counter()-flow_finished)*1000}}

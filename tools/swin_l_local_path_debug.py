@@ -104,6 +104,7 @@ from local_path import (
 from motion_tracking import MotionBuffer, MotionConfig, CommandLimiter, follow_path
 from perception_process import PerceptionProcess
 from surface_path_planner import SurfacePathPlanner, uses_connectome
+from waypoint_guidance import WaypointGuide
 from r50_checkpoint import validate_checkpoint
 from swin_l_drive_control import (
     DRIVE_STOP_CHECKS,
@@ -925,6 +926,8 @@ def run_ros2(args: argparse.Namespace) -> int:
         _validate_task_drive_preflight(args)
     local_config = _local_path_config_from_args(args)
     planner = _surface_planner_from_args(args, local_config)
+    waypoint_guide = WaypointGuide(local_config, PlannerConfig(
+        half_width_m=args.obstacle_robot_half_width_m, margin_m=args.obstacle_margin_m))
     # Morphology must not create an all-core OpenCV pool alongside the ROS
     # sensor executor and CUDA worker. Match the existing CPU thread budget.
     cv2.setNumThreads(2)
@@ -949,6 +952,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         "path_unavailable_inferences": {mask_class: 0 for mask_class in smoothers},
         "path_recovery_inferences": {key: 0 for key in smoothers},
         "semantic_path_missing": {key: False for key in smoothers},
+        "waypoint_guidance": {},
         "performance_inference_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_processing_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_completion_times": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
@@ -1290,6 +1294,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.navigation_status_publisher.publish(String(data=json.dumps({
                     **self.navigation.identity(context), "protocol": 1, "state": state,
                     "stamp_sec": self.get_clock().now().nanoseconds / 1e9, "reason": reason,
+                    "waypoint_guidance": bool(context.get("guidance")),
                 })))
 
         def stop_navigation_segment(self, reason="", *, error=False, context=None):
@@ -1458,6 +1463,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 state["path_recovery_inferences"] = {key: 0 for key in smoothers}
                 state["semantic_path_missing"] = {key: False for key in smoothers}
                 state['motion_epoch'] = None
+                state['waypoint_guidance'] = {}
                 for key in (
                     "performance_inference_seconds", "performance_processing_seconds",
                     "performance_completion_times",
@@ -1533,6 +1539,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                     mask_class
                 ]
             clock_now_ns = self.get_clock().now().nanoseconds
+            if self.navigation and self.navigation.active and self.navigation.active.get("guidance"):
+                with state_lock:
+                    _, reason = self.navigation.target_at(clock_now_ns / 1e9)
+                    guidance_status = state['waypoint_guidance']
+                if reason or not guidance_status.get('ready'):
+                    return None, DriveDecision.stop(reason or guidance_status.get('reason', 'waypoint_waiting'))
             camera_age_sec = _effective_source_age_sec(
                 last_image_at, last_image_stamp_ns, now, clock_now_ns
             )
@@ -1693,6 +1705,13 @@ def run_ros2(args: argparse.Namespace) -> int:
             if navigation_mode and not standalone_ready and (self.navigation.active is None
                                     or self.navigation.expired(time.monotonic())):
                 decision = DriveDecision.stop("navigation_lease_expired")
+            if (self.navigation and self.navigation.active and self.navigation.active.get('guidance')
+                    and (decision.vx or decision.vy or decision.yaw_rate)):
+                with state_lock:
+                    _, reason = self.navigation.target_at(self.get_clock().now().nanoseconds / 1e9)
+                    guidance = state['waypoint_guidance']
+                if reason or not guidance.get('ready'):
+                    decision = DriveDecision.stop(reason or guidance.get('reason', 'waypoint_waiting'))
             if planner and (decision.vx or decision.vy or decision.yaw_rate):
                 now = time.monotonic()
                 clock_ns = self.get_clock().now().nanoseconds
@@ -2028,6 +2047,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "ready_reason": self.last_ready_reason if task_mode else None,
                 "task_active": self.tasks.active is not None if self.tasks else None,
                 "navigation_worker": navigation_mode,
+                "waypoint_guidance": dict(state['waypoint_guidance']),
                 "standalone_task_control": (dict(self.standalone.context,
                     granted=self.standalone.granted) if self.standalone and self.standalone.context else None),
                 "navigation_segment": (self.navigation.identity(self.navigation.active)
@@ -2166,12 +2186,19 @@ def run_ros2(args: argparse.Namespace) -> int:
                         continue
                     requested_mode = active_path_mask_class(
                         node.tasks.active if node.tasks else None, args.path_mask_class)
+                    guided = bool(node.navigation and node.navigation.active
+                                  and node.navigation.active.get('guidance'))
+                    guidance_packet, guidance_reason = (node.navigation.guidance_at(
+                        node.get_clock().now().nanoseconds / 1e9, _stamp_ns(packet.source_header)/1e9)
+                        if guided else (None, None))
+                    target_xy = guidance_packet['target_xy'] if guidance_packet else None
+                    guidance_kwargs = guidance_packet or {}
                 kwargs = {"color_order": "rgb", "path_mask_class": requested_mode}
-                if planner:
+                if planner or guided:
                     kwargs['detect_road_hazards'] = True
                 if args.inference_process:
                     response = segmenter.infer(frame_rgb, _stamp_ns(packet.source_header)/1e9,
-                                               packet.generation, packet.sequence, mode=requested_mode)
+                                               packet.generation, packet.sequence, mode=requested_mode, **guidance_kwargs)
                     result = response['result']
                     segmentation_finished_at = response['segmentation_finished_at']
                     estimates = response['estimates']
@@ -2191,9 +2218,17 @@ def run_ros2(args: argparse.Namespace) -> int:
                     estimates = planner.plan(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR),
                         result.selected_mask, getattr(result, 'road_hazard_mask', np.zeros_like(result.selected_mask)),
                         _stamp_ns(packet.source_header)/1e9, packet.generation, packet.sequence, mode=requested_mode,
-                        building=getattr(result, 'road_building_mask', None))
+                        building=getattr(result, 'road_building_mask', None), **guidance_kwargs)
+                elif target_xy is not None:
+                    estimates = {key: None for key in smoothers}
+                    estimates[requested_mode] = waypoint_guide.local_plan(result.selected_mask,
+                        getattr(result, 'road_hazard_mask', np.zeros_like(result.selected_mask)),
+                        requested_mode, _stamp_ns(packet.source_header)/1e9, packet.generation, target_xy,
+                        robot_pose=guidance_packet['robot_pose'])
                 else:
                     estimates = extract_path_estimates(result.selected_mask, tuple(smoothers), local_config)
+                if guidance_reason:
+                    estimates = {key: None for key in smoothers}
                 path_updated_at = time.monotonic()
                 recovery_enabled = task_mode and node.drive_config.path_loss_recovery_enabled
                 semantic_missing = {key: recovery_enabled and estimates[key] is None for key in smoothers}
@@ -2202,6 +2237,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                         continue
                     if planner:
                         state['planner_status'] = dict(planner.metrics)
+                    state['waypoint_guidance'] = (
+                        {'ready': False, 'reason': guidance_reason} if guidance_reason else
+                        dict(planner.metrics.get('waypoint_guidance', {})) if planner else
+                        dict(waypoint_guide.metrics)) if guided else {}
                     for mask_class, smoother in smoothers.items():
                         if (uses_connectome(mask_class, planner is not None, state['planner_status'])
                                 != isinstance(smoother, ConnectomePathTracker)):

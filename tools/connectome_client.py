@@ -34,7 +34,7 @@ class ConnectomeClient:
         self.session, self.generation, self.union_surface = uuid.uuid4().hex, None, None
         self.metrics = {'backend': 'connectome', 'ready': False, 'reason': 'connectome_waiting'}
 
-    def plan(self, frame_bgr, selected, hazard, stamp, generation, sequence, *, modes=(0, 1, 2), union_surface=None, building=None):
+    def plan(self, frame_bgr, selected, hazard, stamp, generation, sequence, *, modes=(0, 1, 2), union_surface=None, building=None, corridor=None, target_xy=None):
         if not modes or any(type(mode) is not int or mode not in (0, 1, 2) for mode in modes):
             raise ValueError('requested modes must contain 0, 1 or 2')
         if generation != self.generation:
@@ -59,6 +59,10 @@ class ConnectomeClient:
                        'image_png': encode_image(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)),
                        'selected_png': encode_image(selected.astype(np.uint8)),
                        'hazard_png': encode_image(np.asarray(hazard, np.uint8))}
+            if target_xy is not None:
+                payload['target_xy'] = list(target_xy)
+                if corridor is not None:
+                    payload['corridor_xy'] = np.asarray(corridor).tolist()
             if 1 in modes and building is not None:
                 if np.shape(building) != selected.shape or not np.isin(building, [0, 1]).all():
                     raise ValueError('aligned binary building mask required')
@@ -76,6 +80,8 @@ class ConnectomeClient:
                     or reply.get('stream_id') != stream or reply.get('stamp_sec') != stamp):
                 raise ValueError('planner response does not match camera/task frame')
             model = reply['model']
+            if target_xy is not None and reply.get('waypoint_guidance_applied') is not True:
+                raise ValueError('planner does not support requested waypoint guidance')
             if ('building_png' in payload and self.config.road_building_cost_weight
                     and reply.get('building_cost_applied') is not True):
                 raise ValueError('planner does not support requested building cost')
@@ -89,9 +95,9 @@ class ConnectomeClient:
             road_local = path_config_for_mode(self.local, 1)
             road_area = None
             if 1 in modes:
-                road_area = areas.get(1) if road_local == self.local and building is None else None
+                road_area = areas.get(1) if road_local == self.local and building is None and corridor is None else None
                 if road_area is None:
-                    road_area = SurfaceArea(selected, hazard, 1, road_local, self.config, building=building)
+                    road_area = SurfaceArea(selected, hazard, 1, road_local, self.config, building=building, corridor=corridor)
             if 0 in modes and self.union_surface is None:
                 available = [(a.seed_distance, -s, s) for s, a in areas.items() if len(a.rows)]
                 if available:

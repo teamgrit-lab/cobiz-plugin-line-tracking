@@ -1,5 +1,5 @@
 """ROS-free leased internal segment protocol; no Cobiz or Sport ownership."""
-from collections import OrderedDict
+from collections import OrderedDict, deque
 import math
 
 
@@ -13,6 +13,52 @@ class NavigationSegment:
         self.active = None
         self.recent = OrderedDict()
         self.sequence = 0
+        self.poses = deque(maxlen=128)
+
+    def valid_guidance(self, guidance, ros_now):
+        return (isinstance(guidance, dict)
+                and isinstance(guidance.get("frame"), str) and bool(guidance["frame"])
+                and all(finite(guidance.get(k)) for k in (
+                    "target_x", "target_y", "robot_x", "robot_y", "robot_yaw", "pose_stamp_sec"))
+                and -0.05 <= ros_now - guidance["pose_stamp_sec"] <= 0.5)
+
+    def guidance_at(self, ros_now, camera_stamp=None):
+        """Waypoint in the camera-time robot frame, using A2's SLAM pose history."""
+        if self.active is None or self.active.get("guidance") is None:
+            return None, None
+        guidance = self.active["guidance"]
+        if not self.valid_guidance(guidance, ros_now):
+            return None, "waypoint_guidance_stale"
+        stamp = guidance["pose_stamp_sec"] if camera_stamp is None else camera_stamp
+        if not finite(stamp) or not self.poses:
+            return None, "waypoint_pose_unavailable"
+        nearest = min(self.poses, key=lambda p: abs(p[0] - stamp))
+        if abs(nearest[0] - stamp) > 0.2:
+            return None, "waypoint_pose_unavailable"
+        _, x, y, yaw = nearest
+        for before, after in zip(self.poses, tuple(self.poses)[1:]):
+            if before[0] <= stamp <= after[0] and after[0] - before[0] <= .4:
+                ratio = (stamp - before[0]) / (after[0] - before[0])
+                x, y = (before[i] + ratio * (after[i] - before[i]) for i in (1, 2))
+                delta = math.atan2(math.sin(after[3] - before[3]), math.cos(after[3] - before[3]))
+                yaw = before[3] + ratio * delta
+                break
+        dx, dy = guidance["target_x"] - x, guidance["target_y"] - y
+        return dict(target_xy=(math.cos(yaw)*dx + math.sin(yaw)*dy,
+                               -math.sin(yaw)*dx + math.cos(yaw)*dy),
+                    robot_pose=(x, y, yaw)), None
+
+    def target_at(self, ros_now, camera_stamp=None):
+        guidance, reason = self.guidance_at(ros_now, camera_stamp)
+        return guidance['target_xy'] if guidance else None, reason
+
+    def update_guidance(self, guidance):
+        if guidance is None:
+            return
+        if not self.poses or guidance["pose_stamp_sec"] > self.poses[-1][0]:
+            self.poses.append(tuple(guidance[k] for k in (
+                "pose_stamp_sec", "robot_x", "robot_y", "robot_yaw")))
+            self.active["guidance"] = dict(guidance)
 
     def remember(self, context, state="STOPPED", reason=""):
         key = (context["session_id"], context["segment_id"])
@@ -51,6 +97,12 @@ class NavigationSegment:
         lease = body.get("lease_sec")
         if not finite(lease) or not 0 < lease <= self.max_lease_sec:
             return dict(identity, effect="STATUS", state="REJECTED", reason="invalid_lease")
+        guidance = body.get("guidance")
+        if (("guidance" in body and not self.valid_guidance(guidance, ros_now))
+                or (matches and self.active.get("guidance") is not None and (
+                    guidance is None or any(guidance.get(k) != self.active["guidance"][k]
+                        for k in ("frame", "target_x", "target_y"))))):
+            return dict(identity, effect="STATUS", state="REJECTED", reason="invalid_guidance")
         if command == "START":
             mask = body.get("selected_mask")
             if type(mask) is not int or mask not in (1, 2):
@@ -62,9 +114,12 @@ class NavigationSegment:
                 self.active = dict(identity, selected_mask=mask, lease_at=now,
                                    lease_sec=lease, control_stamp=body["stamp_sec"])
                 self.sequence = 0
+                self.poses.clear()
+                self.update_guidance(guidance)
                 return dict(identity, effect="START", state="ACCEPTED")
         if matches and body["stamp_sec"] >= self.active["control_stamp"]:
             self.active.update(lease_at=now, lease_sec=lease, control_stamp=body["stamp_sec"])
+            self.update_guidance(guidance)
         return None
 
     def expired(self, now):

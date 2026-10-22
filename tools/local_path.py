@@ -175,6 +175,7 @@ class LocalPathEstimate:
     mean_sidewalk_width_m: float
     raw_points_xy: np.ndarray
     branch_observation: BranchObservation | None = None
+    surface_constrained: bool = False
 
     @property
     def is_valid(self) -> bool:
@@ -521,7 +522,7 @@ class LocalPathSmoother:
                 self._confidence = 0.0
                 self._last_update = timestamp_sec
                 return self._current_unlocked(timestamp_sec)
-            if choice.constrained and estimate is not None:
+            if estimate is not None and (choice.constrained or estimate.surface_constrained):
                 # An EMA across branches can cross the non-drivable fork gap.
                 # These points have already been smoothed inside one corridor.
                 self._points = estimate.points_xy.copy()

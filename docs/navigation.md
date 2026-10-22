@@ -52,7 +52,16 @@ goal의 취소·ingress lease 만료를 처리하며, 3.5초 안에 슬롯이 �
   "command": "START",
   "selected_mask": 2,
   "stamp_sec": 1792620000.0,
-  "lease_sec": 1.0
+  "lease_sec": 1.0,
+  "guidance": {
+    "frame": "prior_map",
+    "target_x": 10.0,
+    "target_y": 4.0,
+    "robot_x": 0.0,
+    "robot_y": 0.0,
+    "robot_yaw": 0.0,
+    "pose_stamp_sec": 1792620000.0
+  }
 }
 ```
 
@@ -61,6 +70,32 @@ goal의 취소·ingress lease 만료를 처리하며, 3.5초 안에 슬롯이 �
 HEARTBEAT는 같은 identity·새 stamp·최대 1초 lease를 사용하며 모델을 재시작하지 않는다.
 source stamp가 0.4초보다 오래되었거나 미래로 0.05초보다 앞서면 제어 요청을 무시한다.
 호스트 시계는 동기화되어야 한다.
+
+Navigation의 인도·차도 구간은 기본적으로 waypoint 방향을 사용한다. A2가 START와
+HEARTBEAT마다 같은 지도 좌표의 목표와 최신 SLAM 자세를 보낸다. 목표와 frame은 구간 중
+바꿀 수 없다. worker는 최근 자세를 보관하고 카메라 source stamp에 맞춰 보간한 자세로
+목표를 로봇 좌표로 변환한다. 자세가 0.5초보다 오래되거나 카메라 시각과 0.2초 이내에
+대응하는 자세가 없으면 정지한다. 반복된 source stamp는 자세의 유효 시간을 늘리지 않는다.
+
+감지된 노면을 로봇 폭과 여유 폭만큼 축소한 뒤 연결된 갈림길 후보를 추출한다. 같은 전방
+거리에서 waypoint 방위에 가장 가까운 후보를 고르고 기존 branch 확인 횟수(기본 2프레임)를
+채울 때까지 정지한다. 비슷한 후보의 방위 오차 차이가 3도 미만이면
+`waypoint_branch_ambiguous`로 정지한다. 선택 후에는 목표 방위가 흔들려도 갈림길을 유지하며,
+카메라 사이의 로봇 이동·회전을 SLAM 자세로 보정한다. 선택한 경로가 사라지면 반대편으로
+갈아타지 않고 정지한다. 다음 구간의 새 generation에서 선택을 초기화한다.
+
+인도는 기존 로컬 기하 엔진으로, 차도는 기존 Connectome 엔진으로 선택된 통로를 따라간다.
+Connectome 요청에 선택된 `corridor_xy`와 로봇 좌표의 `target_xy`를 전달하고 서버·클라이언트
+모두 최신 노면과 모든 경로 선분을 검사한다. 경로 EMA가 갈림길 사이를 가로지르지 않도록
+검사된 경로를 그대로 사용한다. waypoint 방향은 통로 선택과 허용된 중앙 band 내 후보
+점수에 반영하며, 노면 밖으로 직선 경로를 만들지 않는다. 지도 전체의 우회 경로 탐색은
+수행하지 않으므로 갈림길 뒤에도 waypoint를 배치해 진행 방향을 구체적으로 지정한다.
+
+새 A2는 worker READY/RUNNING의 `waypoint_guidance: true`를 확인한다. 구형 worker는
+`surface_waypoint_guidance_unsupported`로 중단하고, waypoint 요청을 무시하는 구형
+Connectome 서버도 경로를 허용하지 않는다. **A2 Navigation과 Jetson worker를 함께
+업데이트하고, Connectome 사용 시 connectome-planner도 재빌드해야 한다.** 기존 단독
+`LINE_TRACKING` Task와 guidance 없는 이전 구간 프로토콜은 기존 추종 방식을 유지한다.
 
 STOP은 추론을 중지하고 경로/저장 명령을 비우며 zero command 뒤에 STOPPED를 보고한다.
 이미 실행 중이던 추론은 완료될 수 있지만 generation 불일치로 결과를 폐기한다.
@@ -78,6 +113,7 @@ Navigation 구간에서는 AprilTag·duration 기반 자동 task 완료와 경�
 설정된 LiDAR 회피와 motion 최종 검사는 유지한다. WAITING 중에는 zero 명령을 보낸다.
 
 `metrics.navigation_worker`와 `metrics.navigation_segment`로 실행 방식·현재 구간을 확인한다.
+`metrics.waypoint_guidance`에는 로봇 좌표의 목표, 갈림길 선택 상태와 정지 이유가 표시된다.
 로컬 테스트는 실제 inference worker와 모델/ROS transport mock으로 두 노면의 재사용,
 STOP/lease 만료, 이전 추론 결과 폐기와 Navigation 구간의 Sport/task 발행 부재를 검증한다.
 단독 Task → sidewalk → Spin → Nav2 → road → 단독 Task 전환과 단일 모델 재사용도 검증한다.

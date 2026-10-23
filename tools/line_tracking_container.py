@@ -118,7 +118,7 @@ def supervise(commands, shutdown_sec=10.0):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("ros2", "task-drive"))
+    parser.add_argument("mode", choices=("ros2", "task-drive", "navigation-worker"))
     args = parser.parse_args()
     try:
         commands = child_commands(args.mode, os.environ)

@@ -1,0 +1,6 @@
+# Reuse the existing Jetson model/configuration as a navigation-owned worker.
+# Add after docker-compose.yml and, when used, docker-compose.connectome.yml.
+services:
+  actual-activate:
+    environment:
+      SWIN_L_MODE: navigation-worker

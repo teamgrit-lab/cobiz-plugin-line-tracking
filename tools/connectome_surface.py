@@ -15,6 +15,19 @@ from local_path import (LocalPathConfig, ground_to_pixel, pixel_to_ground_homogr
                         path_config_for_mode, roi_exclusion_mask)
 
 
+def validate_waypoint_inputs(corridor, target_xy):
+    for value, minimum, maximum in ((corridor, 2, 256), ([target_xy] if target_xy is not None else None, 1, 1)):
+        if value is None:
+            continue
+        if (not isinstance(value, list) or not minimum <= len(value) <= maximum
+                or any(not isinstance(point, list) or len(point) != 2
+                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in point)
+                    for point in value)):
+            raise ValueError('finite bounded waypoint/corridor coordinates required')
+    if corridor is not None and any(b[0] <= a[0] for a, b in zip(corridor, corridor[1:])):
+        raise ValueError('corridor must advance forwards')
+
+
 @dataclass(frozen=True)
 class PlannerConfig:
     half_width_m: float = .30
@@ -186,7 +199,7 @@ def surface_geometry(shape, local, config):
 
 
 class SurfaceArea:
-    def __init__(self, selected, hazard, surface, local: LocalPathConfig, config: PlannerConfig, *, building=None):
+    def __init__(self, selected, hazard, surface, local: LocalPathConfig, config: PlannerConfig, *, building=None, corridor=None):
         local.validate(); config.validate()
         self.local, self.config = local, config
         self.h, self.xs, self.ys, mx, my, kernel = surface_geometry(selected.shape, local, config)
@@ -224,12 +237,19 @@ class SurfaceArea:
         self.centers, self.intervals, self.rows = [], [], []
         previous = 0.
         for row, intervals in enumerate(grid_runs(self.allowed)):
+            if corridor is not None:
+                if self.xs[row] < corridor[0][0]-1e-5:
+                    continue
+                if self.xs[row] > corridor[-1][0]+1e-5:
+                    break
+                previous = float(np.interp(self.xs[row], np.asarray(corridor)[:, 0], np.asarray(corridor)[:, 1]))
+                intervals = [(a, b) for a, b in intervals if self.ys[b]-1e-5 <= previous <= self.ys[a]+1e-5]
             if not intervals:
                 if self.rows:
                     break
                 continue
             a, b = min(intervals, key=lambda ab: abs((self.ys[ab[0]]+self.ys[ab[1]])/2-previous))
-            previous = float((self.ys[a]+self.ys[b])/2)
+            previous = float((self.ys[a]+self.ys[b])/2) if corridor is None else previous
             self.rows.append(row); self.centers.append(previous)
             self.intervals.append((float(self.ys[b]), float(self.ys[a])))
         self.centers = np.asarray(self.centers)
@@ -299,7 +319,7 @@ class SurfaceArea:
         floor = math.exp(-2.)
         return float(np.mean(np.clip((np.exp(-distance/self.config.road_building_distance_m)-floor)/(1-floor), 0, 1)))
 
-    def plan(self, flow):
+    def plan(self, flow, *, target_xy=None):
         if len(self.rows) < 2:
             return None
         xs = self.xs[self.rows]
@@ -342,6 +362,10 @@ class SurfaceArea:
                 score = float(np.mean((points[:, 1]-center[:len(points)])**2)+.001*np.mean(slopes**2))
                 score += self.config.flow_weight*flow.cost(ground_to_pixel(points, self.h))
                 score += self.config.road_building_cost_weight*self.building_cost(points)
+                if target_xy is not None:
+                    goal_heading = math.atan2(target_xy[1], target_xy[0])
+                    heading = math.atan2(points[-1, 1], points[-1, 0])
+                    score += .2 * (heading-goal_heading)**2
                 candidates.append((score, points))
         if not candidates:
             return None
@@ -357,7 +381,7 @@ class SurfacePlanner:
     def __init__(self):
         self.union_surface = None
 
-    def plan(self, selected, hazard, local, config, flow, *, modes=(0, 1, 2), building=None):
+    def plan(self, selected, hazard, local, config, flow, *, modes=(0, 1, 2), building=None, corridor=None, target_xy=None):
         common_surfaces = {1, 2} if 0 in modes else ({2} if 2 in modes else set())
         areas = {s: SurfaceArea(selected, hazard, s, local, config) for s in common_surfaces}
         if 0 in modes and self.union_surface is None:
@@ -371,9 +395,9 @@ class SurfacePlanner:
         road_local = path_config_for_mode(local, 1)
         road_path = None
         if 1 in modes:
-            road_area = areas.get(1) if road_local == local and building is None else None
+            road_area = areas.get(1) if road_local == local and building is None and corridor is None else None
             road_path = paths.get(1) if road_area is not None and 1 in paths else (
-                road_area or SurfaceArea(selected, hazard, 1, road_local, config, building=building)).plan(flow)
+                road_area or SurfaceArea(selected, hazard, 1, road_local, config, building=building, corridor=corridor)).plan(flow, target_xy=target_xy)
         result = {str(mode): None for mode in (0, 1, 2)}
         for mode in modes:
             surface = self.union_surface if mode == 0 else mode

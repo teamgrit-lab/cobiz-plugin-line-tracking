@@ -72,6 +72,7 @@ mode="${SWIN_L_MODE:-ros2}"
 case "${mode}" in
   ros2) ;;
   task-drive) ;;
+  navigation-worker) ;;
   *)
     echo "[swin-l-debug] unsupported SWIN_L_MODE: ${mode}" >&2
     exit 1

@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from test_apriltag_task_stop_ros import Message, RosHarness, SPORT, ZERO, debug
+from local_path import LocalPathEstimate
 
 
 def run_recovery(monkeypatch, scenario, *, extra_args=()):
@@ -53,6 +54,56 @@ def run_recovery(monkeypatch, scenario, *, extra_args=()):
             "--search-half-width-m", "2",
             "--bev-height-px", "49", "--bev-width-px", "81",
             "--branch-preference", "center", *extra_args)
+
+
+@pytest.mark.parametrize("direction,sign,fallback", [("left", 1, "right"), ("right", -1, "left")])
+def test_last_confident_path_picks_first_scan_and_new_task_clears_direction(
+        monkeypatch, direction, sign, fallback):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION", fallback)
+
+    def estimates(selected, classes, config):
+        if not selected.any():
+            return {key: None for key in classes}
+        x = np.linspace(config.near_distance_m, config.far_distance_m, config.path_points)
+        points = np.column_stack((x, sign*.4*(x-config.near_distance_m))).astype(np.float32)
+        estimate = LocalPathEstimate(points, .9, 1., 1., points.copy())
+        return {key: estimate for key in classes}
+
+    monkeypatch.setattr(debug, "extract_path_estimates", estimates)
+
+    def scenario(ros, node, feed):
+        assert feed(visible=True)["path_tracked"]
+        assert feed()["drive_reason"] == "tracking_path_recovery"
+        assert feed()["drive_reason"] == "tracking_path_recovery"
+        result = feed()
+        assert result["drive_reason"] == "path_recovery_waiting"
+        recovery = result["path_recovery"]
+        assert recovery["first_direction"] == direction
+        assert recovery["configured_first_direction"] == fallback
+        assert recovery["direction_source"] == "last_path"
+        assert recovery["last_path_heading_deg"]*sign > 5.
+        for _ in range(12):
+            result = feed()
+            if result["drive_reason"].startswith("path_recovery_scan_"):
+                break
+        assert result["drive_reason"] == "path_recovery_scan_" + direction
+        command = json.loads(ros.published[SPORT][-1].parameter)
+        assert command["x"] == command["y"] == 0
+        assert command["z"]*sign > 0
+        assert feed(visible=True)["drive_reason"] == "path_recovery_confirming"
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        assert feed(visible=True)["path_tracked"]
+        node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "tag-stop-1"})))
+        ros.now += 1.1
+        node.publish_state()
+        ros.start(task_id="new-window")
+        result = feed()
+        assert result["drive_reason"] == "waiting_for_path"
+        assert result["path_recovery"]["first_direction"] == fallback
+        assert result["path_recovery"]["direction_source"] == "configured"
+        assert result["path_recovery"]["last_path_heading_deg"] is None
+
+    run_recovery(monkeypatch, scenario)
 
 
 @pytest.mark.parametrize("recover_phase", ["waiting", "scan_left", "scan_right"])

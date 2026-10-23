@@ -2,12 +2,15 @@
 
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from swin_l_drive_control import DriveConfig, DriveDecision, PathLossRecovery
+from local_path import SmoothedPath
 
 
 TRACK = DriveDecision(.3, 0., .1, "tracking")
@@ -24,7 +27,7 @@ class Simulation:
         self.recovery.record_command(TRACK, now=self.now)
 
     def tick(self, normal=LOST, *, new_frame=True, fresh=True, source_at=None,
-             confidence=.9, override=None, dt=.1):
+             confidence=.9, override=None, dt=.1, path=None):
         self.now += dt
         self.angle += self.command.yaw_rate * dt
         self.frame += int(new_frame)
@@ -32,11 +35,139 @@ class Simulation:
             normal, now=self.now, inference_id=self.frame,
             inference_source_at=self.now if source_at is None else source_at,
             sensors_ready=fresh, sensor_reason="inference_stale",
-            path_confidence=confidence,
+            path_confidence=confidence, path=path,
         )
         self.command = result if override is None else override
         self.recovery.record_command(self.command, now=self.now)
         return result
+
+
+def curved_path(heading_deg, *, offset=0.):
+    x = np.linspace(1., 6., 20)
+    # The robot can be on either side of a path that bends the other way.
+    y = offset + np.tan(np.radians(heading_deg))*np.maximum(x-3., 0.)
+    return SmoothedPath(np.column_stack((x, y)), .9, 0., "test")
+
+
+def begin_scan(sim):
+    for _ in range(20):
+        command = sim.tick()
+        if sim.recovery.phase.startswith("scan_"):
+            return command
+    pytest.fail("search did not start")
+
+
+@pytest.mark.parametrize("direction,sign,fallback", [("left", 1, "right"), ("right", -1, "left")])
+def test_last_path_bend_overrides_fallback_and_completes_both_sides(direction, sign, fallback):
+    sim = Simulation(DriveConfig(path_recovery_first_direction=fallback))
+    sim.tick(TRACK, path=curved_path(sign*25, offset=-sign*3))
+    first = begin_scan(sim)
+    assert first.reason == "path_recovery_scan_" + direction
+    assert first.yaw_rate*sign > 0
+    assert sim.recovery.direction_source == "last_path"
+    scan_origin = sim.angle
+    angles = []
+    for _ in range(420):
+        command = sim.tick()
+        angles.append(sim.angle-scan_origin)
+        assert command.vx == command.vy == 0
+        if sim.recovery.phase == "exhausted":
+            break
+    else:
+        pytest.fail("search did not finish")
+    assert max(angles) == pytest.approx(math.pi/2, abs=1e-6)
+    assert min(angles) == pytest.approx(-math.pi/2, abs=1e-6)
+    assert angles[-1] == pytest.approx(0., abs=1e-6)
+    assert (angles.index(max(angles)) < angles.index(min(angles))) == (direction == "left")
+    assert sim.recovery.first_direction == direction
+
+
+@pytest.mark.parametrize("heading", [0., 2., -2.])
+def test_straight_or_small_bend_uses_configured_fallback_even_when_path_is_offset(heading):
+    sim = Simulation(DriveConfig(path_recovery_first_direction="right"))
+    sim.tick(TRACK, path=curved_path(heading, offset=2.))
+    assert begin_scan(sim).reason == "path_recovery_scan_right"
+    assert sim.recovery.direction_source == "configured"
+
+
+def test_latest_straight_path_clears_previous_bend():
+    sim = Simulation(DriveConfig(path_recovery_first_direction="left"))
+    sim.tick(TRACK, path=curved_path(-25))
+    sim.tick(TRACK, path=curved_path(0))
+    assert begin_scan(sim).reason == "path_recovery_scan_left"
+    assert sim.recovery.direction_source == "configured"
+
+
+@pytest.mark.parametrize("issue", ["confidence", "stale_sensor", "stale_capture", "future_capture",
+                                   "guard", "held_command", "same_inference", "path_age",
+                                   "same_capture", "older_capture", "older_inference"])
+def test_unreliable_or_repeated_paths_cannot_replace_last_bend(issue):
+    sim = Simulation(DriveConfig(path_recovery_first_direction="left"))
+    sim.tick(TRACK, path=curved_path(-25))
+    arguments = {"path": curved_path(25)}
+    normal = TRACK
+    if issue == "confidence":
+        arguments["path"] = replace(arguments["path"], confidence=.48)
+    elif issue == "stale_sensor":
+        arguments["fresh"] = False
+    elif issue == "stale_capture":
+        arguments["source_at"] = -10.
+    elif issue == "future_capture":
+        arguments["source_at"] = 10.
+    elif issue == "guard":
+        normal = DriveDecision.stop("branch_path_lost")
+    elif issue == "held_command":
+        normal = replace(TRACK, reason="tracking_path_hold")
+    elif issue == "same_inference":
+        arguments["new_frame"] = False
+    elif issue == "path_age":
+        arguments["path"] = replace(arguments["path"], age_sec=10.)
+    elif issue == "same_capture":
+        arguments["source_at"] = sim.now
+    elif issue == "older_capture":
+        arguments["source_at"] = sim.now-.01
+    elif issue == "older_inference":
+        sim.frame -= 2
+    sim.tick(normal, **arguments)
+    assert begin_scan(sim).reason == "path_recovery_scan_right"
+    assert sim.recovery.direction_source == "last_path"
+
+
+def test_old_path_hint_expires_before_new_search():
+    sim = Simulation()
+    sim.tick(TRACK, path=curved_path(-25))
+    sim.tick(dt=5.1)
+    assert begin_scan(sim).reason == "path_recovery_scan_left"
+    assert sim.recovery.direction_source == "configured"
+
+
+@pytest.mark.parametrize("points", [[], [[1., 0.]], [[1., 0.], [1., -2.]],
+                                    [[1., 0.], [1.1, -2.]], [[-2., 0.], [-1., -2.]],
+                                    [[1., float("nan")], [2., float("inf")]]])
+def test_insufficient_geometry_uses_fallback(points):
+    sim = Simulation()
+    path = replace(curved_path(-25), points_xy=np.asarray(points))
+    sim.tick(TRACK, path=path)
+    assert begin_scan(sim).reason == "path_recovery_scan_left"
+
+
+def test_confirmed_path_selects_next_attempt_and_task_reset_clears_hint():
+    sim = Simulation()
+    sim.tick(TRACK, path=curved_path(-25))
+    assert begin_scan(sim).reason == "path_recovery_scan_right"
+    assert sim.tick(TRACK, path=curved_path(25)).reason == "path_recovery_confirming"
+    assert sim.recovery.first_direction == "right"
+    assert sim.tick(TRACK, path=curved_path(25)).reason == "tracking"
+    assert begin_scan(sim).reason == "path_recovery_scan_left"
+    assert sim.recovery.direction_source == "last_path"
+    sim.recovery.reset()
+    assert sim.recovery.last_path_heading_rad is None
+    assert sim.recovery.last_path_source_at is None
+    assert sim.recovery.first_direction == "left"
+    assert sim.tick().yaw_rate == 0
+    sim.tick(TRACK)
+    assert begin_scan(sim).reason == "path_recovery_scan_left"
+    assert sim.recovery.direction_source == "configured"
 
 
 @pytest.mark.parametrize("first_direction", ["left", "right"])

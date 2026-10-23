@@ -1,5 +1,11 @@
 # cobiz-plugin-line-tracking
 
+For waypoint-controlled execution from `teamgrit-navigation`, use the new
+[`navigation-worker` integration](docs/navigation.md). It reuses this engine and
+publishes leased internal commands for Navigation segments. The same worker also accepts
+standalone `LINE_TRACKING` tasks with their existing Sport/task lifecycle after acquiring
+exclusive control from Navigation; the model stays loaded across both task types.
+
 Optional R50-mask + pretrained Flyvis centre-path generation is documented in
 [docs/connectome.md](docs/connectome.md). Its separate planner service returns
 validated paths; the existing line-tracking process remains the Sport API owner.
@@ -53,8 +59,9 @@ avoidance adjusts forward/lateral velocity and checks the swept robot footprint.
   first two failed inferences, then stops on the third. One second after that
   stop, the robot searches in place to 90 degrees left and 90 degrees right of
   its heading at the stop, returning to that heading if neither side yields a path.
-  `LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION=left` selects left first (default);
-  `right` reverses the search order.
+  The last recent, confident path's far heading selects the first search side.
+  Straight paths or unreliable geometry use
+  `LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION` as the fallback (`left` by default).
   Two fresh, confident path results are required to resume. Search requires fresh
   sensor data even when ordinary stale-input stops are disabled.
   With recovery disabled, path loss follows the configurable saved-command policy.
@@ -260,10 +267,18 @@ LiDAR 회피가 켜져 있으면 유효한 시각 경로가 사라지는 즉시 
 실패 횟수는 선택한 클래스의 완료된 추론 결과로만 증가하고 제어 발행은 추가로 세지 않는다.
 작업 시작부터 경로가 없었다면 `waiting_for_path`로 대기하며 자동 회전하지 않는다.
 
-대기 후 제자리에서 정지 당시 방향을 기준으로 **왼쪽 +90° → 오른쪽 -90° → 원래 0°**를
-기본 순서로 탐색한다. `.env`의 `LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION=right`로
-설정하면 **오른쪽 -90° → 왼쪽 +90° → 원래 0°** 순서로 바뀐다. `left`이면 왼쪽을 먼저
-탐색한다. 첫 번째 끝에서 반대쪽 끝으로 가는 회전량은 180°다. 탐색 중 전진·횡이동은
+대기 후 제자리에서 **마지막으로 신뢰할 수 있었던 경로가 향하던 방향부터** 탐색한다.
+경로의 먼 절반에 직선을 맞춰 진행 방향을 계산하며, 경로가 로봇의 왼쪽·오른쪽으로
+치우친 것만으로 회전 방향을 정하지 않는다. 진행 방향이 왼쪽으로 5° 이상이면
+**왼쪽 +90° → 오른쪽 -90° → 원래 0°**, 오른쪽으로 5° 이상이면
+**오른쪽 -90° → 왼쪽 +90° → 원래 0°** 순서다. 각도는 정지 당시 방향 기준이다.
+힌트는 새 추론의 신뢰도 0.49 이상인 유효 경로에서만 갱신하고, 센서 오류·분기 보호·
+저장 명령으로 주행하는 동안에는 갱신하지 않는다. 새 경로가 직선으로 바뀌면 이전
+굽음은 지운다. 소실 정지 시 마지막 촬영 시각이 `max_inference_age_sec`(기본 5초)보다
+오래됐거나, 경로의 전방 범위가 0.5m 미만이거나, 진행 방향이 5° 미만이면
+`LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION`(`left` 기본값, `right` 선택 가능)을
+대체 방향으로 사용한다. 한 번 선택한 순서는 해당 탐색이 끝날 때까지 유지한다.
+첫 번째 끝에서 반대쪽 끝으로 가는 회전량은 180°다. 탐색 중 전진·횡이동은
 항상 0이고 회전 속도는 기본 0.18rad/s(약 10.3°/s)다. 각 끝에서는 그 방향에서 촬영한
 새 영상의 추론이 완료될 때까지 정지해 확인한다. 탐색 중 선택한 클래스의 경로가
 보이면 일단 정지하고 `path_recovery_confirming`으로 확인한다. 신뢰도 0.49 이상인
@@ -274,7 +289,7 @@ LiDAR 회피가 켜져 있으면 유효한 시각 경로가 사라지는 즉시 
 | 설정 / CLI | 기본값 | 의미 |
 | --- | --- | --- |
 | `LINE_TRACKING_PATH_RECOVERY_WAIT_SEC` / `--path-recovery-wait-sec` | `1.0` | 경로 소실로 정지한 뒤 회전 전 대기 시간(초, 양수) |
-| `LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION` / `--path-recovery-first-direction` | `left` | 먼저 탐색할 방향(`left` 또는 `right`) |
+| `LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION` / `--path-recovery-first-direction` | `left` | 마지막 경로의 방향을 판단할 수 없을 때 먼저 탐색할 대체 방향(`left` 또는 `right`) |
 | `LINE_TRACKING_PATH_RECOVERY_YAW_RPS` / `--path-recovery-yaw-rps` | `0.18` | 탐색 회전 속도(rad/s, 0 초과 0.18 이하) |
 | `LINE_TRACKING_PATH_RECOVERY_CONFIRM_FRAMES` / `--path-recovery-confirm-frames` | `2` | 재개에 필요한 연속 새 경로 결과 수(2 이상) |
 
@@ -327,7 +342,9 @@ metrics의 `stop_checks`에 12개 설정을 표시한다. `path_yaw_held`,
 `path_unavailable_inferences`, `path_unavailable_limit`(`5`)로 명령 유지와 실패 횟수를
 확인한다. `path_recovery`에는 탐색 활성 여부(`active`), 단계(`phase`), 영상 검출 실패
 횟수(`failed_inferences`), 정지 기준(`limit=3`), 대기·회전 설정(`wait_sec`, `yaw_rps`,
-`first_direction`), 명령 기준 추정 회전각
+`configured_first_direction`), 실제 선택한 탐색 순서(`first_direction`), 방향 선택 근거
+(`direction_source`: `last_path` 또는 `configured`), 마지막 유효 경로의 진행 방향
+(`last_path_heading_deg`), 명령 기준 추정 회전각
 (`estimated_angle_deg`), 연속 확인 횟수와 설정(`confirmed_frames`, `confirm_frames`),
 복구 실패 정지 여부(`exhausted`)를 기록한다.
 `tracking_path_hold`이면 Path 메시지가 비어 있어도 저장 명령으로 움직일

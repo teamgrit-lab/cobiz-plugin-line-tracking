@@ -17,6 +17,15 @@ import pytest
 from test_apriltag_task_stop_ros import RosHarness, debug
 
 
+def settle(core, ros, tick):
+    phase, now, pose = core.phase, ros.now, core.pose
+    for index in range(1, 14):
+        tick(now + index * .1, pose)
+        if core.phase != phase:
+            return
+    pytest.fail("stop barrier did not complete: " + phase)
+
+
 @pytest.mark.skipif(not os.environ.get("TEAMGRIT_NAVIGATION_SOURCE"), reason="requires navigation checkout")
 def test_sidewalk_stop_spin_nav2_and_road_reuse_one_real_worker(monkeypatch):
     source = Path(os.environ["TEAMGRIT_NAVIGATION_SOURCE"]) / "nav/src/cobiz/scripts/surface_navigation_core.py"
@@ -69,51 +78,58 @@ def test_sidewalk_stop_spin_nav2_and_road_reuse_one_real_worker(monkeypatch):
         core.update_pose((0, 0, 0, 0), 100.)
         core.start(goal(1, "sidewalk", 0., 10., next_target={"x": 9.6, "y": 10.}), 0., 100.)
         transport()
+        assert core.phase == "SURFACE_ENTRY_STOP" and node.tasks.active is None
+        settle(core, ros, tick)
         assert node.tasks.active.selected_mask == 2
         ros.camera_ready()
         node.publish_state()
         transport()
         node.publish_state()
         packet = json.loads(ros.published["/line_tracking/command"][-1].data)
-        assert core.line_velocity(packet, 0., 100.)[0] > 0
+        assert core.line_velocity(packet, ros.now, ros.clock_ns()/1e9)[0] > 0
         old_packet = dict(packet)
 
-        tick(.1, (9.6, 0, 0, 0))
+        tick(ros.now + .1, (9.6, 0, 0, 0))
         node.publish_state()
         transport()
-        tick(.45, (9.6, 0, 0, 0))
+        tick(ros.now + .35, (9.6, 0, 0, 0))
         assert node.tasks.active is None
+        assert core.phase == "SURFACE_EXIT_STOP"
+        settle(core, ros, tick)
         assert core.phase == "SPIN_START"
         spin = next(body for channel, body in events if channel == "spin")
         assert spin["target_yaw"] == pytest.approx(math.pi / 2)
-        assert not core.allow("line", .45, 100.45)
-        core.spin_accepted(core.session, True, .45, 100.45)
-        core.update_pose((9.6, 0, 0, math.pi / 2), 100.5)
-        core.spin_result(core.session, True, .5, 100.5)
+        assert not core.allow("line", ros.now, ros.clock_ns()/1e9)
+        core.spin_accepted(core.session, True, ros.now, ros.clock_ns()/1e9)
+        tick(ros.now + .1, (9.6, 0, 0, math.pi / 2))
+        core.spin_result(core.session, True, ros.now, ros.clock_ns()/1e9)
         transport()
+        assert core.phase == "HEADING_STOP"
+        settle(core, ros, tick)
         assert any(channel == "status" and body["status"] == "REACHED" for channel, body in events)
 
         # Omitted Mode is Nav2 on the next destination; no engine restart.
         native_goal = goal(2, "nav2", 9.6, 20.)
         native_goal.pop("Mode")
-        core.start(native_goal, .5, 100.5)
+        core.start(native_goal, ros.now, ros.clock_ns()/1e9)
         transport()
         native = next(body for channel, body in reversed(events) if channel == "nav2_goal")
-        core.nav2_status(dict(req_id=native["req_id"], status="ACCEPTED"), .5, 100.5)
-        assert core.allow("nav2", .5, 100.5)
-        core.nav2_status(dict(req_id=native["req_id"], status="REACHED"), .6, 100.6)
+        core.nav2_status(dict(req_id=native["req_id"], status="ACCEPTED"), ros.now, ros.clock_ns()/1e9)
+        assert core.allow("nav2", ros.now, ros.clock_ns()/1e9)
+        core.nav2_status(dict(req_id=native["req_id"], status="REACHED"), ros.now, ros.clock_ns()/1e9)
         transport()
 
-        ros.now = 1.
-        core.update_pose((20, 0, 0, 0), 101.)
-        core.start(goal(3, "road", 20., 30.), 1., 101.)
+        ros.now += .1
+        core.update_pose((20, 0, 0, 0), ros.clock_ns()/1e9)
+        core.start(goal(3, "road", 20., 30.), ros.now, ros.clock_ns()/1e9)
         transport()
+        settle(core, ros, tick)
         assert node.tasks.active.selected_mask == 1
         ros.camera_ready()
         node.publish_state()
         transport()
         assert core.phase == "LINE_ACTIVE"
-        assert core.line_velocity(old_packet, 1., 101.) is None
+        assert core.line_velocity(old_packet, ros.now, ros.clock_ns()/1e9) is None
         assert loads == [True]
         assert "/api/sport/request" not in ros.published
         assert not ros.published["/task_state"]
@@ -209,19 +225,23 @@ def test_legacy_sidewalk_spin_nav2_road_and_legacy_share_one_model(monkeypatch):
         assert not control.held(ros.now)
         sport_count = len(ros.published["/api/sport/request"])
         start(1, "sidewalk", 0., 10., next_target=dict(x=9.6, y=10.))
+        settle(core, ros, tick)
         ros.camera_ready()
         node.publish_state()
         transport()
         assert core.phase == "LINE_ACTIVE"
-        tick(5.3, (9.6, 0, 0, 0))
+        tick(ros.now + .1, (9.6, 0, 0, 0))
         node.publish_state()
         transport()
-        tick(5.65, (9.6, 0, 0, 0))
+        tick(ros.now + .35, (9.6, 0, 0, 0))
+        assert core.phase == "SURFACE_EXIT_STOP"
+        settle(core, ros, tick)
         assert core.phase == "SPIN_START"
         core.spin_accepted(core.session, True, ros.now, ros.clock_ns()/1e9)
         core.update_pose((9.6, 0, 0, math.pi/2), ros.clock_ns()/1e9)
         core.spin_result(core.session, True, ros.now, ros.clock_ns()/1e9)
         transport()
+        settle(core, ros, tick)
         start(2, "nav2", 9.6, 20.)
         native = next(body for channel, body in reversed(events) if channel == "nav2_goal")
         core.nav2_status(dict(req_id=native["req_id"], status="ACCEPTED"), ros.now, ros.clock_ns()/1e9)
@@ -229,6 +249,7 @@ def test_legacy_sidewalk_spin_nav2_road_and_legacy_share_one_model(monkeypatch):
         core.nav2_status(dict(req_id=native["req_id"], status="REACHED"), ros.now, ros.clock_ns()/1e9)
         transport()
         start(3, "road", 20., 30.)
+        settle(core, ros, tick)
         ros.camera_ready()
         node.publish_state()
         transport()
@@ -307,36 +328,45 @@ def test_waypoint_capture_stops_real_worker_before_direct_approach_and_next_road
             goal_checker_id="waypoint_goal_checker", next_target=dict(x=9.85, y=10.),
             waypoints=[dict(x=10., y=0., z=0., yaw=0.)]), 0., 100.)
         transport()
+        settle(core, ros, tick)
         ros.camera_ready()
         node.publish_state()
         transport()
         assert core.phase == "LINE_ACTIVE" and node.navigation.active is not None
-        tick(.1, (9.05, 0., 0., 0.))
+        tick(ros.now + .1, (9.05, 0., 0., 0.))
+        assert core.phase == "DIRECT_ENTRY_STOP" and node.navigation.active is None
+        settle(core, ros, tick)
         assert core.phase == "DIRECT_ACTIVE" and node.navigation.active is None
-        assert not core.allow("line", .1, 100.1)
-        stamp = tick(.2, (9.05, 0., 0., 0.))
+        assert not core.allow("line", ros.now, ros.clock_ns()/1e9)
+        stamp = tick(ros.now + .1, (9.05, 0., 0., 0.))
         speed, rate, terminal = approach.tick(core.pose, stamp, ros.now, stamp)
         assert 0 < speed <= .3 and rate == 0 and terminal is None
-        stamp = tick(.3, (9.85, 0., 0., 0.))
+        stamp = tick(ros.now + .1, (9.85, 0., 0., 0.))
         assert approach.tick(core.pose, stamp, ros.now, stamp) == (0., 0., None)
-        stamp = tick(.65, (9.85, 0., 0., 0.))
+        stamp = tick(ros.now + .35, (9.85, 0., 0., 0.))
         assert approach.tick(core.pose, stamp, ros.now, stamp)[2] == "REACHED"
         core.direct_result(core.session, True, ros.now, stamp)
         transport()
+        assert core.phase == "SURFACE_EXIT_STOP"
+        settle(core, ros, tick)
+        stamp = ros.clock_ns()/1e9
         assert core.phase == "SPIN_START" and core.spin_yaw == pytest.approx(math.pi/2)
         heading.begin(core.session, core.spin_yaw, core.pose, ros.now)
         core.spin_accepted(core.session, True, ros.now, stamp)
-        stamp = tick(.75, (9.85, 0., 0., math.pi/2))
+        stamp = tick(ros.now + .1, (9.85, 0., 0., math.pi/2))
         assert heading.tick(core.pose, stamp, ros.now, stamp)[1] is None
-        stamp = tick(1.1, (9.85, 0., 0., math.pi/2))
+        stamp = tick(ros.now + .35, (9.85, 0., 0., math.pi/2))
         assert heading.tick(core.pose, stamp, ros.now, stamp)[1] == "REACHED"
         core.spin_result(core.session, True, ros.now, stamp)
         transport()
+        settle(core, ros, tick)
         assert core.goal is None
+        stamp = ros.clock_ns()/1e9
         core.start(dict(req_id=2, execution_session="ingress", Mode="road", frame="prior_map",
             goal_checker_id="waypoint_goal_checker",
             waypoints=[dict(x=9.85, y=10., z=0., yaw=math.pi/2)]), ros.now, stamp)
         transport()
+        settle(core, ros, tick)
         ros.camera_ready()
         node.publish_state()
         transport()

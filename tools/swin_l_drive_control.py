@@ -17,6 +17,7 @@ from local_path import SmoothedPath
 MAX_FORWARD_MPS_HARD_LIMIT = 1.00
 MAX_PATH_UNAVAILABLE_INFERENCES = 5
 MAX_PATH_RECOVERY_INFERENCES = 3
+PATH_RECOVERY_DIRECTION_DEADBAND_DEG = 5.0
 DRIVE_STOP_CHECKS = (
     "camera_stale",
     "inference_stale",
@@ -111,6 +112,8 @@ class PathLossRecovery:
     Angles integrate *published* yaw commands, not timer evaluations. This is
     open-loop motion; wheel slip or a controller rejecting Move cannot be measured.
     Each endpoint waits for an image captured there before reversing direction.
+    A recent confident path's far heading selects the first side; the configured
+    direction is the fallback for straight, short or unavailable geometry.
     """
 
     def __init__(self, config: DriveConfig, *, output_hz: float) -> None:
@@ -131,6 +134,40 @@ class PathLossRecovery:
         self.last_inference: int | None = None
         self.command_at: float | None = None
         self.command = DriveDecision.stop("task_idle")
+        self.first_direction = self.config.path_recovery_first_direction
+        self.direction_source = "configured"
+        self.last_path_heading_rad: float | None = None
+        self.last_path_source_at: float | None = None
+        self.last_path_inference: int | None = None
+
+    def _remember_path(
+        self, path: SmoothedPath | None, normal: DriveDecision, *, now: float,
+        inference_id: int, inference_source_at: float | None, sensors_ready: bool,
+    ) -> None:
+        if (self.active or not sensors_ready or path is None
+                or normal.reason not in ("tracking", "tracking_slow_turn")
+                or path.stop_reason is not None
+                or (self.last_path_inference is not None and inference_id <= self.last_path_inference)
+                or not math.isfinite(path.confidence) or path.confidence < self.config.min_confidence
+                or not math.isfinite(path.age_sec) or not 0 <= path.age_sec <= self.config.max_inference_age_sec
+                or inference_source_at is None or not math.isfinite(inference_source_at)
+                or not 0 <= now-inference_source_at <= self.config.max_inference_age_sec
+                or (self.last_path_source_at is not None and inference_source_at <= self.last_path_source_at)):
+            return
+        self.last_path_inference = inference_id
+        self.last_path_source_at = inference_source_at
+        # A new straight/short path clears an older bend instead of retaining it.
+        self.last_path_heading_rad = path_recovery_heading(path)
+
+    def _select_first_direction(self, now: float) -> None:
+        self.first_direction = self.config.path_recovery_first_direction
+        self.direction_source = "configured"
+        heading = self.last_path_heading_rad
+        if (heading is not None and self.last_path_source_at is not None
+                and 0 <= now-self.last_path_source_at <= self.config.max_inference_age_sec
+                and abs(heading) >= math.radians(PATH_RECOVERY_DIRECTION_DEADBAND_DEG)):
+            self.first_direction = "left" if heading > 0 else "right"
+            self.direction_source = "last_path"
 
     @property
     def active(self) -> bool:
@@ -167,10 +204,13 @@ class PathLossRecovery:
         self, normal: DriveDecision, *, now: float, inference_id: int,
         inference_source_at: float | None, sensors_ready: bool,
         sensor_reason: str, path_confidence: float | None,
+        path: SmoothedPath | None = None,
     ) -> DriveDecision:
         self._advance(now)
         if not self.config.path_loss_recovery_enabled:
             return normal
+        self._remember_path(path, normal, now=now, inference_id=inference_id,
+                            inference_source_at=inference_source_at, sensors_ready=sensors_ready)
         if not self.active:
             if normal.reason != "path_recovery_waiting" or not self.armed:
                 return normal
@@ -178,6 +218,8 @@ class PathLossRecovery:
             self.wait_elapsed_sec = 0.0
             self.angle_rad = 0.0
             self.last_inference = inference_id
+            # Freeze the order for this entire attempt, including its return leg.
+            self._select_first_direction(now)
 
         # Explicit stops, branch guards and obstacle exclusions take priority.
         if normal.reason not in (
@@ -220,25 +262,27 @@ class PathLossRecovery:
                 self.confirmed_frames = 0
                 self.confirm_since = None
                 self.confirm_source_at = None
+                self._remember_path(path, normal, now=now, inference_id=inference_id,
+                                    inference_source_at=inference_source_at, sensors_ready=sensors_ready)
                 return normal
             return DriveDecision.stop("path_recovery_confirming")
 
         if self.phase == "waiting":
             if self.wait_elapsed_sec + 1e-9 < self.config.path_recovery_wait_sec:
                 return DriveDecision.stop("path_recovery_waiting")
-            self.phase = "scan_" + self.config.path_recovery_first_direction
+            self.phase = "scan_" + self.first_direction
         if self.phase in ("hold_left", "hold_right"):
             if inference_source_at is None or inference_source_at < self.endpoint_since:
                 return DriveDecision.stop("path_recovery_" + self.phase)
-            first = self.config.path_recovery_first_direction
+            first = self.first_direction
             second = "right" if first == "left" else "left"
             self.phase = "scan_" + second if self.phase == "hold_" + first else "return"
         targets = {"scan_left": math.pi / 2, "scan_right": -math.pi / 2, "return": 0.0}
         if self.phase in targets:
             remaining = targets[self.phase] - self.angle_rad
-            # Returning from the second side reverses with the configured order.
+            # Returning from the second side reverses with this attempt's order.
             directions = {"scan_left": 1, "scan_right": -1,
-                          "return": 1 if self.config.path_recovery_first_direction == "left" else -1}
+                          "return": 1 if self.first_direction == "left" else -1}
             if remaining * directions[self.phase] <= 1e-6:
                 self.phase = {"scan_left": "hold_left", "scan_right": "hold_right",
                               "return": "exhausted"}[self.phase]
@@ -346,6 +390,34 @@ def decide_drive(
         yaw_rate,
         "tracking_slow_turn" if speed_scale < 1.0 else "tracking",
     )
+
+
+def path_recovery_heading(path: SmoothedPath) -> float | None:
+    """Fit the far half's heading (x forward, y left), independent of offset.
+
+    Ignore non-finite/behind-robot points and require half a meter of support.
+    Averaging several points avoids letting a single terminal segment pick a side.
+    """
+    try:
+        points = np.asarray(path.points_xy, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if points.ndim != 2 or points.shape[1] != 2:
+        return None
+    points = points[np.all(np.isfinite(points), axis=1) & (points[:, 0] > 0)]
+    if len(points) < 2:
+        return None
+    forward, indices = np.unique(points[:, 0], return_index=True)
+    points = points[indices]
+    if len(forward) < 2 or forward[-1]-forward[0] < 0.5:
+        return None
+    far = points[forward >= (forward[0]+forward[-1])/2]
+    if len(far) < 2 or far[-1, 0]-far[0, 0] < 0.5:
+        far = points
+    centered = far - far.mean(axis=0)
+    heading = math.atan2(float(centered[:, 0] @ centered[:, 1]),
+                         float(centered[:, 0] @ centered[:, 0]))
+    return heading if math.isfinite(heading) else None
 
 
 def path_target_lateral(path: SmoothedPath | None, lookahead_m: float) -> float | None:

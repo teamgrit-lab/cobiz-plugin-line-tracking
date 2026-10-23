@@ -1612,6 +1612,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     sensors_ready=sensor_reason is None,
                     sensor_reason=sensor_reason or "inputs_not_ready",
                     path_confidence=path.confidence if path is not None else None,
+                    path=path,
                 )
                 if self.path_search.active and (path is None or path.stop_reason is None):
                     path = None
@@ -2108,7 +2109,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "active": self.path_search.active,
                     "phase": self.path_search.phase,
                     "wait_sec": self.drive_config.path_recovery_wait_sec,
-                    "first_direction": self.drive_config.path_recovery_first_direction,
+                    "first_direction": self.path_search.first_direction,
+                    "configured_first_direction": self.drive_config.path_recovery_first_direction,
+                    "direction_source": self.path_search.direction_source,
+                    "last_path_heading_deg": (
+                        math.degrees(self.path_search.last_path_heading_rad)
+                        if self.path_search.last_path_heading_rad is not None else None
+                    ),
                     "yaw_rps": self.drive_config.path_recovery_yaw_rps,
                     "estimated_angle_deg": math.degrees(self.path_search.angle_rad),
                     "confirmed_frames": self.path_search.confirmed_frames,
@@ -2674,7 +2681,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument(
                 "--path-recovery-first-direction", choices=("left", "right"),
                 default=_env("LINE_TRACKING_PATH_RECOVERY_FIRST_DIRECTION", "left"),
-                help="Which side to search first after the path-loss stop",
+                help="Fallback first search side when the last confident path has no clear bend",
             )
             live.add_argument(
                 "--path-recovery-yaw-rps", type=float,

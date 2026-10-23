@@ -241,6 +241,14 @@ def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
     return active_task.selected_mask if active_task is not None else default
 
 
+def _waypoint_stop_reason(status):
+    """Keep branch constraints; ordinary missing paths use configured stop/recovery."""
+    if status.get("ready"):
+        return None
+    reason = status.get("reason", "waypoint_waiting")
+    return None if reason in ("waypoint_waiting", "waypoint_path_unavailable") else reason
+
+
 def extract_path_estimates(selected_mask, mask_classes, config):
     """Semantic reference paths are independent of obstacle sensing."""
     return {key: extract_sidewalk_centerline(selected_path_region(selected_mask, key), path_config_for_mode(config, key))
@@ -903,11 +911,10 @@ def run_ros2(args: argparse.Namespace) -> int:
         for name, value in legacy_flags.items():
             setattr(args, name, value)
         if surface:
-            for name in DRIVE_STOP_CHECKS:
-                setattr(args, "stop_on_" + name, True)
+            # Motion stop/recovery settings are shared with LINE_TRACKING.
+            # The parent Navigation task still owns segment completion.
             for name in (*TASK_STOP_CHECKS, "apriltag"):
                 setattr(args, "stop_on_" + name, False)
-            args.path_loss_recovery_enabled = False
 
     if navigation_mode:
         configure_flags(True)
@@ -1543,8 +1550,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 with state_lock:
                     _, reason = self.navigation.target_at(clock_now_ns / 1e9)
                     guidance_status = state['waypoint_guidance']
-                if reason or not guidance_status.get('ready'):
-                    return None, DriveDecision.stop(reason or guidance_status.get('reason', 'waypoint_waiting'))
+                reason = reason or _waypoint_stop_reason(guidance_status)
+                if reason:
+                    return None, DriveDecision.stop(reason)
             camera_age_sec = _effective_source_age_sec(
                 last_image_at, last_image_stamp_ns, now, clock_now_ns
             )
@@ -1710,8 +1718,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 with state_lock:
                     _, reason = self.navigation.target_at(self.get_clock().now().nanoseconds / 1e9)
                     guidance = state['waypoint_guidance']
-                if reason or not guidance.get('ready'):
-                    decision = DriveDecision.stop(reason or guidance.get('reason', 'waypoint_waiting'))
+                reason = reason or _waypoint_stop_reason(guidance)
+                if reason:
+                    decision = DriveDecision.stop(reason)
             if planner and (decision.vx or decision.vy or decision.yaw_rate):
                 now = time.monotonic()
                 clock_ns = self.get_clock().now().nanoseconds
@@ -2189,7 +2198,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     guided = bool(node.navigation and node.navigation.active
                                   and node.navigation.active.get('guidance'))
                     guidance_packet, guidance_reason = (node.navigation.guidance_at(
-                        node.get_clock().now().nanoseconds / 1e9, _stamp_ns(packet.source_header)/1e9)
+                        node.get_clock().now().nanoseconds / 1e9)
                         if guided else (None, None))
                     target_xy = guidance_packet['target_xy'] if guidance_packet else None
                     guidance_kwargs = guidance_packet or {}

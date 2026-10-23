@@ -86,7 +86,7 @@ def test_shared_worker_runs_legacy_tasks_then_navigation_with_one_model(monkeypa
         ros.camera_ready()
         node.publish_state()
         assert velocity(ros)["vx"] > 0
-        assert node.drive_config.stop_on_path_unavailable
+        assert not node.drive_config.stop_on_path_unavailable
         assert len(ros.published[SPORT]) == sport_count
         assert len(loads) == 1
     run(ros, scenario)
@@ -197,6 +197,7 @@ def test_worker_reuses_real_inference_control_without_task_or_sport_ownership(mo
 
 def test_worker_lease_expiry_stops_inference_and_does_not_run_recovery(monkeypatch):
     ros = RosHarness(monkeypatch)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "true")
     def scenario(node):
         send(ros)
         ros.camera_ready()
@@ -208,8 +209,30 @@ def test_worker_lease_expiry_stops_inference_and_does_not_run_recovery(monkeypat
         assert status(ros)["state"] == "ERROR"
         assert status(ros)["reason"] == "navigation_lease_expired"
         assert velocity(ros)["vx"] == velocity(ros)["yaw_rate"] == 0
-        assert not node.drive_config.path_loss_recovery_enabled
-        assert node.drive_config.stop_on_path_unavailable
+        assert node.drive_config.path_loss_recovery_enabled
+    run(ros, scenario)
+
+
+@pytest.mark.parametrize("mask", [1, 2])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_navigation_uses_the_same_env_motion_stop_and_recovery_settings(monkeypatch, mask, enabled):
+    ros = RosHarness(monkeypatch)
+    for check in debug.DRIVE_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), str(enabled).lower())
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", str(enabled).lower())
+    def scenario(node):
+        legacy(ros, mask=mask)
+        grant_legacy(ros)
+        standalone_config = node.drive_config
+        legacy(ros, "TASK_ABORTED")
+        ros.now = 1.1
+        node.publish_state()
+        send(ros, mask=mask, session="navigation")
+        assert node.drive_config == standalone_config
+        for check in debug.DRIVE_STOP_CHECKS:
+            assert getattr(node.drive_config, "stop_on_" + check) is enabled
+        assert node.drive_config.path_loss_recovery_enabled is enabled
+        assert not ros.node.tasks.policy.stop_on_task_timeout
     run(ros, scenario)
 
 

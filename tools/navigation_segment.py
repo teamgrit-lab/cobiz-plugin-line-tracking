@@ -1,5 +1,5 @@
 """ROS-free leased internal segment protocol; no Cobiz or Sport ownership."""
-from collections import OrderedDict, deque
+from collections import OrderedDict
 import math
 
 
@@ -13,36 +13,25 @@ class NavigationSegment:
         self.active = None
         self.recent = OrderedDict()
         self.sequence = 0
-        self.poses = deque(maxlen=128)
 
     def valid_guidance(self, guidance, ros_now):
         return (isinstance(guidance, dict)
                 and isinstance(guidance.get("frame"), str) and bool(guidance["frame"])
                 and all(finite(guidance.get(k)) for k in (
-                    "target_x", "target_y", "robot_x", "robot_y", "robot_yaw", "pose_stamp_sec"))
-                and -0.05 <= ros_now - guidance["pose_stamp_sec"] <= 0.5)
+                    "target_x", "target_y", "robot_x", "robot_y", "robot_yaw", "pose_stamp_sec")))
 
     def guidance_at(self, ros_now, camera_stamp=None):
-        """Waypoint in the camera-time robot frame, using A2's SLAM pose history."""
+        """Use the latest A2 pose; camera_stamp is retained only for API compatibility.
+
+        A2 validates localization before sending commands. The command timestamp
+        and execution lease still expire independently of this pose annotation.
+        """
         if self.active is None or self.active.get("guidance") is None:
             return None, None
         guidance = self.active["guidance"]
         if not self.valid_guidance(guidance, ros_now):
-            return None, "waypoint_guidance_stale"
-        stamp = guidance["pose_stamp_sec"] if camera_stamp is None else camera_stamp
-        if not finite(stamp) or not self.poses:
-            return None, "waypoint_pose_unavailable"
-        nearest = min(self.poses, key=lambda p: abs(p[0] - stamp))
-        if abs(nearest[0] - stamp) > 0.2:
-            return None, "waypoint_pose_unavailable"
-        _, x, y, yaw = nearest
-        for before, after in zip(self.poses, tuple(self.poses)[1:]):
-            if before[0] <= stamp <= after[0] and after[0] - before[0] <= .4:
-                ratio = (stamp - before[0]) / (after[0] - before[0])
-                x, y = (before[i] + ratio * (after[i] - before[i]) for i in (1, 2))
-                delta = math.atan2(math.sin(after[3] - before[3]), math.cos(after[3] - before[3]))
-                yaw = before[3] + ratio * delta
-                break
+            return None, "invalid_guidance"
+        x, y, yaw = (guidance[k] for k in ("robot_x", "robot_y", "robot_yaw"))
         dx, dy = guidance["target_x"] - x, guidance["target_y"] - y
         return dict(target_xy=(math.cos(yaw)*dx + math.sin(yaw)*dy,
                                -math.sin(yaw)*dx + math.cos(yaw)*dy),
@@ -55,9 +44,8 @@ class NavigationSegment:
     def update_guidance(self, guidance):
         if guidance is None:
             return
-        if not self.poses or guidance["pose_stamp_sec"] > self.poses[-1][0]:
-            self.poses.append(tuple(guidance[k] for k in (
-                "pose_stamp_sec", "robot_x", "robot_y", "robot_yaw")))
+        current = self.active.get("guidance")
+        if current is None or guidance["pose_stamp_sec"] > current["pose_stamp_sec"]:
             self.active["guidance"] = dict(guidance)
 
     def remember(self, context, state="STOPPED", reason=""):
@@ -114,7 +102,6 @@ class NavigationSegment:
                 self.active = dict(identity, selected_mask=mask, lease_at=now,
                                    lease_sec=lease, control_stamp=body["stamp_sec"])
                 self.sequence = 0
-                self.poses.clear()
                 self.update_guidance(guidance)
                 return dict(identity, effect="START", state="ACCEPTED")
         if matches and body["stamp_sec"] >= self.active["control_stamp"]:

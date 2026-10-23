@@ -79,9 +79,11 @@ source stamp가 0.4초보다 오래되었거나 미래로 0.05초보다 앞서�
 
 Navigation의 인도·차도 구간은 기본적으로 waypoint 방향을 사용한다. A2가 START와
 HEARTBEAT마다 같은 지도 좌표의 목표와 최신 SLAM 자세를 보낸다. 목표와 frame은 구간 중
-바꿀 수 없다. worker는 최근 자세를 보관하고 카메라 source stamp에 맞춰 보간한 자세로
-목표를 로봇 좌표로 변환한다. 자세가 0.5초보다 오래되거나 카메라 시각과 0.2초 이내에
-대응하는 자세가 없으면 정지한다. 반복된 source stamp는 자세의 유효 시간을 늘리지 않는다.
+바꿀 수 없다. worker는 가장 최근에 전달받은 SLAM 자세로 목표를 로봇 좌표로 변환한다.
+카메라 source stamp와 자세 시각을 맞추거나 보간하지 않으며, Jetson에서 자세의 0.5초 나이를
+중복 검사하지 않는다. 송신 당시 유효했던 자세가 전달 지연만으로 `invalid_guidance`가 되는
+경로를 제거했다. 오래된 순서의 자세는 최신 자세를 덮어쓰지 않는다. 잘못된 형식·비정상 좌표와
+구간 중 목표/frame 변경은 계속 거절한다. A2의 localization 검사와 명령 stamp·lease는 유지한다.
 
 감지된 노면을 로봇 폭과 여유 폭만큼 축소한 뒤 연결된 갈림길 후보를 추출한다. 같은 전방
 거리에서 waypoint 방위에 가장 가까운 후보를 고르고 기존 branch 확인 횟수(기본 2프레임)를
@@ -114,9 +116,14 @@ lease가 만료되면 동일하게 정지하고 ERROR를 보고한다. 모델 �
 다시 반전하지 않는다.
 
 waypoint 도착·현재 실행기 종료 확인·다음 Mode 실행·최종 task 완료는 navigation 담당이다.
-Navigation 구간에서는 AprilTag·duration 기반 자동 task 완료와 경로 소실 시 직진 유지/회전 탐색을
-비활성화하고, 카메라/추론 freshness·경로 없음·confidence 검사를 활성화한다.
-설정된 LiDAR 회피와 motion 최종 검사는 유지한다. WAITING 중에는 zero 명령을 보낸다.
+Navigation 구간의 주행 정지 검사는 단독 LINE_TRACKING과 같은 `.env`의
+`LINE_TRACKING_STOP_ON_CAMERA_STALE/INFERENCE_STALE/CAMERA_TIMESTAMP_INVALID/`
+`PATH_UNAVAILABLE/PATH_LOSS_LIMIT/LOW_CONFIDENCE/LATERAL_TARGET` 값을 사용한다.
+이 값을 강제로 true로 바꾸지 않으며 `LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED`도 그대로
+사용한다. 일반적인 waypoint 경로 소실도 같은 정지/유지/복구 정책을 따르고, 확인 중인 갈림길·
+모호한 후보·선택한 갈림길 이탈 등의 제약은 유지한다. 차도의 Connectome 유효성 검사는
+단독 실행과 동일하게 적용한다. AprilTag·duration 기반 별도 task 완료는 Navigation 소유권에
+맞게 비활성화한다. 설정된 LiDAR 회피·motion 검사와 STOP·lease 만료 정지는 유지한다.
 
 `metrics.navigation_worker`와 `metrics.navigation_segment`로 실행 방식·현재 구간을 확인한다.
 `metrics.waypoint_guidance`에는 로봇 좌표의 목표, 갈림길 선택 상태와 정지 이유가 표시된다.

@@ -1,8 +1,14 @@
 # Navigation 소유 구간 실행
 
 `navigation-worker`는 한 모델로 기존 `LINE_TRACKING` Task와 Navigation의
-`sidewalk`/`road` 구간을 모두 받는다. Navigation 구간의 완료·회전·다음 모드 전환은
+`sidewalk`/`road` 구간을 모두 받는다. Navigation 구간의 완료·다음 모드 전환은
 `teamgrit-navigation`이 담당한다. 별도의 `task-drive`와 ros2 검사 실행 방식도 유지한다.
+
+NAVIGATION_3D는 `Nav2 시작 → Nav2 완료·종료 확인 → line-tracking 시작 →
+waypoint 도착·line-tracking 종료 확인 → Nav2 시작 → Nav2 완료·종료 확인`으로 실행한다.
+Sidewalk → Road도 STOPPED를 확인한 뒤 새 identity와 mask로 START한다. 구간 사이에
+별도 heading controller를 실행하지 않으며, 새 주행기가 조향을 담당한다. SLAM은 계속
+유지하고, 노면을 찾지 못했을 때의 기존 정지 동작도 유지한다. 모델은 메모리에 유지한다.
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.connectome.yml \
@@ -107,7 +113,7 @@ lease가 만료되면 동일하게 정지하고 ERROR를 보고한다. 모델 �
 `drive_to_sport_move`의 부호 변환을 이미 적용한 driver/Sport 기준이므로 수신자가
 다시 반전하지 않는다.
 
-waypoint 도착·다음 방향 정렬·다음 Mode 실행·최종 task 완료는 navigation 담당이다.
+waypoint 도착·현재 실행기 종료 확인·다음 Mode 실행·최종 task 완료는 navigation 담당이다.
 Navigation 구간에서는 AprilTag·duration 기반 자동 task 완료와 경로 소실 시 직진 유지/회전 탐색을
 비활성화하고, 카메라/추론 freshness·경로 없음·confidence 검사를 활성화한다.
 설정된 LiDAR 회피와 motion 최종 검사는 유지한다. WAITING 중에는 zero 명령을 보낸다.
@@ -116,4 +122,5 @@ Navigation 구간에서는 AprilTag·duration 기반 자동 task 완료와 경�
 `metrics.waypoint_guidance`에는 로봇 좌표의 목표, 갈림길 선택 상태와 정지 이유가 표시된다.
 로컬 테스트는 실제 inference worker와 모델/ROS transport mock으로 두 노면의 재사용,
 STOP/lease 만료, 이전 추론 결과 폐기와 Navigation 구간의 Sport/task 발행 부재를 검증한다.
-단독 Task → sidewalk → Spin → Nav2 → road → 단독 Task 전환과 단일 모델 재사용도 검증한다.
+단독 Task와 sidewalk → Nav2 → road 전환, 직접 접근 후 종료 및 단일 모델 재사용도 검증한다.
+구형 직접 goal 발행자의 aligned_handoff 회전은 호환 경로로 별도 검증한다.

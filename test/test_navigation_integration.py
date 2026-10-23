@@ -27,7 +27,8 @@ def settle(core, ros, tick):
 
 
 @pytest.mark.skipif(not os.environ.get("TEAMGRIT_NAVIGATION_SOURCE"), reason="requires navigation checkout")
-def test_sidewalk_stop_spin_nav2_and_road_reuse_one_real_worker(monkeypatch):
+@pytest.mark.parametrize("policy", ["sequential", "aligned_handoff"])
+def test_sidewalk_stop_nav2_and_road_reuse_one_real_worker(monkeypatch, policy):
     source = Path(os.environ["TEAMGRIT_NAVIGATION_SOURCE"]) / "nav/src/cobiz/scripts/surface_navigation_core.py"
     spec = importlib.util.spec_from_file_location("integration_surface_navigation_core", source)
     navigation = importlib.util.module_from_spec(spec)
@@ -46,6 +47,7 @@ def test_sidewalk_stop_spin_nav2_and_road_reuse_one_real_worker(monkeypatch):
 
     def goal(req_id, mode, start, end, **extra):
         return dict(req_id=req_id, execution_session="ingress", Mode=mode,
+            execution_policy=policy,
             frame="prior_map", goal_checker_id="waypoint_goal_checker",
             waypoints=[dict(x=start, y=0., z=0., yaw=0.), dict(x=end, y=0., z=0., yaw=0.)], **extra)
 
@@ -96,16 +98,20 @@ def test_sidewalk_stop_spin_nav2_and_road_reuse_one_real_worker(monkeypatch):
         assert node.tasks.active is None
         assert core.phase == "SURFACE_EXIT_STOP"
         settle(core, ros, tick)
-        assert core.phase == "SPIN_START"
-        spin = next(body for channel, body in events if channel == "spin")
-        assert spin["target_yaw"] == pytest.approx(math.pi / 2)
-        assert not core.allow("line", ros.now, ros.clock_ns()/1e9)
-        core.spin_accepted(core.session, True, ros.now, ros.clock_ns()/1e9)
-        tick(ros.now + .1, (9.6, 0, 0, math.pi / 2))
-        core.spin_result(core.session, True, ros.now, ros.clock_ns()/1e9)
-        transport()
-        assert core.phase == "HEADING_STOP"
-        settle(core, ros, tick)
+        if policy == "aligned_handoff":
+            assert core.phase == "SPIN_START"
+            spin = next(body for channel, body in events if channel == "spin")
+            assert spin["target_yaw"] == pytest.approx(math.pi / 2)
+            assert not core.allow("line", ros.now, ros.clock_ns()/1e9)
+            core.spin_accepted(core.session, True, ros.now, ros.clock_ns()/1e9)
+            tick(ros.now + .1, (9.6, 0, 0, math.pi / 2))
+            core.spin_result(core.session, True, ros.now, ros.clock_ns()/1e9)
+            transport()
+            assert core.phase == "HEADING_STOP"
+            settle(core, ros, tick)
+        else:
+            assert core.goal is None and core.phase == "IDLE"
+            assert not any(channel == "spin" for channel, _ in events)
         assert any(channel == "status" and body["status"] == "REACHED" for channel, body in events)
 
         # Omitted Mode is Nav2 on the next destination; no engine restart.
@@ -140,7 +146,8 @@ def test_sidewalk_stop_spin_nav2_and_road_reuse_one_real_worker(monkeypatch):
 
 
 @pytest.mark.skipif(not os.environ.get("TEAMGRIT_NAVIGATION_SOURCE"), reason="requires navigation checkout")
-def test_legacy_sidewalk_spin_nav2_road_and_legacy_share_one_model(monkeypatch):
+@pytest.mark.parametrize("policy", ["sequential", "aligned_handoff"])
+def test_legacy_sidewalk_nav2_road_and_legacy_share_one_model(monkeypatch, policy):
     from test_navigation_worker_ros import legacy
     directory = Path(os.environ["TEAMGRIT_NAVIGATION_SOURCE"]) / "nav/src/cobiz/scripts"
     def load_module(name, path):
@@ -203,6 +210,7 @@ def test_legacy_sidewalk_spin_nav2_road_and_legacy_share_one_model(monkeypatch):
         stamp = ros.clock_ns()/1e9
         core.update_pose((x, 0, 0, 0), stamp)
         core.start(dict(req_id=req, Mode=mode, execution_session="ingress", frame="prior_map",
+            execution_policy=policy,
             goal_checker_id="waypoint_goal_checker", waypoints=[
                 dict(x=x, y=0, z=0, yaw=0), dict(x=end, y=0, z=0, yaw=0)], **extra), ros.now, stamp)
         transport()
@@ -236,12 +244,16 @@ def test_legacy_sidewalk_spin_nav2_road_and_legacy_share_one_model(monkeypatch):
         tick(ros.now + .35, (9.6, 0, 0, 0))
         assert core.phase == "SURFACE_EXIT_STOP"
         settle(core, ros, tick)
-        assert core.phase == "SPIN_START"
-        core.spin_accepted(core.session, True, ros.now, ros.clock_ns()/1e9)
-        core.update_pose((9.6, 0, 0, math.pi/2), ros.clock_ns()/1e9)
-        core.spin_result(core.session, True, ros.now, ros.clock_ns()/1e9)
-        transport()
-        settle(core, ros, tick)
+        if policy == "aligned_handoff":
+            assert core.phase == "SPIN_START"
+            core.spin_accepted(core.session, True, ros.now, ros.clock_ns()/1e9)
+            core.update_pose((9.6, 0, 0, math.pi/2), ros.clock_ns()/1e9)
+            core.spin_result(core.session, True, ros.now, ros.clock_ns()/1e9)
+            transport()
+            settle(core, ros, tick)
+        else:
+            assert core.goal is None
+            assert not any(channel == "spin" for channel, _ in events)
         start(2, "nav2", 9.6, 20.)
         native = next(body for channel, body in reversed(events) if channel == "nav2_goal")
         core.nav2_status(dict(req_id=native["req_id"], status="ACCEPTED"), ros.now, ros.clock_ns()/1e9)
@@ -273,7 +285,8 @@ def test_legacy_sidewalk_spin_nav2_road_and_legacy_share_one_model(monkeypatch):
 
 
 @pytest.mark.skipif(not os.environ.get("TEAMGRIT_NAVIGATION_SOURCE"), reason="requires navigation checkout")
-def test_waypoint_capture_stops_real_worker_before_direct_approach_and_next_road_leg(monkeypatch):
+@pytest.mark.parametrize("policy", ["sequential", "aligned_handoff"])
+def test_waypoint_capture_stops_real_worker_before_direct_approach_and_next_road_leg(monkeypatch, policy):
     directory = Path(os.environ["TEAMGRIT_NAVIGATION_SOURCE"]) / "nav/src/cobiz/scripts"
     def load_module(name):
         spec = importlib.util.spec_from_file_location(name, directory / (name+".py"))
@@ -325,6 +338,7 @@ def test_waypoint_capture_stops_real_worker_before_direct_approach_and_next_road
     def scenario(node):
         core.update_pose((0., 0., 0., 0.), 100.)
         core.start(dict(req_id=1, execution_session="ingress", Mode="sidewalk", frame="prior_map",
+            execution_policy=policy,
             goal_checker_id="waypoint_goal_checker", next_target=dict(x=9.85, y=10.),
             waypoints=[dict(x=10., y=0., z=0., yaw=0.)]), 0., 100.)
         transport()
@@ -350,19 +364,23 @@ def test_waypoint_capture_stops_real_worker_before_direct_approach_and_next_road
         assert core.phase == "SURFACE_EXIT_STOP"
         settle(core, ros, tick)
         stamp = ros.clock_ns()/1e9
-        assert core.phase == "SPIN_START" and core.spin_yaw == pytest.approx(math.pi/2)
-        heading.begin(core.session, core.spin_yaw, core.pose, ros.now)
-        core.spin_accepted(core.session, True, ros.now, stamp)
-        stamp = tick(ros.now + .1, (9.85, 0., 0., math.pi/2))
-        assert heading.tick(core.pose, stamp, ros.now, stamp)[1] is None
-        stamp = tick(ros.now + .35, (9.85, 0., 0., math.pi/2))
-        assert heading.tick(core.pose, stamp, ros.now, stamp)[1] == "REACHED"
-        core.spin_result(core.session, True, ros.now, stamp)
-        transport()
-        settle(core, ros, tick)
+        if policy == "aligned_handoff":
+            assert core.phase == "SPIN_START" and core.spin_yaw == pytest.approx(math.pi/2)
+            heading.begin(core.session, core.spin_yaw, core.pose, ros.now)
+            core.spin_accepted(core.session, True, ros.now, stamp)
+            stamp = tick(ros.now + .1, (9.85, 0., 0., math.pi/2))
+            assert heading.tick(core.pose, stamp, ros.now, stamp)[1] is None
+            stamp = tick(ros.now + .35, (9.85, 0., 0., math.pi/2))
+            assert heading.tick(core.pose, stamp, ros.now, stamp)[1] == "REACHED"
+            core.spin_result(core.session, True, ros.now, stamp)
+            transport()
+            settle(core, ros, tick)
+        else:
+            assert not any(channel == "spin" for channel, _ in events)
         assert core.goal is None
         stamp = ros.clock_ns()/1e9
         core.start(dict(req_id=2, execution_session="ingress", Mode="road", frame="prior_map",
+            execution_policy=policy,
             goal_checker_id="waypoint_goal_checker",
             waypoints=[dict(x=9.85, y=10., z=0., yaw=math.pi/2)]), ros.now, stamp)
         transport()

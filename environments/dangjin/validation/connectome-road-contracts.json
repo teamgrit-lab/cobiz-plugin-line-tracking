@@ -1,0 +1,24 @@
+{
+  "schema": "flyvis.road_readout.contract_validation.v1",
+  "flow_state_preserved": true,
+  "flow_after_detection_max_difference": 0.0,
+  "blank_camera_road_pixels": 0,
+  "panorama_azimuth_and_unknown_caps": true,
+  "four_view_inference": {
+    "ms": 594.4960829801857,
+    "circuit_ms": 167.82008297741413,
+    "road_fraction": 0.34337191358024693,
+    "views": 4,
+    "view_road_fractions": [
+      0.34337191358024693,
+      0.37546296296296294,
+      0.36709876543209874,
+      0.3216898148148148
+    ],
+    "mean_road_probability": 0.9943256378173828
+  },
+  "readout_sha256": "49731dcf652bbf394747900560d0f8a6f88f56c285d93045277ec859955d63ea",
+  "encoder_sha256": "97f853183f79d2e987532ca2716ce3c33c2f41f875af05396e0cd8b14a7bc3c2",
+  "runtime_ground_truth": false,
+  "raw_image_skip_connection": false
+}

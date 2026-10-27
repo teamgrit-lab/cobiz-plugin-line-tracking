@@ -1,0 +1,31 @@
+{
+  "layout_revision": "2026-10-27-barn3-central-side-rear-facilities",
+  "route_length_m": 1030.9001614516883,
+  "sampled_points": 5157,
+  "solid_footprints": 67,
+  "robot_radius_m": 0.65,
+  "minimum_center_clearance_m": 1.1349999999999998,
+  "minimum_footprint_clearance_m": 0.48499999999999976,
+  "swept_collisions": 0,
+  "scope": "Geometry only; earlier neural closed-loop lap belongs to the previous layout",
+  "facility_layout": {
+    "anchor": "barn-3 rear at central-road side",
+    "front_entrance": [
+      0,
+      27.75
+    ],
+    "rear_entrance": [
+      134.3,
+      27.75
+    ],
+    "diagram_left_site_vector": [
+      0,
+      -1
+    ],
+    "diagram_down_site_vector": [
+      1,
+      0
+    ],
+    "facility_lane_y": -67
+  }
+}

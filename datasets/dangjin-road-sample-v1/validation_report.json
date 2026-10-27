@@ -1,0 +1,29 @@
+{
+  "passed": true,
+  "samples_checked": 79,
+  "errors": [],
+  "actions": {
+    "stop": 37,
+    "forward": 16,
+    "turn_left": 3,
+    "turn_right": 23
+  },
+  "checks": [
+    "raw evidence unchanged",
+    "PNG readability and dimensions",
+    "LiDAR point/time/mask alignment",
+    "camera/LiDAR matching arithmetic",
+    "chronological per-episode timestamps",
+    "estimated vs absent recorded command separation",
+    "GPS clock rejection",
+    "command units/bounds/sign/stop consistency",
+    "review-only training status"
+  ],
+  "not_validated": [
+    "expert correctness of labels",
+    "recording-specific extrinsic calibration",
+    "closed-loop driving success",
+    "360-degree recognition",
+    "collision-free operation"
+  ]
+}

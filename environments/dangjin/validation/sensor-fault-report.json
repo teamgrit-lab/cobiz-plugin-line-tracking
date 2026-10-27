@@ -1,0 +1,70 @@
+{
+  "schema": "dangjin.sensor_faults.validation.v1",
+  "scope": "Bounded synthetic camera trials, not a noisy full-lap or real-robot performance claim",
+  "runs": {
+    "severe": {
+      "frames": 143,
+      "seed": 47,
+      "profile": "severe",
+      "distance_m": 28.328233318558297,
+      "dropout_episodes": 7,
+      "stationary_observations": 71,
+      "resumptions_after_loss": 15,
+      "max_movement_while_stopped_m": 0,
+      "swept_collisions": 0,
+      "browser_final_status": "bounded observation"
+    },
+    "normal": {
+      "frames": 175,
+      "seed": 47,
+      "profile": "normal",
+      "distance_m": 51.17186732272855,
+      "dropout_episodes": 4,
+      "stationary_observations": 42,
+      "resumptions_after_loss": 8,
+      "max_movement_while_stopped_m": 0,
+      "swept_collisions": 0,
+      "browser_final_status": "obstacle"
+    },
+    "replay": {
+      "frames": 51,
+      "seed": 47,
+      "profile": "normal",
+      "distance_m": 17.199367958594365,
+      "dropout_episodes": 1,
+      "stationary_observations": 7,
+      "resumptions_after_loss": 2,
+      "max_movement_while_stopped_m": 0,
+      "swept_collisions": 0,
+      "browser_final_status": "bounded observation"
+    },
+    "off": {
+      "frames": 144,
+      "seed": 1966983204,
+      "profile": "normal",
+      "distance_m": 57.199440183410466,
+      "dropout_episodes": 0,
+      "stationary_observations": 0,
+      "resumptions_after_loss": 0,
+      "max_movement_while_stopped_m": 0,
+      "swept_collisions": 0,
+      "browser_final_status": "bounded observation"
+    }
+  },
+  "replay_schedule_frames_matched": 51,
+  "new_test_seed_changes": {
+    "new_test_seeds": [
+      "1966983204",
+      "391783147",
+      "1596103072"
+    ],
+    "different_each_time": true,
+    "reset_time": "0.0 s",
+    "replayed_seed": 47
+  },
+  "raw_camera_and_model_unchanged": true,
+  "partial_masks_reach_planner": true,
+  "full_loss_stops_motion": true,
+  "reobservation_recovers": true,
+  "structural_guard_remains_latched": true
+}

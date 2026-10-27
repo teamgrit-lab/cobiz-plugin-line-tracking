@@ -1,0 +1,26 @@
+{
+  "schema": "dangjin.vision_drive.test_plan.v1",
+  "created_at": "2026-10-27T05:02:53.214207+00:00",
+  "train_fault_seeds": [
+    1000,
+    1999
+  ],
+  "validation_fault_seeds": [
+    2000,
+    2999
+  ],
+  "trials": [
+    {
+      "profile": "normal",
+      "seed": 1364609034,
+      "oncoming_car": false
+    },
+    {
+      "profile": "severe",
+      "seed": 151084057,
+      "oncoming_car": false
+    }
+  ],
+  "runtime_input": "body-fixed four camera views only; no goal or pose to actor",
+  "scope": "newly rendered browser closed-loop trials; NPC motion checked separately"
+}

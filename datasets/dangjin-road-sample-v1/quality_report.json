@@ -1,0 +1,42 @@
+{
+  "samples": 79,
+  "episodes": {
+    "straight": 24,
+    "right_turn": 24,
+    "vehicle": 31
+  },
+  "estimated_actions": {
+    "stop": 37,
+    "forward": 16,
+    "turn_left": 3,
+    "turn_right": 23
+  },
+  "recorded_commands": 0,
+  "human_verified_labels": 0,
+  "training_approved_labels": 0,
+  "all_estimates_explicit": true,
+  "invalid_camera_lidar_associations": 0,
+  "camera_lidar_abs_midpoint_delta_ms_max": 46.227509,
+  "invalid_ground_fits": 0,
+  "ground_support_min": 0.4444444444444444,
+  "stop_reasons": {
+    "insufficient_ground_support": 6,
+    "vehicle_visible_near_forward_junction": 13,
+    "hold_during_vehicle_occlusion": 8,
+    "yield_to_crossing_vehicle": 10
+  },
+  "gps_diagnostic_samples": 48,
+  "gps_timebase_rejected_samples": 48,
+  "frame_gaps": [
+    {
+      "after_id": "vehicle-0012",
+      "before_id": "vehicle-0013",
+      "seconds": 1.187558781,
+      "filled": false
+    }
+  ],
+  "limitations": [
+    "No command ground truth, front camera only, unverified extrinsics, no deskew.",
+    "Offline visual proposals and policy assumptions; no claim of optimal or collision-free closed-loop behavior."
+  ]
+}

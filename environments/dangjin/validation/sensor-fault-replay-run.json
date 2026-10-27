@@ -1,0 +1,4975 @@
+{
+  "session": "230ff33a-0f57-42e1-b1b5-26ba0d74b13e",
+  "layout_revision": "2026-10-27-barn3-central-side-rear-facilities",
+  "steps": 51,
+  "distance_m": 17.199367958594365,
+  "wall_s": null,
+  "errors": 0,
+  "latest": {
+    "stamp_sec": 26,
+    "pose": {
+      "x": -5.4563892908415195,
+      "y": 10.141391976041131,
+      "heading": 1.5534444624612709
+    },
+    "camera_yaw": 0.06077564761341803,
+    "command": {
+      "vx": 0.8,
+      "vy": 0.0,
+      "yaw_rate": 0.02977692210839991,
+      "reason": "tracking"
+    },
+    "confidence": 1.0,
+    "path_end": [
+      10.0,
+      -0.03957495093345642
+    ],
+    "flow_ms": 61.842457856982946,
+    "surface_ms": 2.182292053475976,
+    "perception": {
+      "ms": 90.64375003799796,
+      "circuit_ms": 83.93754088319838,
+      "road_fraction": 0.3273688271604938,
+      "views": 4,
+      "view_road_fractions": [
+        0.3273688271604938,
+        0.35944444444444446,
+        0.36974537037037036,
+        0.3067283950617284
+      ],
+      "mean_road_probability": 0.9954745769500732,
+      "raw_road_fraction": 0.3273688271604938,
+      "applied_view_road_fractions": [
+        0.3273688271604938,
+        0.35944444444444446,
+        0.36974537037037036,
+        0.3067283950617284
+      ]
+    },
+    "sensor_faults": {
+      "schema": "dangjin.sensor_faults.v1",
+      "enabled": true,
+      "profile": "normal",
+      "seed": 47,
+      "kind": "clear",
+      "elapsed_s": 25,
+      "event_id": null,
+      "remaining_s": 0.0,
+      "removed_fraction": 0.0,
+      "front_removed_fraction": 0.0,
+      "raw_road_pixels": [
+        42427,
+        46584,
+        47919,
+        39752
+      ],
+      "remaining_road_pixels": [
+        42427,
+        46584,
+        47919,
+        39752
+      ]
+    },
+    "mission": {
+      "progress_m": 17.19824554633964,
+      "length_m": 1030.9001614516883,
+      "distance_m": 17.199367958594365,
+      "fraction": 0.016682746001437706,
+      "complete": false,
+      "checkpoints": 1,
+      "target_site": [
+        -5.714778455626397,
+        16.186765092344906
+      ],
+      "cross_track_m": 0.06933291011586645,
+      "return_gate_crossed": false,
+      "return_gate_lateral_m": 0.1612305298429214,
+      "return_gate_half_width_m": 2.5
+    }
+  },
+  "mission": {
+    "progress_m": 17.19824554633964,
+    "length_m": 1030.9001614516883,
+    "distance_m": 17.199367958594365,
+    "fraction": 0.016682746001437706,
+    "complete": false,
+    "checkpoints": 1,
+    "target_site": [
+      -5.714778455626397,
+      16.186765092344906
+    ],
+    "cross_track_m": 0.06933291011586645,
+    "return_gate_crossed": false,
+    "return_gate_lateral_m": 0.1612305298429214,
+    "return_gate_half_width_m": 2.5
+  },
+  "stops": 7,
+  "model": {
+    "backend": "flyvis",
+    "version": "1.2.0",
+    "bundle_sha256": "97f853183f79d2e987532ca2716ce3c33c2f41f875af05396e0cd8b14a7bc3c2",
+    "pretrained_task": "optical_flow",
+    "flow_decoder_loaded": true,
+    "trained_waypoint_head": false,
+    "nodes": 45669,
+    "source": {
+      "repository": "https://github.com/TuragaLab/flyvis",
+      "release": "v1.2.0",
+      "archive_sha256": "71c78d4070556a536b13b23ee3139cd2788aa2a9d07d430a223b4edead281db1",
+      "member": "results/flow/0000/000/best_chkpt",
+      "checkpoint_sha256": "d8a57a022aa18ca338599be713af9db29b89cde4b00098ffe42b78f0d583e46a",
+      "pretrained_task": "optical_flow"
+    },
+    "inferred_frames": 463,
+    "execution": "eager",
+    "integration_steps": 25,
+    "integration_dt_sec": 0.02
+  },
+  "perception": {
+    "backend": "flyvis-road-readout",
+    "input": "four RGB camera projections; grayscale BoxEye -> frozen Flyvis neurons -> trained road readout",
+    "device": "mps",
+    "weights_sha256": "49731dcf652bbf394747900560d0f8a6f88f56c285d93045277ec859955d63ea",
+    "encoder_sha256": "97f853183f79d2e987532ca2716ce3c33c2f41f875af05396e0cd8b14a7bc3c2",
+    "encoder_frozen": true,
+    "road_readout_trained": true,
+    "raw_image_skip_connection": false,
+    "uses_ground_truth_at_runtime": false,
+    "uses_pose_or_map": false,
+    "azimuth_coverage_deg": 360,
+    "vertical_view_fov_deg": 90,
+    "views": 4,
+    "output_cell_types": [
+      "T1",
+      "T2",
+      "T2a",
+      "T3",
+      "T4a",
+      "T4b",
+      "T4c",
+      "T4d",
+      "T5a",
+      "T5b",
+      "T5c",
+      "T5d",
+      "Tm1",
+      "Tm2",
+      "Tm3",
+      "Tm4",
+      "Tm5Y",
+      "Tm5a",
+      "Tm5b",
+      "Tm5c",
+      "Tm9",
+      "Tm16",
+      "Tm20",
+      "Tm28",
+      "Tm30",
+      "TmY3",
+      "TmY4",
+      "TmY5a",
+      "TmY9",
+      "TmY10",
+      "TmY13",
+      "TmY14",
+      "TmY15",
+      "TmY18"
+    ],
+    "presentation_steps": 10,
+    "integration_dt_s": 0.02,
+    "training": {
+      "schema": "flyvis.road_readout.training.v1",
+      "encoder_sha256": "97f853183f79d2e987532ca2716ce3c33c2f41f875af05396e0cd8b14a7bc3c2",
+      "encoder_frozen": true,
+      "encoder_pretraining_task": "optical_flow",
+      "new_training": "supervised convolutional road readout, not biological weights",
+      "input": "34 output cell types x 721 hexals after 10 native 0.02 s steps; linearly interpolated to 48x88",
+      "output_cell_types": [
+        "T1",
+        "T2",
+        "T2a",
+        "T3",
+        "T4a",
+        "T4b",
+        "T4c",
+        "T4d",
+        "T5a",
+        "T5b",
+        "T5c",
+        "T5d",
+        "Tm1",
+        "Tm2",
+        "Tm3",
+        "Tm4",
+        "Tm5Y",
+        "Tm5a",
+        "Tm5b",
+        "Tm5c",
+        "Tm9",
+        "Tm16",
+        "Tm20",
+        "Tm28",
+        "Tm30",
+        "TmY3",
+        "TmY4",
+        "TmY5a",
+        "TmY9",
+        "TmY10",
+        "TmY13",
+        "TmY14",
+        "TmY15",
+        "TmY18"
+      ],
+      "raw_image_skip_connection": false,
+      "runtime_ground_truth": false,
+      "seed": 47,
+      "train_views": 408,
+      "heldout_views": 104,
+      "negative_training_views": 8,
+      "split": "pose_group % 5 == 0 held out; all four directions grouped by pose",
+      "layout_revision": "2026-10-27-barn3-central-side-rear-facilities",
+      "dataset_sha256": "ba6f35a0aacfb235e1958d6b8bcf19b7b58eeaf26f52ce715c0aff7180bb5ca8",
+      "selected_epoch": {
+        "epoch": 58,
+        "loss": 0.019679884605396252,
+        "road_iou": 0.9813462444405038,
+        "precision": 0.9917203528353357,
+        "recall": 0.989452867501648
+      },
+      "threshold": 0.55,
+      "per_view_heldout": {
+        "0": {
+          "road_iou": 0.9786335213211664,
+          "precision": 0.9909855217738122,
+          "recall": 0.9874236839884084
+        },
+        "1": {
+          "road_iou": 0.9860762072947089,
+          "precision": 0.9937331731134874,
+          "recall": 0.992246531442935
+        },
+        "2": {
+          "road_iou": 0.9813379330410025,
+          "precision": 0.9912881014358889,
+          "recall": 0.9898750628878081
+        },
+        "3": {
+          "road_iou": 0.9796326631198992,
+          "precision": 0.9909960112623182,
+          "recall": 0.9884304289955974
+        }
+      },
+      "activity_ablation": {
+        "mean_activity": {
+          "road_iou": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "spatial_shuffle": {
+          "road_iou": 0.02083134601020509,
+          "precision": 0.8589876799762506,
+          "recall": 0.020902827317795577
+        }
+      },
+      "history": [
+        {
+          "epoch": 1,
+          "loss": 0.3638967814353796,
+          "road_iou": 0.9414072491660478,
+          "precision": 0.9759087700562141,
+          "recall": 0.9638056365754327
+        },
+        {
+          "epoch": 2,
+          "loss": 0.2044469456260021,
+          "road_iou": 0.9515463408439974,
+          "precision": 0.9759230753925546,
+          "recall": 0.9744213976756576
+        },
+        {
+          "epoch": 3,
+          "loss": 0.14973317086696625,
+          "road_iou": 0.9522717487764804,
+          "precision": 0.9724537680912345,
+          "recall": 0.9786709529442573
+        },
+        {
+          "epoch": 4,
+          "loss": 0.12184985211262336,
+          "road_iou": 0.9528021870728374,
+          "precision": 0.9824189863964505,
+          "recall": 0.9693302390261963
+        },
+        {
+          "epoch": 5,
+          "loss": 0.10375151353386733,
+          "road_iou": 0.956857089658419,
+          "precision": 0.9721784973640157,
+          "recall": 0.9837964258946551
+        },
+        {
+          "epoch": 6,
+          "loss": 0.08851868372697097,
+          "road_iou": 0.9595217808073278,
+          "precision": 0.9824872948823277,
+          "recall": 0.9762183834352227
+        },
+        {
+          "epoch": 7,
+          "loss": 0.07776305065132104,
+          "road_iou": 0.9594582883056564,
+          "precision": 0.9789085803893828,
+          "recall": 0.9797112180673825
+        },
+        {
+          "epoch": 8,
+          "loss": 0.07049976145991912,
+          "road_iou": 0.9490186504528072,
+          "precision": 0.9861837938735375,
+          "recall": 0.9618063770419266
+        },
+        {
+          "epoch": 9,
+          "loss": 0.06823967913022408,
+          "road_iou": 0.9614685924949687,
+          "precision": 0.9857844569425169,
+          "recall": 0.9749866806331892
+        },
+        {
+          "epoch": 10,
+          "loss": 0.07991103512736467,
+          "road_iou": 0.9564849210401225,
+          "precision": 0.9743453168770333,
+          "recall": 0.9811957630868423
+        },
+        {
+          "epoch": 11,
+          "loss": 0.06697990315464827,
+          "road_iou": 0.9605918538889712,
+          "precision": 0.9878215068958239,
+          "recall": 0.9721042793545299
+        },
+        {
+          "epoch": 12,
+          "loss": 0.05993910219806891,
+          "road_iou": 0.96254204636618,
+          "precision": 0.9845849004077578,
+          "recall": 0.9772694846533804
+        },
+        {
+          "epoch": 13,
+          "loss": 0.05655751878825518,
+          "road_iou": 0.9645544880476289,
+          "precision": 0.9799247131780715,
+          "recall": 0.9839986996685961
+        },
+        {
+          "epoch": 14,
+          "loss": 0.05379009433090687,
+          "road_iou": 0.9652146908587277,
+          "precision": 0.9879629443562487,
+          "recall": 0.9767005896641714
+        },
+        {
+          "epoch": 15,
+          "loss": 0.05156636180785986,
+          "road_iou": 0.9645802886739565,
+          "precision": 0.9902051519358321,
+          "recall": 0.9738723688606749
+        },
+        {
+          "epoch": 16,
+          "loss": 0.05164242879702495,
+          "road_iou": 0.9640454468130826,
+          "precision": 0.991254331407445,
+          "recall": 0.9723155832076648
+        },
+        {
+          "epoch": 17,
+          "loss": 0.05045523172101149,
+          "road_iou": 0.9673024571642083,
+          "precision": 0.9849178771617709,
+          "recall": 0.9818459287887955
+        },
+        {
+          "epoch": 18,
+          "loss": 0.04765446913930086,
+          "road_iou": 0.9680106429079678,
+          "precision": 0.9871893499195242,
+          "recall": 0.9803252634525604
+        },
+        {
+          "epoch": 19,
+          "loss": 0.04596137348562479,
+          "road_iou": 0.9710995033396129,
+          "precision": 0.9875921427184801,
+          "recall": 0.9830938857333779
+        },
+        {
+          "epoch": 20,
+          "loss": 0.045224358685887776,
+          "road_iou": 0.969705388397282,
+          "precision": 0.9922675543572955,
+          "recall": 0.9770888830695045
+        },
+        {
+          "epoch": 21,
+          "loss": 0.04288731630031879,
+          "road_iou": 0.9716809853700593,
+          "precision": 0.9902402744535447,
+          "recall": 0.9810765660414842
+        },
+        {
+          "epoch": 22,
+          "loss": 0.04226970780067719,
+          "road_iou": 0.973903010146944,
+          "precision": 0.9888145367499048,
+          "recall": 0.9847518082733585
+        },
+        {
+          "epoch": 23,
+          "loss": 0.04055840006241432,
+          "road_iou": 0.9736234343781555,
+          "precision": 0.9911443620259163,
+          "recall": 0.9821673996080945
+        },
+        {
+          "epoch": 24,
+          "loss": 0.039035923492449984,
+          "road_iou": 0.9739508193191361,
+          "precision": 0.9934347557114148,
+          "recall": 0.9802602468823651
+        },
+        {
+          "epoch": 25,
+          "loss": 0.037725531352827184,
+          "road_iou": 0.9734247749678525,
+          "precision": 0.9928985769714133,
+          "recall": 0.9802494107873326
+        },
+        {
+          "epoch": 26,
+          "loss": 0.037389824381814554,
+          "road_iou": 0.9755403400253857,
+          "precision": 0.9897252758214792,
+          "recall": 0.9855211710206698
+        },
+        {
+          "epoch": 27,
+          "loss": 0.03682859392406849,
+          "road_iou": 0.9769574695814972,
+          "precision": 0.990921023250241,
+          "recall": 0.9857812373014512
+        },
+        {
+          "epoch": 28,
+          "loss": 0.03472718739738831,
+          "road_iou": 0.9760214083678451,
+          "precision": 0.9930037007029145,
+          "recall": 0.9827796389774338
+        },
+        {
+          "epoch": 29,
+          "loss": 0.03481264362254968,
+          "road_iou": 0.977961491622899,
+          "precision": 0.9900466529200166,
+          "recall": 0.9876721358846318
+        },
+        {
+          "epoch": 30,
+          "loss": 0.03487759384398277,
+          "road_iou": 0.9779050575178181,
+          "precision": 0.992188636429756,
+          "recall": 0.9854922747672497
+        },
+        {
+          "epoch": 31,
+          "loss": 0.03343762120661827,
+          "road_iou": 0.9781705526306365,
+          "precision": 0.9914419769668479,
+          "recall": 0.9865000316052772
+        },
+        {
+          "epoch": 32,
+          "loss": 0.032217368483543396,
+          "road_iou": 0.9787806678660255,
+          "precision": 0.9920614596670935,
+          "recall": 0.9865072556686322
+        },
+        {
+          "epoch": 33,
+          "loss": 0.031422976905909866,
+          "road_iou": 0.9783694528228303,
+          "precision": 0.9904502318168646,
+          "recall": 0.9876865840113418
+        },
+        {
+          "epoch": 34,
+          "loss": 0.03097351647626895,
+          "road_iou": 0.9791346176231982,
+          "precision": 0.9915055982532435,
+          "recall": 0.9874174876513667
+        },
+        {
+          "epoch": 35,
+          "loss": 0.03129988299826017,
+          "road_iou": 0.9779176129478191,
+          "precision": 0.9939781571336028,
+          "recall": 0.9837458574511698
+        },
+        {
+          "epoch": 36,
+          "loss": 0.030258261383726046,
+          "road_iou": 0.9794717210658604,
+          "precision": 0.9904484523960274,
+          "recall": 0.9888117318788886
+        },
+        {
+          "epoch": 37,
+          "loss": 0.02936166997712392,
+          "road_iou": 0.9787128624001437,
+          "precision": 0.9939019610345337,
+          "recall": 0.9846253871646454
+        },
+        {
+          "epoch": 38,
+          "loss": 0.02861434665436928,
+          "road_iou": 0.9790711019456648,
+          "precision": 0.9928262814498003,
+          "recall": 0.9860467216297487
+        },
+        {
+          "epoch": 39,
+          "loss": 0.028110021295455787,
+          "road_iou": 0.9796827825614424,
+          "precision": 0.9896674329114472,
+          "recall": 0.9898068466060448
+        },
+        {
+          "epoch": 40,
+          "loss": 0.02707021912703147,
+          "road_iou": 0.9795590615466148,
+          "precision": 0.9912473955974272,
+          "recall": 0.9881055796859338
+        },
+        {
+          "epoch": 41,
+          "loss": 0.026394546031951904,
+          "road_iou": 0.9802536741202615,
+          "precision": 0.9914368613416308,
+          "recall": 0.9886239062316576
+        },
+        {
+          "epoch": 42,
+          "loss": 0.025965569290117577,
+          "road_iou": 0.9801335430517618,
+          "precision": 0.9929719240357291,
+          "recall": 0.986980431818387
+        },
+        {
+          "epoch": 43,
+          "loss": 0.0254541256536658,
+          "road_iou": 0.9797617195115625,
+          "precision": 0.9902667953821512,
+          "recall": 0.989288520060321
+        },
+        {
+          "epoch": 44,
+          "loss": 0.025032618799461767,
+          "road_iou": 0.9799768324031733,
+          "precision": 0.9897147128171613,
+          "recall": 0.990059688823471
+        },
+        {
+          "epoch": 45,
+          "loss": 0.024694573492384873,
+          "road_iou": 0.9803547501845045,
+          "precision": 0.991760173386103,
+          "recall": 0.9884053783151678
+        },
+        {
+          "epoch": 46,
+          "loss": 0.026683306249861535,
+          "road_iou": 0.9796301499551692,
+          "precision": 0.9908371300776364,
+          "recall": 0.9885859798990437
+        },
+        {
+          "epoch": 47,
+          "loss": 0.026528741519611616,
+          "road_iou": 0.979906654373648,
+          "precision": 0.9931047521401082,
+          "recall": 0.9866192286506352
+        },
+        {
+          "epoch": 48,
+          "loss": 0.02469087288213464,
+          "road_iou": 0.9800473228529945,
+          "precision": 0.9924396991127311,
+          "recall": 0.9874192936672055
+        },
+        {
+          "epoch": 49,
+          "loss": 0.023973694859215848,
+          "road_iou": 0.980123523488668,
+          "precision": 0.9937470769040387,
+          "recall": 0.9862056510235595
+        },
+        {
+          "epoch": 50,
+          "loss": 0.02276538247958972,
+          "road_iou": 0.9808207756143471,
+          "precision": 0.9906369951639836,
+          "recall": 0.9899982842849532
+        },
+        {
+          "epoch": 51,
+          "loss": 0.02203774441463443,
+          "road_iou": 0.9810016621530614,
+          "precision": 0.9916587001549849,
+          "recall": 0.9891639049674466
+        },
+        {
+          "epoch": 52,
+          "loss": 0.02156362646760849,
+          "road_iou": 0.9807071881398469,
+          "precision": 0.9917862765238594,
+          "recall": 0.9887376852294995
+        },
+        {
+          "epoch": 53,
+          "loss": 0.02119439818824713,
+          "road_iou": 0.9811211819656993,
+          "precision": 0.9927249109209791,
+          "recall": 0.9882265827471307
+        },
+        {
+          "epoch": 54,
+          "loss": 0.02087327067811902,
+          "road_iou": 0.9810340189731542,
+          "precision": 0.9928763165202303,
+          "recall": 0.9879881886564145
+        },
+        {
+          "epoch": 55,
+          "loss": 0.020635347705907546,
+          "road_iou": 0.9811553758439664,
+          "precision": 0.9923392483907164,
+          "recall": 0.988643772405884
+        },
+        {
+          "epoch": 56,
+          "loss": 0.020070305559784174,
+          "road_iou": 0.9800446124940106,
+          "precision": 0.9935633053827723,
+          "recall": 0.98630678791053
+        },
+        {
+          "epoch": 57,
+          "loss": 0.020160264013191827,
+          "road_iou": 0.9810249567934953,
+          "precision": 0.991564542113933,
+          "recall": 0.9892812959969659
+        },
+        {
+          "epoch": 58,
+          "loss": 0.019679884605396252,
+          "road_iou": 0.9813462444405038,
+          "precision": 0.9917203528353357,
+          "recall": 0.989452867501648
+        },
+        {
+          "epoch": 59,
+          "loss": 0.01943572836283308,
+          "road_iou": 0.9808740575408377,
+          "precision": 0.9917734082939693,
+          "recall": 0.9889200928292141
+        },
+        {
+          "epoch": 60,
+          "loss": 0.019427873516598575,
+          "road_iou": 0.9807803641747279,
+          "precision": 0.9923577737074046,
+          "recall": 0.9882446429055183
+        }
+      ],
+      "wall_s": 109.61389899998903,
+      "scope": "held-out views in this synthetic scene only; no real-world road-detection validation"
+    }
+  },
+  "sensor_faults": {
+    "enabled": true,
+    "profile": "normal",
+    "seed": 47
+  },
+  "fault_events": 6,
+  "trace": [
+    {
+      "stamp_sec": 1,
+      "pose": {
+        "x": -5,
+        "y": -7,
+        "heading": 1.5880122977059208
+      },
+      "camera_yaw": 0.003989517119739494,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.01562788303172194,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.48331141471862793
+      ],
+      "flow_ms": 10.370583971962333,
+      "surface_ms": 2.270166063681245,
+      "perception": {
+        "ms": 124.64016699232161,
+        "circuit_ms": 114.73520915023983,
+        "road_fraction": 0.37159722222222225,
+        "views": 4,
+        "view_road_fractions": [
+          0.37159722222222225,
+          0.3547222222222222,
+          0.3462345679012346,
+          0.35574074074074075
+        ],
+        "mean_road_probability": 0.9941333532333374,
+        "raw_road_fraction": 0.37159722222222225,
+        "applied_view_road_fractions": [
+          0.37159722222222225,
+          0.3547222222222222,
+          0.3462345679012346,
+          0.35574074074074075
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 0,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          48159,
+          45972,
+          44872,
+          46104
+        ],
+        "remaining_road_pixels": [
+          48159,
+          45972,
+          44872,
+          46104
+        ]
+      },
+      "mission": {
+        "progress_m": 0.0,
+        "length_m": 1030.9001614516883,
+        "distance_m": 0.0,
+        "fraction": 0.0,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.127224813903872,
+          -1.0013922385524958
+        ],
+        "cross_track_m": 0.0,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.0,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 1.5,
+      "pose": {
+        "x": -5.0084485270957915,
+        "y": -6.600090239641335,
+        "heading": 1.5958262392217826
+      },
+      "camera_yaw": -0.0038181106540533523,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.018016259920614643,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.4257761836051941
+      ],
+      "flow_ms": 72.39200011827052,
+      "surface_ms": 2.0467080175876617,
+      "perception": {
+        "ms": 96.53562493622303,
+        "circuit_ms": 88.2708749268204,
+        "road_fraction": 0.36865740740740743,
+        "views": 4,
+        "view_road_fractions": [
+          0.36865740740740743,
+          0.3558641975308642,
+          0.3500617283950617,
+          0.3568672839506173
+        ],
+        "mean_road_probability": 0.9942468404769897,
+        "raw_road_fraction": 0.36865740740740743,
+        "applied_view_road_fractions": [
+          0.36865740740740743,
+          0.3558641975308642,
+          0.3500617283950617,
+          0.3568672839506173
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 0.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          47778,
+          46120,
+          45368,
+          46250
+        ],
+        "remaining_road_pixels": [
+          47778,
+          46120,
+          45368,
+          46250
+        ]
+      },
+      "mission": {
+        "progress_m": 0.4008752582818924,
+        "length_m": 1030.9001614516883,
+        "distance_m": 0.3999989925489978,
+        "fraction": 0.0003888594388397318,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.138343662798157,
+          -0.6006712148062713
+        ],
+        "cross_track_m": 0.002684996578085712,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.001562780391260515,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 2,
+      "pose": {
+        "x": -5.02026036118354,
+        "y": -6.200266016455962,
+        "heading": 1.604834369182091
+      },
+      "camera_yaw": -0.012953337739889381,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.021164163544588565,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.40039199590682983
+      ],
+      "flow_ms": 64.85716695897281,
+      "surface_ms": 2.7899579145014286,
+      "perception": {
+        "ms": 95.86841706186533,
+        "circuit_ms": 87.65037497505546,
+        "road_fraction": 0.3664429012345679,
+        "views": 4,
+        "view_road_fractions": [
+          0.3664429012345679,
+          0.35743055555555553,
+          0.3526929012345679,
+          0.35618055555555556
+        ],
+        "mean_road_probability": 0.9935568571090698,
+        "raw_road_fraction": 0.3664429012345679,
+        "applied_view_road_fractions": [
+          0.3664429012345679,
+          0.35743055555555553,
+          0.3526929012345679,
+          0.35618055555555556
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 1,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          47491,
+          46323,
+          45709,
+          46161
+        ],
+        "remaining_road_pixels": [
+          47491,
+          46323,
+          45709,
+          46161
+        ]
+      },
+      "mission": {
+        "progress_m": 0.8005881810968126,
+        "length_m": 1030.9001614516883,
+        "distance_m": 0.7999976536346363,
+        "fraction": 0.0007765913820106925,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.14970488319834,
+          -0.20111979294037632
+        ],
+        "cross_track_m": 0.008062594752185126,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.006489841894834585,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 2.5,
+      "pose": {
+        "x": -5.03598786660367,
+        "y": -5.800577178187124,
+        "heading": 1.6154164509543856
+      },
+      "camera_yaw": -0.024314337564973698,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.01692082444941017,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.39262285828590393
+      ],
+      "flow_ms": 63.553832937031984,
+      "surface_ms": 2.8260829858481884,
+      "perception": {
+        "ms": 96.28574992530048,
+        "circuit_ms": 88.18933297879994,
+        "road_fraction": 0.36656635802469134,
+        "views": 4,
+        "view_road_fractions": [
+          0.36656635802469134,
+          0.35844135802469135,
+          0.3540277777777778,
+          0.355570987654321
+        ],
+        "mean_road_probability": 0.994150698184967,
+        "raw_road_fraction": 0.36656635802469134,
+        "applied_view_road_fractions": [
+          0.36656635802469134,
+          0.35844135802469135,
+          0.3540277777777778,
+          0.355570987654321
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 1.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          47507,
+          46454,
+          45882,
+          46082
+        ],
+        "remaining_road_pixels": [
+          47507,
+          46454,
+          45882,
+          46082
+        ]
+      },
+      "mission": {
+        "progress_m": 1.2003732829539755,
+        "length_m": 1030.9001614516883,
+        "distance_m": 1.1999958059596605,
+        "fraction": 0.0011643933407320835,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.161332445419343,
+          0.19849617669901645
+        ],
+        "cross_track_m": 0.017073841651541338,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.015334325130535321,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 3,
+      "pose": {
+        "x": -5.055520170353559,
+        "y": -5.4010555338732615,
+        "heading": 1.62387686317909
+      },
+      "camera_yaw": -0.034186223277025585,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.014547651460853636,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.3894945979118347
+      ],
+      "flow_ms": 65.17179100774229,
+      "surface_ms": 3.8109589368104935,
+      "perception": {
+        "ms": 99.4843749795109,
+        "circuit_ms": 91.24154201708734,
+        "road_fraction": 0.36728395061728397,
+        "views": 4,
+        "view_road_fractions": [
+          0.36728395061728397,
+          0.36030092592592594,
+          0.3550617283950617,
+          0.3555787037037037
+        ],
+        "mean_road_probability": 0.9943825602531433,
+        "raw_road_fraction": 0.36728395061728397,
+        "applied_view_road_fractions": [
+          0.36728395061728397,
+          0.36030092592592594,
+          0.3550617283950617,
+          0.3555787037037037
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 2,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          47600,
+          46695,
+          46016,
+          46083
+        ],
+        "remaining_road_pixels": [
+          47600,
+          46695,
+          46016,
+          46083
+        ]
+      },
+      "mission": {
+        "progress_m": 1.600702524691959,
+        "length_m": 1030.9001614516883,
+        "distance_m": 1.599994624914205,
+        "fraction": 0.001552723129306614,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.173230253170578,
+          0.5986485726613167
+        ],
+        "cross_track_m": 0.029534369897360288,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.027985921122570014,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 3.5,
+      "pose": {
+        "x": -5.078194939015212,
+        "y": -5.001699606817438,
+        "heading": 1.6311506889095173
+      },
+      "camera_yaw": -0.04338645397770069,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.11305452887690498,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        1.4798868894577026
+      ],
+      "flow_ms": 61.173542169854045,
+      "surface_ms": 2.4439578410238028,
+      "perception": {
+        "ms": 100.68216710351408,
+        "circuit_ms": 94.27908295765519,
+        "road_fraction": 0.34586419753086417,
+        "views": 4,
+        "view_road_fractions": [
+          0.3711882716049383,
+          0.3610030864197531,
+          0.3576311728395062,
+          0.35432098765432096
+        ],
+        "mean_road_probability": 0.994910478591919,
+        "raw_road_fraction": 0.3711882716049383,
+        "applied_view_road_fractions": [
+          0.34586419753086417,
+          0.3480864197530864,
+          0.33250771604938273,
+          0.3425462962962963
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 2.5,
+        "event_id": "holes-1",
+        "remaining_s": 1.9909416235243365,
+        "removed_fraction": 0.05203007036722394,
+        "front_removed_fraction": 0.06822433792042573,
+        "raw_road_pixels": [
+          48106,
+          46786,
+          46349,
+          45920
+        ],
+        "remaining_road_pixels": [
+          44824,
+          45112,
+          43093,
+          44394
+        ]
+      },
+      "mission": {
+        "progress_m": 1.9999979793712472,
+        "length_m": 1030.9001614516883,
+        "distance_m": 1.9999937519238467,
+        "fraction": 0.001940050117515647,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.185340228364417,
+          0.9977603427877527
+        ],
+        "cross_track_m": 0.04473869120828772,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.04378236918338954,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 4,
+      "pose": {
+        "x": -5.113591093699915,
+        "y": -4.603321723042602,
+        "heading": 1.6876779533479702
+      },
+      "camera_yaw": -0.10407245687787348,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.08601624186124997,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        1.479897379875183
+      ],
+      "flow_ms": 61.4480001386255,
+      "surface_ms": 2.0585828460752964,
+      "perception": {
+        "ms": 91.59624995663762,
+        "circuit_ms": 85.91454103589058,
+        "road_fraction": 0.3516898148148148,
+        "views": 4,
+        "view_road_fractions": [
+          0.37701388888888887,
+          0.36116512345679014,
+          0.36159722222222224,
+          0.3551929012345679
+        ],
+        "mean_road_probability": 0.9950361251831055,
+        "raw_road_fraction": 0.37701388888888887,
+        "applied_view_road_fractions": [
+          0.3516898148148148,
+          0.348179012345679,
+          0.3359645061728395,
+          0.3431018518518518
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 3,
+        "event_id": "holes-1",
+        "remaining_s": 1.4909416235243365,
+        "removed_fraction": 0.05225811925924355,
+        "front_removed_fraction": 0.06717013569104194,
+        "raw_road_pixels": [
+          48861,
+          46807,
+          46863,
+          46033
+        ],
+        "remaining_road_pixels": [
+          45579,
+          45124,
+          43541,
+          44466
+        ]
+      },
+      "mission": {
+        "progress_m": 2.400472339788127,
+        "length_m": 1030.9001614516883,
+        "distance_m": 2.3999410310087037,
+        "fraction": 0.0023285206749874216,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.197719060058237,
+          1.3980433358936766
+        ],
+        "cross_track_m": 0.07234832189791666,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.07231515520314004,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 4.5,
+      "pose": {
+        "x": -5.168764649718495,
+        "y": -4.207175961763633,
+        "heading": 1.7306860742785957
+      },
+      "camera_yaw": -0.15472417745504563,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.06319960518264055,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        1.481998085975647
+      ],
+      "flow_ms": 59.88954193890095,
+      "surface_ms": 3.191458061337471,
+      "perception": {
+        "ms": 88.84454099461436,
+        "circuit_ms": 82.4097499717027,
+        "road_fraction": 0.3533179012345679,
+        "views": 4,
+        "view_road_fractions": [
+          0.37864197530864196,
+          0.3616435185185185,
+          0.3640509259259259,
+          0.35575617283950617
+        ],
+        "mean_road_probability": 0.9952632784843445,
+        "raw_road_fraction": 0.37864197530864196,
+        "applied_view_road_fractions": [
+          0.3533179012345679,
+          0.34857253086419754,
+          0.3384182098765432,
+          0.3435493827160494
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 3.5,
+        "event_id": "holes-1",
+        "remaining_s": 0.9909416235243365,
+        "removed_fraction": 0.052212146194009344,
+        "front_removed_fraction": 0.06688131724812521,
+        "raw_road_pixels": [
+          49072,
+          46869,
+          47181,
+          46106
+        ],
+        "remaining_road_pixels": [
+          45790,
+          45175,
+          43859,
+          44524
+        ]
+      },
+      "mission": {
+        "progress_m": 2.8003420313830736,
+        "length_m": 1030.9001614516883,
+        "distance_m": 2.7999105116732035,
+        "fraction": 0.002716404687957077,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.210300959773852,
+          1.797715030007673
+        ],
+        "cross_track_m": 0.11945244948732173,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.1206608379782873,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 5,
+      "pose": {
+        "x": -5.238676654589962,
+        "y": -3.8133496914620295,
+        "heading": 1.7622858768699157
+      },
+      "camera_yaw": -0.19654660329627238,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.04421945217497916,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        1.48195219039917
+      ],
+      "flow_ms": 59.74041600711644,
+      "surface_ms": 2.443125005811453,
+      "perception": {
+        "ms": 87.3804169241339,
+        "circuit_ms": 81.83999988250434,
+        "road_fraction": 0.36027006172839504,
+        "views": 4,
+        "view_road_fractions": [
+          0.38559413580246915,
+          0.36140432098765435,
+          0.3675231481481481,
+          0.3561265432098765
+        ],
+        "mean_road_probability": 0.9952319860458374,
+        "raw_road_fraction": 0.38559413580246915,
+        "applied_view_road_fractions": [
+          0.36027006172839504,
+          0.3482021604938272,
+          0.34171296296296294,
+          0.34391975308641975
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 4,
+        "event_id": "holes-1",
+        "remaining_s": 0.49094162352433646,
+        "removed_fraction": 0.052047262272030895,
+        "front_removed_fraction": 0.06567546475096551,
+        "raw_road_pixels": [
+          49973,
+          46838,
+          47631,
+          46154
+        ],
+        "remaining_road_pixels": [
+          46691,
+          45127,
+          44286,
+          44572
+        ]
+      },
+      "mission": {
+        "progress_m": 3.200018161595395,
+        "length_m": 1030.9001614516883,
+        "distance_m": 3.199894035839911,
+        "fraction": 0.003104100941345482,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.223087178476835,
+          2.1971865796907495
+        ],
+        "cross_track_m": 0.1810610987959702,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.18378271581502356,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 5.5,
+      "pose": {
+        "x": -5.319139983758579,
+        "y": -3.421534428774584,
+        "heading": 1.7843956029574048
+      },
+      "camera_yaw": -0.23069274811719964,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.08436108326762994,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.4921639859676361
+      ],
+      "flow_ms": 59.999417047947645,
+      "surface_ms": 3.4092499408870935,
+      "perception": {
+        "ms": 90.85266687907279,
+        "circuit_ms": 84.55916680395603,
+        "road_fraction": 0.38820216049382716,
+        "views": 4,
+        "view_road_fractions": [
+          0.38820216049382716,
+          0.3614583333333333,
+          0.36931327160493826,
+          0.3566358024691358
+        ],
+        "mean_road_probability": 0.99537593126297,
+        "raw_road_fraction": 0.38820216049382716,
+        "applied_view_road_fractions": [
+          0.38820216049382716,
+          0.3614583333333333,
+          0.36931327160493826,
+          0.3566358024691358
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 4.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          50311,
+          46845,
+          47863,
+          46220
+        ],
+        "remaining_road_pixels": [
+          50311,
+          46845,
+          47863,
+          46220
+        ]
+      },
+      "mission": {
+        "progress_m": 3.6003386365148837,
+        "length_m": 1030.9001614516883,
+        "distance_m": 3.599885970028251,
+        "fraction": 0.0034924222258777954,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.236093714443012,
+          2.5972957026272723
+        ],
+        "cross_track_m": 0.2530508840247685,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.2574889740742232,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 6,
+      "pose": {
+        "x": -5.395663228009865,
+        "y": -3.0289523239272773,
+        "heading": 1.742215061323591
+      },
+      "camera_yaw": -0.19977275456614138,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.07010046959012128,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5167248845100403
+      ],
+      "flow_ms": 62.97845812514424,
+      "surface_ms": 3.2489579170942307,
+      "perception": {
+        "ms": 90.8449999988079,
+        "circuit_ms": 82.51579198986292,
+        "road_fraction": 0.3888425925925926,
+        "views": 4,
+        "view_road_fractions": [
+          0.3888425925925926,
+          0.36181327160493826,
+          0.37114197530864196,
+          0.35734567901234565
+        ],
+        "mean_road_probability": 0.9955455660820007,
+        "raw_road_fraction": 0.3888425925925926,
+        "applied_view_road_fractions": [
+          0.3888425925925926,
+          0.36181327160493826,
+          0.37114197530864196,
+          0.35734567901234565
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          50394,
+          46891,
+          48100,
+          46312
+        ],
+        "remaining_road_pixels": [
+          50394,
+          46891,
+          48100,
+          46312
+        ]
+      },
+      "mission": {
+        "progress_m": 3.9998500640273544,
+        "length_m": 1030.9001614516883,
+        "distance_m": 3.9998566138973777,
+        "fraction": 0.003879958713358686,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.2492617377603565,
+          2.996590057421572
+        ],
+        "cross_track_m": 0.3206790466953798,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.3272425300216984,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 6.5,
+      "pose": {
+        "x": -5.456974875243122,
+        "y": -2.6336996628136773,
+        "heading": 1.707164826528531
+      },
+      "camera_yaw": -0.1732438632310189,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.06275563299849699,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5263321399688721
+      ],
+      "flow_ms": 60.39195787161589,
+      "surface_ms": 2.655999967828393,
+      "perception": {
+        "ms": 89.83408403582871,
+        "circuit_ms": 83.21945904754102,
+        "road_fraction": 0.3907253086419753,
+        "views": 4,
+        "view_road_fractions": [
+          0.3907253086419753,
+          0.3612191358024691,
+          0.37324074074074076,
+          0.35733796296296294
+        ],
+        "mean_road_probability": 0.9960615038871765,
+        "raw_road_fraction": 0.3907253086419753,
+        "applied_view_road_fractions": [
+          0.3907253086419753,
+          0.3612191358024691,
+          0.37324074074074076,
+          0.35733796296296294
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 5.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          50638,
+          46814,
+          48372,
+          46311
+        ],
+        "remaining_road_pixels": [
+          50638,
+          46814,
+          48372,
+          46311
+        ]
+      },
+      "mission": {
+        "progress_m": 4.400100327027826,
+        "length_m": 1030.9001614516883,
+        "distance_m": 4.399836343638571,
+        "fraction": 0.0042682118905013194,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.262630919540972,
+          3.3966169766969454
+        ],
+        "cross_track_m": 0.3726389216745853,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.38174076922757383,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 7,
+      "pose": {
+        "x": -5.505127673092951,
+        "y": -2.236624969348969,
+        "heading": 1.6757870100292815
+      },
+      "camera_yaw": -0.14801158190416674,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.04967432489691495,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5658785700798035
+      ],
+      "flow_ms": 62.57449998520315,
+      "surface_ms": 2.5746251922100782,
+      "perception": {
+        "ms": 90.62108304351568,
+        "circuit_ms": 83.66858307272196,
+        "road_fraction": 0.3901003086419753,
+        "views": 4,
+        "view_road_fractions": [
+          0.3901003086419753,
+          0.3641820987654321,
+          0.3752237654320988,
+          0.3562345679012346
+        ],
+        "mean_road_probability": 0.9960391521453857,
+        "raw_road_fraction": 0.3901003086419753,
+        "applied_view_road_fractions": [
+          0.3901003086419753,
+          0.3641820987654321,
+          0.3752237654320988,
+          0.3562345679012346
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 6,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          50557,
+          47198,
+          48629,
+          46168
+        ],
+        "remaining_road_pixels": [
+          50557,
+          47198,
+          48629,
+          46168
+        ]
+      },
+      "mission": {
+        "progress_m": 4.800032718594748,
+        "length_m": 1030.9001614516883,
+        "distance_m": 4.799820098472262,
+        "fraction": 0.004656156724076423,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.27615456802057,
+          3.796320650858526
+        ],
+        "cross_track_m": 0.41098862303636136,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.42305074256881614,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 7.5,
+      "pose": {
+        "x": -5.542102708629194,
+        "y": -1.8383477994850754,
+        "heading": 1.6509498475808249
+      },
+      "camera_yaw": -0.12731706235923812,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.04220062262646386,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5683397650718689
+      ],
+      "flow_ms": 61.43587501719594,
+      "surface_ms": 2.552333055064082,
+      "perception": {
+        "ms": 92.0885419473052,
+        "circuit_ms": 85.15066700056195,
+        "road_fraction": 0.38979166666666665,
+        "views": 4,
+        "view_road_fractions": [
+          0.38979166666666665,
+          0.3668595679012346,
+          0.37712191358024694,
+          0.358179012345679
+        ],
+        "mean_road_probability": 0.9961910843849182,
+        "raw_road_fraction": 0.38979166666666665,
+        "applied_view_road_fractions": [
+          0.38979166666666665,
+          0.3668595679012346,
+          0.37712191358024694,
+          0.358179012345679
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 6.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          50517,
+          47545,
+          48875,
+          46420
+        ],
+        "remaining_road_pixels": [
+          50517,
+          47545,
+          48875,
+          46420
+        ]
+      },
+      "mission": {
+        "progress_m": 5.1997327581636945,
+        "length_m": 1030.9001614516883,
+        "distance_m": 5.199809919952383,
+        "fraction": 0.0050438761701633245,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.2898236370370855,
+          4.195786890736317
+        ],
+        "cross_track_m": 0.43777310216869253,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.45316390926602257,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 8,
+      "pose": {
+        "x": -5.569921069059454,
+        "y": -1.439323662416318,
+        "heading": 1.6298495362675935
+      },
+      "camera_yaw": -0.10871809099587115,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.03589364612249926,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5919573307037354
+      ],
+      "flow_ms": 61.87425018288195,
+      "surface_ms": 2.110417000949383,
+      "perception": {
+        "ms": 93.86708401143551,
+        "circuit_ms": 85.48312494531274,
+        "road_fraction": 0.3896682098765432,
+        "views": 4,
+        "view_road_fractions": [
+          0.3896682098765432,
+          0.3681558641975309,
+          0.3793672839506173,
+          0.3582175925925926
+        ],
+        "mean_road_probability": 0.9962055087089539,
+        "raw_road_fraction": 0.3896682098765432,
+        "applied_view_road_fractions": [
+          0.3896682098765432,
+          0.3681558641975309,
+          0.3793672839506173,
+          0.3582175925925926
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 7,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          50501,
+          47713,
+          49166,
+          46425
+        ],
+        "remaining_road_pixels": [
+          50501,
+          47713,
+          49166,
+          46425
+        ]
+      },
+      "mission": {
+        "progress_m": 5.599966241734813,
+        "length_m": 1030.9001614516883,
+        "distance_m": 5.5998025738105435,
+        "fraction": 0.005432113070822569,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.30365286290842,
+          4.59578138157573
+        ],
+        "cross_track_m": 0.455099481519417,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.47410889866518524,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 8.5,
+      "pose": {
+        "x": -5.589944349955432,
+        "y": -1.0398304626000052,
+        "heading": 1.6119027132063435
+      },
+      "camera_yaw": -0.0918631808284518,
+      "command": {
+        "vx": 0.0,
+        "vy": 0.0,
+        "yaw_rate": 0.0,
+        "reason": "path_unavailable"
+      },
+      "confidence": 0,
+      "path_end": null,
+      "flow_ms": 61.964499996975064,
+      "surface_ms": 0.7470001000910997,
+      "perception": {
+        "ms": 92.57033304311335,
+        "circuit_ms": 87.1162498369813,
+        "road_fraction": 0.368070987654321,
+        "views": 4,
+        "view_road_fractions": [
+          0.38893518518518516,
+          0.3696064814814815,
+          0.3816280864197531,
+          0.3566358024691358
+        ],
+        "mean_road_probability": 0.9961540699005127,
+        "raw_road_fraction": 0.38893518518518516,
+        "applied_view_road_fractions": [
+          0.368070987654321,
+          0.35301697530864196,
+          0.3597222222222222,
+          0.3404783950617284
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 7.5,
+        "event_id": "holes-2",
+        "remaining_s": 1.2052067051190125,
+        "removed_fraction": 0.050452094481045026,
+        "front_removed_fraction": 0.05364440741181605,
+        "raw_road_pixels": [
+          50406,
+          47901,
+          49459,
+          46220
+        ],
+        "remaining_road_pixels": [
+          47702,
+          45751,
+          46620,
+          44126
+        ]
+      },
+      "mission": {
+        "progress_m": 5.999632223903891,
+        "length_m": 1030.9001614516883,
+        "distance_m": 5.999797259371884,
+        "fraction": 0.005819799480344785,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.317592347863363,
+          4.995204199008188
+        ],
+        "cross_track_m": 0.46429313895935403,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.4872518887202848,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 9,
+      "pose": {
+        "x": -5.589944349955432,
+        "y": -1.0398304626000052,
+        "heading": 1.6119027132063435
+      },
+      "camera_yaw": -0.08620427797511887,
+      "command": {
+        "vx": 0.0,
+        "vy": 0.0,
+        "yaw_rate": 0.0,
+        "reason": "path_unavailable"
+      },
+      "confidence": 0,
+      "path_end": null,
+      "flow_ms": 60.31712517142296,
+      "surface_ms": 0.7864159997552633,
+      "perception": {
+        "ms": 88.8625830411911,
+        "circuit_ms": 82.31520792469382,
+        "road_fraction": 0.3686033950617284,
+        "views": 4,
+        "view_road_fractions": [
+          0.38949074074074075,
+          0.36996913580246915,
+          0.3818441358024691,
+          0.3568827160493827
+        ],
+        "mean_road_probability": 0.9961541295051575,
+        "raw_road_fraction": 0.38949074074074075,
+        "applied_view_road_fractions": [
+          0.3686033950617284,
+          0.35335648148148147,
+          0.3599382716049383,
+          0.3407253086419753
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 8,
+        "event_id": "holes-2",
+        "remaining_s": 0.7052067051190125,
+        "removed_fraction": 0.050436484433342775,
+        "front_removed_fraction": 0.053627322794088515,
+        "raw_road_pixels": [
+          50478,
+          47948,
+          49487,
+          46252
+        ],
+        "remaining_road_pixels": [
+          47771,
+          45795,
+          46648,
+          44158
+        ]
+      },
+      "mission": {
+        "progress_m": 5.999632223903891,
+        "length_m": 1030.9001614516883,
+        "distance_m": 5.999797259371884,
+        "fraction": 0.005819799480344785,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.317592347863363,
+          4.995204199008188
+        ],
+        "cross_track_m": 0.46429313895935403,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.4872518887202848,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 9.5,
+      "pose": {
+        "x": -5.589944349955432,
+        "y": -1.0398304626000052,
+        "heading": 1.6119027132063435
+      },
+      "camera_yaw": -0.08620427797511887,
+      "command": {
+        "vx": 0.0,
+        "vy": 0.0,
+        "yaw_rate": 0.0,
+        "reason": "path_unavailable"
+      },
+      "confidence": 0,
+      "path_end": null,
+      "flow_ms": 61.419042060151696,
+      "surface_ms": 0.7734580431133509,
+      "perception": {
+        "ms": 92.66312490217388,
+        "circuit_ms": 86.19120786897838,
+        "road_fraction": 0.3686033950617284,
+        "views": 4,
+        "view_road_fractions": [
+          0.38949074074074075,
+          0.36996913580246915,
+          0.3818441358024691,
+          0.3568827160493827
+        ],
+        "mean_road_probability": 0.9961541295051575,
+        "raw_road_fraction": 0.38949074074074075,
+        "applied_view_road_fractions": [
+          0.3686033950617284,
+          0.35335648148148147,
+          0.3599382716049383,
+          0.3407253086419753
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 8.5,
+        "event_id": "holes-2",
+        "remaining_s": 0.2052067051190125,
+        "removed_fraction": 0.050436484433342775,
+        "front_removed_fraction": 0.053627322794088515,
+        "raw_road_pixels": [
+          50478,
+          47948,
+          49487,
+          46252
+        ],
+        "remaining_road_pixels": [
+          47771,
+          45795,
+          46648,
+          44158
+        ]
+      },
+      "mission": {
+        "progress_m": 5.999632223903891,
+        "length_m": 1030.9001614516883,
+        "distance_m": 5.999797259371884,
+        "fraction": 0.005819799480344785,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.317592347863363,
+          4.995204199008188
+        ],
+        "cross_track_m": 0.46429313895935403,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.4872518887202848,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 10,
+      "pose": {
+        "x": -5.589944349955432,
+        "y": -1.0398304626000052,
+        "heading": 1.6119027132063435
+      },
+      "camera_yaw": -0.08620427797511887,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.026133039314283096,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5720707178115845
+      ],
+      "flow_ms": 59.7983340267092,
+      "surface_ms": 2.1026250906288624,
+      "perception": {
+        "ms": 95.27608309872448,
+        "circuit_ms": 87.02062512747943,
+        "road_fraction": 0.38949074074074075,
+        "views": 4,
+        "view_road_fractions": [
+          0.38949074074074075,
+          0.36996913580246915,
+          0.3818441358024691,
+          0.3568827160493827
+        ],
+        "mean_road_probability": 0.9961541295051575,
+        "raw_road_fraction": 0.38949074074074075,
+        "applied_view_road_fractions": [
+          0.38949074074074075,
+          0.36996913580246915,
+          0.3818441358024691,
+          0.3568827160493827
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 9,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          50478,
+          47948,
+          49487,
+          46252
+        ],
+        "remaining_road_pixels": [
+          50478,
+          47948,
+          49487,
+          46252
+        ]
+      },
+      "mission": {
+        "progress_m": 5.999632223903891,
+        "length_m": 1030.9001614516883,
+        "distance_m": 5.999797259371884,
+        "fraction": 0.005819799480344785,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.317592347863363,
+          4.995204199008188
+        ],
+        "cross_track_m": 0.46429313895935403,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.4872518887202848,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 10.5,
+      "pose": {
+        "x": -5.60377074835683,
+        "y": -0.640072314425481,
+        "heading": 1.5988361935492024
+      },
+      "camera_yaw": -0.0787796603284079,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.02228476288198343,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.600239634513855
+      ],
+      "flow_ms": 60.87895785458386,
+      "surface_ms": 2.792542101815343,
+      "perception": {
+        "ms": 87.54591690376401,
+        "circuit_ms": 80.13099990785122,
+        "road_fraction": 0.38838734567901234,
+        "views": 4,
+        "view_road_fractions": [
+          0.38838734567901234,
+          0.37083333333333335,
+          0.3844598765432099,
+          0.3576388888888889
+        ],
+        "mean_road_probability": 0.9962353706359863,
+        "raw_road_fraction": 0.38838734567901234,
+        "applied_view_road_fractions": [
+          0.38838734567901234,
+          0.37083333333333335,
+          0.3844598765432099,
+          0.3576388888888889
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 9.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          50335,
+          48060,
+          49826,
+          46350
+        ],
+        "remaining_road_pixels": [
+          50335,
+          48060,
+          49826,
+          46350
+        ]
+      },
+      "mission": {
+        "progress_m": 6.399750603629695,
+        "length_m": 1030.9001614516883,
+        "distance_m": 6.399794442267813,
+        "fraction": 0.00620792472727691,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.331665951307212,
+          5.39507499148364
+        ],
+        "cross_track_m": 0.46703005441766227,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.49419435348614416,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 11,
+      "pose": {
+        "x": -5.612757416558015,
+        "y": -0.24017532645713544,
+        "heading": 1.5876938121082107
+      },
+      "camera_yaw": -0.06673709639608383,
+      "command": {
+        "vx": 0.0,
+        "vy": 0.0,
+        "yaw_rate": 0.0,
+        "reason": "detection_dropout"
+      },
+      "confidence": 0,
+      "path_end": null,
+      "flow_ms": 58.94162505865097,
+      "surface_ms": 0.28312508948147297,
+      "perception": {
+        "ms": 88.67895905859768,
+        "circuit_ms": 82.00404210947454,
+        "road_fraction": 0.0,
+        "views": 4,
+        "view_road_fractions": [
+          0.3871604938271605,
+          0.37151234567901237,
+          0.38669753086419756,
+          0.3567283950617284
+        ],
+        "mean_road_probability": 0.9961217641830444,
+        "raw_road_fraction": 0.3871604938271605,
+        "applied_view_road_fractions": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "dropout",
+        "elapsed_s": 10,
+        "event_id": "dropout-1",
+        "remaining_s": 1.7294977617769174,
+        "removed_fraction": 1.0,
+        "front_removed_fraction": 1.0,
+        "raw_road_pixels": [
+          50176,
+          48148,
+          50116,
+          46232
+        ],
+        "remaining_road_pixels": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "mission": {
+        "progress_m": 6.799697878955531,
+        "length_m": 1030.9001614516883,
+        "distance_m": 6.799792393751959,
+        "fraction": 0.0065958839984857145,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.345840004538958,
+          5.7947710242515855
+        ],
+        "cross_track_m": 0.46464837067286163,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.49629541511327824,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 11.5,
+      "pose": {
+        "x": -5.612757416558015,
+        "y": -0.24017532645713544,
+        "heading": 1.5876938121082107
+      },
+      "camera_yaw": -0.06109730998060182,
+      "command": {
+        "vx": 0.0,
+        "vy": 0.0,
+        "yaw_rate": 0.0,
+        "reason": "detection_dropout"
+      },
+      "confidence": 0,
+      "path_end": null,
+      "flow_ms": 59.627417009323835,
+      "surface_ms": 0.3273331094533205,
+      "perception": {
+        "ms": 88.65770790725946,
+        "circuit_ms": 83.33491696976125,
+        "road_fraction": 0.0,
+        "views": 4,
+        "view_road_fractions": [
+          0.3875771604938272,
+          0.3720216049382716,
+          0.3869753086419753,
+          0.3569675925925926
+        ],
+        "mean_road_probability": 0.9961792826652527,
+        "raw_road_fraction": 0.3875771604938272,
+        "applied_view_road_fractions": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "dropout",
+        "elapsed_s": 10.5,
+        "event_id": "dropout-1",
+        "remaining_s": 1.2294977617769174,
+        "removed_fraction": 1.0,
+        "front_removed_fraction": 1.0,
+        "raw_road_pixels": [
+          50230,
+          48214,
+          50152,
+          46263
+        ],
+        "remaining_road_pixels": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "mission": {
+        "progress_m": 6.799697878955531,
+        "length_m": 1030.9001614516883,
+        "distance_m": 6.799792393751959,
+        "fraction": 0.0065958839984857145,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.345840004538958,
+          5.7947710242515855
+        ],
+        "cross_track_m": 0.46464837067286163,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.49629541511327824,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 12,
+      "pose": {
+        "x": -5.612757416558015,
+        "y": -0.24017532645713544,
+        "heading": 1.5876938121082107
+      },
+      "camera_yaw": -0.06109730998060182,
+      "command": {
+        "vx": 0.0,
+        "vy": 0.0,
+        "yaw_rate": 0.0,
+        "reason": "detection_dropout"
+      },
+      "confidence": 0,
+      "path_end": null,
+      "flow_ms": 59.588917065411806,
+      "surface_ms": 0.5238750018179417,
+      "perception": {
+        "ms": 90.89175006374717,
+        "circuit_ms": 85.0485828705132,
+        "road_fraction": 0.0,
+        "views": 4,
+        "view_road_fractions": [
+          0.3875771604938272,
+          0.3720216049382716,
+          0.3869753086419753,
+          0.3569675925925926
+        ],
+        "mean_road_probability": 0.9961792826652527,
+        "raw_road_fraction": 0.3875771604938272,
+        "applied_view_road_fractions": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "dropout",
+        "elapsed_s": 11,
+        "event_id": "dropout-1",
+        "remaining_s": 0.7294977617769174,
+        "removed_fraction": 1.0,
+        "front_removed_fraction": 1.0,
+        "raw_road_pixels": [
+          50230,
+          48214,
+          50152,
+          46263
+        ],
+        "remaining_road_pixels": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "mission": {
+        "progress_m": 6.799697878955531,
+        "length_m": 1030.9001614516883,
+        "distance_m": 6.799792393751959,
+        "fraction": 0.0065958839984857145,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.345840004538958,
+          5.7947710242515855
+        ],
+        "cross_track_m": 0.46464837067286163,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.49629541511327824,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 12.5,
+      "pose": {
+        "x": -5.612757416558015,
+        "y": -0.24017532645713544,
+        "heading": 1.5876938121082107
+      },
+      "camera_yaw": -0.06109730998060182,
+      "command": {
+        "vx": 0.0,
+        "vy": 0.0,
+        "yaw_rate": 0.0,
+        "reason": "detection_dropout"
+      },
+      "confidence": 0,
+      "path_end": null,
+      "flow_ms": 60.25183410383761,
+      "surface_ms": 0.29137497767806053,
+      "perception": {
+        "ms": 88.8935411348939,
+        "circuit_ms": 82.45966606773436,
+        "road_fraction": 0.0,
+        "views": 4,
+        "view_road_fractions": [
+          0.3875771604938272,
+          0.3720216049382716,
+          0.3869753086419753,
+          0.3569675925925926
+        ],
+        "mean_road_probability": 0.9961792826652527,
+        "raw_road_fraction": 0.3875771604938272,
+        "applied_view_road_fractions": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "dropout",
+        "elapsed_s": 11.5,
+        "event_id": "dropout-1",
+        "remaining_s": 0.22949776177691739,
+        "removed_fraction": 1.0,
+        "front_removed_fraction": 1.0,
+        "raw_road_pixels": [
+          50230,
+          48214,
+          50152,
+          46263
+        ],
+        "remaining_road_pixels": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "mission": {
+        "progress_m": 6.799697878955531,
+        "length_m": 1030.9001614516883,
+        "distance_m": 6.799792393751959,
+        "fraction": 0.0065958839984857145,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.345840004538958,
+          5.7947710242515855
+        ],
+        "cross_track_m": 0.46464837067286163,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.49629541511327824,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 13,
+      "pose": {
+        "x": -5.612757416558015,
+        "y": -0.24017532645713544,
+        "heading": 1.5876938121082107
+      },
+      "camera_yaw": -0.06109730998060182,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.06213400642495018,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.478315532207489
+      ],
+      "flow_ms": 60.65770797431469,
+      "surface_ms": 1.9519578199833632,
+      "perception": {
+        "ms": 92.73370797745883,
+        "circuit_ms": 85.78449999913573,
+        "road_fraction": 0.37462962962962965,
+        "views": 4,
+        "view_road_fractions": [
+          0.3875771604938272,
+          0.3720216049382716,
+          0.3869753086419753,
+          0.3569675925925926
+        ],
+        "mean_road_probability": 0.9961792826652527,
+        "raw_road_fraction": 0.3875771604938272,
+        "applied_view_road_fractions": [
+          0.37462962962962965,
+          0.35097993827160495,
+          0.3607561728395062,
+          0.3332716049382716
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 12,
+        "event_id": "holes-3",
+        "remaining_s": 1.0890513078441266,
+        "removed_fraction": 0.055804453476616424,
+        "front_removed_fraction": 0.033406330877961375,
+        "raw_road_pixels": [
+          50230,
+          48214,
+          50152,
+          46263
+        ],
+        "remaining_road_pixels": [
+          48552,
+          45487,
+          46754,
+          43192
+        ]
+      },
+      "mission": {
+        "progress_m": 6.799697878955531,
+        "length_m": 1030.9001614516883,
+        "distance_m": 6.799792393751959,
+        "fraction": 0.0065958839984857145,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.345840004538958,
+          5.7947710242515855
+        ],
+        "cross_track_m": 0.46464837067286163,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.49629541511327824,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 13.5,
+      "pose": {
+        "x": -5.625727021081137,
+        "y": 0.15959842163988897,
+        "heading": 1.6187608153206856
+      },
+      "camera_yaw": -0.09759157636900338,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.04550869844318189,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5755342245101929
+      ],
+      "flow_ms": 61.34658306837082,
+      "surface_ms": 2.054499927908182,
+      "perception": {
+        "ms": 92.61891688220203,
+        "circuit_ms": 85.7683748472482,
+        "road_fraction": 0.37354166666666666,
+        "views": 4,
+        "view_road_fractions": [
+          0.3864814814814815,
+          0.3719675925925926,
+          0.3869444444444444,
+          0.3564274691358025
+        ],
+        "mean_road_probability": 0.9960768818855286,
+        "raw_road_fraction": 0.3864814814814815,
+        "applied_view_road_fractions": [
+          0.37354166666666666,
+          0.3506712962962963,
+          0.36072530864197533,
+          0.33270833333333333
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 12.5,
+        "event_id": "holes-3",
+        "remaining_s": 0.5890513078441266,
+        "removed_fraction": 0.05604821307466245,
+        "front_removed_fraction": 0.033481073310972685,
+        "raw_road_pixels": [
+          50088,
+          48207,
+          50148,
+          46193
+        ],
+        "remaining_road_pixels": [
+          48411,
+          45447,
+          46750,
+          43119
+        ]
+      },
+      "mission": {
+        "progress_m": 7.199480946463686,
+        "length_m": 1030.9001614516883,
+        "distance_m": 7.199776468821241,
+        "fraction": 0.006983683983835596,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.360102858457765,
+          6.194299585888867
+        ],
+        "cross_track_m": 0.46597346014889357,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5023809444156012,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 14,
+      "pose": {
+        "x": -5.6494492509512115,
+        "y": 0.5588858137383401,
+        "heading": 1.6415151645422776
+      },
+      "camera_yaw": -0.122018093431282,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.034506935690076374,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5305976271629333
+      ],
+      "flow_ms": 60.76662498526275,
+      "surface_ms": 1.9077090546488762,
+      "perception": {
+        "ms": 90.8310420345515,
+        "circuit_ms": 85.96650022082031,
+        "road_fraction": 0.3724922839506173,
+        "views": 4,
+        "view_road_fractions": [
+          0.3853935185185185,
+          0.3709645061728395,
+          0.3852006172839506,
+          0.355787037037037
+        ],
+        "mean_road_probability": 0.9961187243461609,
+        "raw_road_fraction": 0.3853935185185185,
+        "applied_view_road_fractions": [
+          0.3724922839506173,
+          0.3494212962962963,
+          0.35898148148148146,
+          0.332037037037037
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 13,
+        "event_id": "holes-3",
+        "remaining_s": 0.08905130784412663,
+        "removed_fraction": 0.056375479243105084,
+        "front_removed_fraction": 0.033475484013053836,
+        "raw_road_pixels": [
+          49947,
+          48077,
+          49922,
+          46110
+        ],
+        "remaining_road_pixels": [
+          48275,
+          45285,
+          46524,
+          43032
+        ]
+      },
+      "mission": {
+        "progress_m": 7.599592654382785,
+        "length_m": 1030.9001614516883,
+        "distance_m": 7.599767925828502,
+        "fraction": 0.0073718027589414915,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.374460421333937,
+          6.594153607780749
+        ],
+        "cross_track_m": 0.4778185021693059,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5192258782978919,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 14.5,
+      "pose": {
+        "x": -5.681153798286122,
+        "y": 0.9576224339681335,
+        "heading": 1.6587686323873152
+      },
+      "camera_yaw": -0.14233042673243745,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.05097235977017597,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5723963975906372
+      ],
+      "flow_ms": 60.00095792114735,
+      "surface_ms": 3.236917080357671,
+      "perception": {
+        "ms": 89.46395898237824,
+        "circuit_ms": 82.37637486308813,
+        "road_fraction": 0.3839814814814815,
+        "views": 4,
+        "view_road_fractions": [
+          0.3839814814814815,
+          0.3700385802469136,
+          0.382445987654321,
+          0.3559027777777778
+        ],
+        "mean_road_probability": 0.9961941242218018,
+        "raw_road_fraction": 0.3839814814814815,
+        "applied_view_road_fractions": [
+          0.3839814814814815,
+          0.3700385802469136,
+          0.382445987654321,
+          0.3559027777777778
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 13.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          49764,
+          47957,
+          49565,
+          46125
+        ],
+        "remaining_road_pixels": [
+          49764,
+          47957,
+          49565,
+          46125
+        ]
+      },
+      "mission": {
+        "progress_m": 7.999390397872896,
+        "length_m": 1030.9001614516883,
+        "distance_m": 7.999763014090833,
+        "fraction": 0.007759616980376015,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.388877845454978,
+          6.993691307267069
+        ],
+        "cross_track_m": 0.49740557185382606,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5440614283401568,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 15,
+      "pose": {
+        "x": -5.711216303417924,
+        "y": 1.3564803936094498,
+        "heading": 1.6332824525022271
+      },
+      "camera_yaw": -0.11960441410851042,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.03815862291703021,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.6016489863395691
+      ],
+      "flow_ms": 58.780499966815114,
+      "surface_ms": 2.3637921549379826,
+      "perception": {
+        "ms": 88.1505839060992,
+        "circuit_ms": 81.90558408387005,
+        "road_fraction": 0.3822762345679012,
+        "views": 4,
+        "view_road_fractions": [
+          0.3822762345679012,
+          0.3722530864197531,
+          0.3803009259259259,
+          0.35462962962962963
+        ],
+        "mean_road_probability": 0.996131420135498,
+        "raw_road_fraction": 0.3822762345679012,
+        "applied_view_road_fractions": [
+          0.3822762345679012,
+          0.3722530864197531,
+          0.3803009259259259,
+          0.35462962962962963
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 14,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          49543,
+          48244,
+          49287,
+          45960
+        ],
+        "remaining_road_pixels": [
+          49543,
+          48244,
+          49287,
+          45960
+        ]
+      },
+      "mission": {
+        "progress_m": 8.399408193719141,
+        "length_m": 1030.9001614516883,
+        "distance_m": 8.399752296677296,
+        "fraction": 0.008147644658325886,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.4033627304510885,
+          7.3934467636613155
+        ],
+        "cross_track_m": 0.5151250847058277,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5672530906428749,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 15.5,
+      "pose": {
+        "x": -5.732384679841384,
+        "y": 1.755913860949588,
+        "heading": 1.614203141043713
+      },
+      "camera_yaw": -0.10170343866738851,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.03205184132966512,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5561762452125549
+      ],
+      "flow_ms": 59.632375137880445,
+      "surface_ms": 2.613707911223173,
+      "perception": {
+        "ms": 88.29716593027115,
+        "circuit_ms": 82.88150001317263,
+        "road_fraction": 0.3796604938271605,
+        "views": 4,
+        "view_road_fractions": [
+          0.3796604938271605,
+          0.3726466049382716,
+          0.3808256172839506,
+          0.3520216049382716
+        ],
+        "mean_road_probability": 0.9961532950401306,
+        "raw_road_fraction": 0.3796604938271605,
+        "applied_view_road_fractions": [
+          0.3796604938271605,
+          0.3726466049382716,
+          0.3808256172839506,
+          0.3520216049382716
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 14.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          49204,
+          48295,
+          49355,
+          45622
+        ],
+        "remaining_road_pixels": [
+          49204,
+          48295,
+          49355,
+          45622
+        ]
+      },
+      "mission": {
+        "progress_m": 8.799357376268688,
+        "length_m": 1030.9001614516883,
+        "distance_m": 8.799746290371914,
+        "fraction": 0.008535605779591351,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.417892981733683,
+          7.7931319151331
+        ],
+        "cross_track_m": 0.5237081241677436,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5815420348341882,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 16,
+      "pose": {
+        "x": -5.7465391157189725,
+        "y": 2.1556591070949516,
+        "heading": 1.5981772203788802
+      },
+      "camera_yaw": -0.0856117002688608,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.026000683014124577,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5079378485679626
+      ],
+      "flow_ms": 60.65258290618658,
+      "surface_ms": 2.312667202204466,
+      "perception": {
+        "ms": 90.37320897914469,
+        "circuit_ms": 83.99299997836351,
+        "road_fraction": 0.3777391975308642,
+        "views": 4,
+        "view_road_fractions": [
+          0.3777391975308642,
+          0.3715432098765432,
+          0.38242283950617284,
+          0.35084876543209875
+        ],
+        "mean_road_probability": 0.9959350228309631,
+        "raw_road_fraction": 0.3777391975308642,
+        "applied_view_road_fractions": [
+          0.3777391975308642,
+          0.3715432098765432,
+          0.38242283950617284,
+          0.35084876543209875
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 15,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          48955,
+          48152,
+          49562,
+          45470
+        ],
+        "remaining_road_pixels": [
+          48955,
+          48152,
+          49562,
+          45470
+        ]
+      },
+      "mission": {
+        "progress_m": 9.199233431037714,
+        "length_m": 1030.9001614516883,
+        "distance_m": 9.199742052688004,
+        "fraction": 0.008923495965005553,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.432456864579519,
+          8.192742666283415
+        ],
+        "cross_track_m": 0.5250604986543839,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5888127105739684,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 16.5,
+      "pose": {
+        "x": -5.754890739700388,
+        "y": 2.5555691213132077,
+        "heading": 1.585176878871819
+      },
+      "camera_yaw": -0.07151608952983901,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.021734546258441373,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.40043124556541443
+      ],
+      "flow_ms": 60.95149996690452,
+      "surface_ms": 3.59774986281991,
+      "perception": {
+        "ms": 97.43604203686118,
+        "circuit_ms": 88.9816670678556,
+        "road_fraction": 0.37598765432098763,
+        "views": 4,
+        "view_road_fractions": [
+          0.37598765432098763,
+          0.3729166666666667,
+          0.3852854938271605,
+          0.35035493827160497
+        ],
+        "mean_road_probability": 0.9941355586051941,
+        "raw_road_fraction": 0.37598765432098763,
+        "applied_view_road_fractions": [
+          0.37598765432098763,
+          0.3729166666666667,
+          0.3852854938271605,
+          0.35035493827160497
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 15.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          48728,
+          48330,
+          49933,
+          45406
+        ],
+        "remaining_road_pixels": [
+          48728,
+          48330,
+          49933,
+          45406
+        ]
+      },
+      "mission": {
+        "progress_m": 9.599219081334153,
+        "length_m": 1030.9001614516883,
+        "distance_m": 9.59973926404725,
+        "fraction": 0.009311492460935081,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.447049574999654,
+          8.59246203436862
+        ],
+        "cross_track_m": 0.5204204925455012,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5902785978408147,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 17,
+      "pose": {
+        "x": -5.7584694407266115,
+        "y": 2.955551163430546,
+        "heading": 1.5743096057425987
+      },
+      "camera_yaw": -0.05870372194214779,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.10954276229512555,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.1496456265449524
+      ],
+      "flow_ms": 59.6520418766886,
+      "surface_ms": 3.1886249780654907,
+      "perception": {
+        "ms": 89.1664158552885,
+        "circuit_ms": 83.25462485663593,
+        "road_fraction": 0.36907407407407405,
+        "views": 4,
+        "view_road_fractions": [
+          0.36907407407407405,
+          0.3724845679012346,
+          0.38469907407407405,
+          0.3486342592592593
+        ],
+        "mean_road_probability": 0.9912382364273071,
+        "raw_road_fraction": 0.36907407407407405,
+        "applied_view_road_fractions": [
+          0.36907407407407405,
+          0.3724845679012346,
+          0.38469907407407405,
+          0.3486342592592593
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 16,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          47832,
+          48274,
+          49857,
+          45183
+        ],
+        "remaining_road_pixels": [
+          47832,
+          48274,
+          49857,
+          45183
+        ]
+      },
+      "mission": {
+        "progress_m": 9.999150883981956,
+        "length_m": 1030.9001614516883,
+        "distance_m": 9.999737315439242,
+        "fraction": 0.009699436723243304,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.461653771427572,
+          8.992127099406787
+        ],
+        "cross_track_m": 0.5108263075228103,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5869710294885314,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 17.5,
+      "pose": {
+        "x": -5.770825532766485,
+        "y": 3.3553107563789877,
+        "heading": 1.6290809868901612
+      },
+      "camera_yaw": -0.11307840645312008,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.047239387366402055,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.3337008059024811
+      ],
+      "flow_ms": 60.372459003701806,
+      "surface_ms": 2.9308751691132784,
+      "perception": {
+        "ms": 96.97262500412762,
+        "circuit_ms": 91.8697090819478,
+        "road_fraction": 0.37070987654320986,
+        "views": 4,
+        "view_road_fractions": [
+          0.37070987654320986,
+          0.37114969135802467,
+          0.3847762345679012,
+          0.3471604938271605
+        ],
+        "mean_road_probability": 0.9911475777626038,
+        "raw_road_fraction": 0.37070987654320986,
+        "applied_view_road_fractions": [
+          0.37070987654320986,
+          0.37114969135802467,
+          0.3847762345679012,
+          0.3471604938271605
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 16.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          48044,
+          48101,
+          49867,
+          44992
+        ],
+        "remaining_road_pixels": [
+          48044,
+          48101,
+          49867,
+          44992
+        ]
+      },
+      "mission": {
+        "progress_m": 10.399063004163585,
+        "length_m": 1030.9001614516883,
+        "distance_m": 10.399687818832852,
+        "fraction": 0.01008736189304683,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.476259446456136,
+          9.391772414810765
+        ],
+        "cross_track_m": 0.5098224627034843,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5924433809073244,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 18,
+      "pose": {
+        "x": -5.789408339049439,
+        "y": 3.754869657291568,
+        "heading": 1.60546129320696
+      },
+      "camera_yaw": -0.09016128363919318,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.03576661485900539,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.3585541546344757
+      ],
+      "flow_ms": 62.659707851707935,
+      "surface_ms": 2.752334112301469,
+      "perception": {
+        "ms": 94.39995908178389,
+        "circuit_ms": 86.18408418260515,
+        "road_fraction": 0.36554783950617287,
+        "views": 4,
+        "view_road_fractions": [
+          0.36554783950617287,
+          0.37007716049382716,
+          0.37993827160493826,
+          0.34709104938271607
+        ],
+        "mean_road_probability": 0.9953247904777527,
+        "raw_road_fraction": 0.36554783950617287,
+        "applied_view_road_fractions": [
+          0.36554783950617287,
+          0.37007716049382716,
+          0.37993827160493826,
+          0.34709104938271607
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 17,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          47375,
+          47962,
+          49240,
+          44983
+        ],
+        "remaining_road_pixels": [
+          47375,
+          47962,
+          49240,
+          44983
+        ]
+      },
+      "mission": {
+        "progress_m": 10.799021202071465,
+        "length_m": 1030.9001614516883,
+        "distance_m": 10.79967861371171,
+        "fraction": 0.010475331759444628,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.49085786886578,
+          9.791464103645295
+        ],
+        "cross_track_m": 0.5148788654650892,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.6041449787627263,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 18.5,
+      "pose": {
+        "x": -5.799696393719927,
+        "y": 4.154732051682423,
+        "heading": 1.5875779857774575
+      },
+      "camera_yaw": -0.07151728147567572,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.02701740338755898,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.37151819467544556
+      ],
+      "flow_ms": 61.385042034089565,
+      "surface_ms": 2.252916106954217,
+      "perception": {
+        "ms": 89.68112478032708,
+        "circuit_ms": 83.98024993948638,
+        "road_fraction": 0.3629861111111111,
+        "views": 4,
+        "view_road_fractions": [
+          0.3629861111111111,
+          0.36895833333333333,
+          0.3755478395061728,
+          0.34632716049382717
+        ],
+        "mean_road_probability": 0.9947685599327087,
+        "raw_road_fraction": 0.3629861111111111,
+        "applied_view_road_fractions": [
+          0.3629861111111111,
+          0.36895833333333333,
+          0.3755478395061728,
+          0.34632716049382717
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 17.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          47043,
+          47817,
+          48671,
+          44884
+        ],
+        "remaining_road_pixels": [
+          47043,
+          47817,
+          48671,
+          44884
+        ]
+      },
+      "mission": {
+        "progress_m": 11.198976066098641,
+        "length_m": 1030.9001614516883,
+        "distance_m": 11.199673336823015,
+        "fraction": 0.010863298391891334,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.5054362436926425,
+          10.191153188066307
+        ],
+        "cross_track_m": 0.5114888088007581,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.6075478295377879,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 19,
+      "pose": {
+        "x": -5.80370721956853,
+        "y": 4.554708931624453,
+        "heading": 1.574069284083679
+      },
+      "camera_yaw": -0.05614193081738362,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.259239227895482,
+        "reason": "tracking"
+      },
+      "confidence": 0.4125,
+      "path_end": [
+        5.537974834442139,
+        -1.8678776025772095
+      ],
+      "flow_ms": 61.093833995983005,
+      "surface_ms": 2.471999963745475,
+      "perception": {
+        "ms": 89.08975007943809,
+        "circuit_ms": 83.167958073318,
+        "road_fraction": 0.33525462962962965,
+        "views": 4,
+        "view_road_fractions": [
+          0.35782407407407407,
+          0.3690432098765432,
+          0.3768441358024691,
+          0.3437962962962963
+        ],
+        "mean_road_probability": 0.9935222864151001,
+        "raw_road_fraction": 0.35782407407407407,
+        "applied_view_road_fractions": [
+          0.33525462962962965,
+          0.3533256172839506,
+          0.3618827160493827,
+          0.33490740740740743
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 18,
+        "event_id": "holes-4",
+        "remaining_s": 0.160763107734752,
+        "removed_fraction": 0.042927125700304374,
+        "front_removed_fraction": 0.0630741363695174,
+        "raw_road_pixels": [
+          46374,
+          47828,
+          48839,
+          44556
+        ],
+        "remaining_road_pixels": [
+          43449,
+          45791,
+          46900,
+          43404
+        ]
+      },
+      "mission": {
+        "progress_m": 11.598846127179835,
+        "length_m": 1030.9001614516883,
+        "distance_m": 11.599670325826867,
+        "fraction": 0.011251182763272269,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.5199807454803285,
+          10.590758647404812
+        ],
+        "cross_track_m": 0.5016867430872312,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.6046724108382717,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 19.5,
+      "pose": {
+        "x": -5.779125056887,
+        "y": 4.953675174755259,
+        "heading": 1.4444496701359388
+      },
+      "camera_yaw": 0.08040765498782498,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.04232358071098963,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.4766806960105896
+      ],
+      "flow_ms": 59.67895803041756,
+      "surface_ms": 2.7368341106921434,
+      "perception": {
+        "ms": 89.0684169717133,
+        "circuit_ms": 83.23975000530481,
+        "road_fraction": 0.3516975308641975,
+        "views": 4,
+        "view_road_fractions": [
+          0.3516975308641975,
+          0.36949845679012344,
+          0.37530864197530867,
+          0.3402391975308642
+        ],
+        "mean_road_probability": 0.9925895929336548,
+        "raw_road_fraction": 0.3516975308641975,
+        "applied_view_road_fractions": [
+          0.3516975308641975,
+          0.36949845679012344,
+          0.37530864197530867,
+          0.3402391975308642
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 18.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          45580,
+          47887,
+          48640,
+          44095
+        ],
+        "remaining_road_pixels": [
+          45580,
+          47887,
+          48640,
+          44095
+        ]
+      },
+      "mission": {
+        "progress_m": 11.998923303357879,
+        "length_m": 1030.9001614516883,
+        "distance_m": 11.999393162152252,
+        "fraction": 0.011639268041690177,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.534491320840965,
+          10.990572591586053
+        ],
+        "cross_track_m": 0.4633591794496405,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5732256390714309,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 20,
+      "pose": {
+        "x": -5.732922967117244,
+        "y": 5.350990484988485,
+        "heading": 1.4656114604914339
+      },
+      "camera_yaw": 0.07001385260364779,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.006372715398945898,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.4307548701763153
+      ],
+      "flow_ms": 61.53929186984897,
+      "surface_ms": 1.883041113615036,
+      "perception": {
+        "ms": 91.39266703277826,
+        "circuit_ms": 85.6672499794513,
+        "road_fraction": 0.3239043209876543,
+        "views": 4,
+        "view_road_fractions": [
+          0.3239043209876543,
+          0.3692515432098765,
+          0.37570216049382715,
+          0.33665123456790125
+        ],
+        "mean_road_probability": 0.9942507147789001,
+        "raw_road_fraction": 0.3239043209876543,
+        "applied_view_road_fractions": [
+          0.3239043209876543,
+          0.3692515432098765,
+          0.37570216049382715,
+          0.33665123456790125
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 19,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          41978,
+          47855,
+          48691,
+          43630
+        ],
+        "remaining_road_pixels": [
+          41978,
+          47855,
+          48691,
+          43630
+        ]
+      },
+      "mission": {
+        "progress_m": 12.398713123250433,
+        "length_m": 1030.9001614516883,
+        "distance_m": 12.399385773140027,
+        "fraction": 0.012027074577028748,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.548939500560654,
+          11.390101251364074
+        ],
+        "cross_track_m": 0.40359602386242066,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.5201905651073329,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 20.5,
+      "pose": {
+        "x": -5.691560380838465,
+        "y": 5.748845989460172,
+        "heading": 1.4687978181909078
+      },
+      "camera_yaw": 0.07672212966127367,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.016114732212867508,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.41366302967071533
+      ],
+      "flow_ms": 59.40933316014707,
+      "surface_ms": 2.666083863005042,
+      "perception": {
+        "ms": 90.65795806236565,
+        "circuit_ms": 83.67962506599724,
+        "road_fraction": 0.32741512345679014,
+        "views": 4,
+        "view_road_fractions": [
+          0.32741512345679014,
+          0.36779320987654324,
+          0.3750848765432099,
+          0.33325617283950615
+        ],
+        "mean_road_probability": 0.9949886798858643,
+        "raw_road_fraction": 0.32741512345679014,
+        "applied_view_road_fractions": [
+          0.32741512345679014,
+          0.36779320987654324,
+          0.3750848765432099,
+          0.33325617283950615
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 19.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          42433,
+          47666,
+          48611,
+          43190
+        ],
+        "remaining_road_pixels": [
+          42433,
+          47666,
+          48611,
+          43190
+        ]
+      },
+      "mission": {
+        "progress_m": 12.798690848245158,
+        "length_m": 1030.9001614516883,
+        "distance_m": 12.799385605617605,
+        "fraction": 0.012415063385209249,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.563332164384663,
+          11.789819941731464
+        ],
+        "cross_track_m": 0.34866182330414364,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.4719849779536406,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 21,
+      "pose": {
+        "x": -5.652435213510083,
+        "y": 6.146926840951662,
+        "heading": 1.476855184297341
+      },
+      "camera_yaw": 0.07815214150657956,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.02755366240236473,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.29555895924568176
+      ],
+      "flow_ms": 59.8192079924047,
+      "surface_ms": 3.294750116765499,
+      "perception": {
+        "ms": 88.40820798650384,
+        "circuit_ms": 82.71937514655292,
+        "road_fraction": 0.3301851851851852,
+        "views": 4,
+        "view_road_fractions": [
+          0.3301851851851852,
+          0.3667206790123457,
+          0.37331018518518516,
+          0.32771604938271603
+        ],
+        "mean_road_probability": 0.995214581489563,
+        "raw_road_fraction": 0.3301851851851852,
+        "applied_view_road_fractions": [
+          0.3301851851851852,
+          0.3667206790123457,
+          0.37331018518518516,
+          0.32771604938271603
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 20,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          42792,
+          47527,
+          48381,
+          42472
+        ],
+        "remaining_road_pixels": [
+          42792,
+          47527,
+          48381,
+          42472
+        ]
+      },
+      "mission": {
+        "progress_m": 13.198711221398312,
+        "length_m": 1030.9001614516883,
+        "distance_m": 13.1993845344195,
+        "fraction": 0.01280309356321393,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.577653907925219,
+          12.189583854832893
+        ],
+        "cross_track_m": 0.2960510447279973,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.4260125988085245,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 21.5,
+      "pose": {
+        "x": -5.617658358435968,
+        "y": 6.5454090425523574,
+        "heading": 1.490632015498523
+      },
+      "camera_yaw": 0.07307668875232486,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.026078425704969717,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.24879930913448334
+      ],
+      "flow_ms": 58.07295814156532,
+      "surface_ms": 2.5730000343173742,
+      "perception": {
+        "ms": 87.84858300350606,
+        "circuit_ms": 82.13904197327793,
+        "road_fraction": 0.32939814814814816,
+        "views": 4,
+        "view_road_fractions": [
+          0.32939814814814816,
+          0.36712191358024693,
+          0.3720601851851852,
+          0.32141975308641973
+        ],
+        "mean_road_probability": 0.9952971935272217,
+        "raw_road_fraction": 0.32939814814814816,
+        "applied_view_road_fractions": [
+          0.32939814814814816,
+          0.36712191358024693,
+          0.3720601851851852,
+          0.32141975308641973
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 20.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          42690,
+          47579,
+          48219,
+          41656
+        ],
+        "remaining_road_pixels": [
+          42690,
+          47579,
+          48219,
+          41656
+        ]
+      },
+      "mission": {
+        "progress_m": 13.598473897721702,
+        "length_m": 1030.9001614516883,
+        "distance_m": 13.599381402708971,
+        "fraction": 0.013190873768583628,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.591884008895833,
+          12.58909318028276
+        ],
+        "cross_track_m": 0.24785706757044207,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.38438097824572093,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 22,
+      "pose": {
+        "x": -5.588227303359294,
+        "y": 6.944322026461698,
+        "heading": 1.503671228351009
+      },
+      "camera_yaw": 0.0677729023894118,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.01729071098369193,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.1926138550043106
+      ],
+      "flow_ms": 61.27362512052059,
+      "surface_ms": 2.1505418699234724,
+      "perception": {
+        "ms": 91.1475419998169,
+        "circuit_ms": 83.94304197281599,
+        "road_fraction": 0.32837962962962963,
+        "views": 4,
+        "view_road_fractions": [
+          0.32837962962962963,
+          0.3666743827160494,
+          0.37181327160493827,
+          0.31973765432098766
+        ],
+        "mean_road_probability": 0.9952825307846069,
+        "raw_road_fraction": 0.32837962962962963,
+        "applied_view_road_fractions": [
+          0.32837962962962963,
+          0.3666743827160494,
+          0.37181327160493827,
+          0.31973765432098766
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 21,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          42558,
+          47521,
+          48187,
+          41438
+        ],
+        "remaining_road_pixels": [
+          42558,
+          47521,
+          48187,
+          41438
+        ]
+      },
+      "mission": {
+        "progress_m": 13.99869974153884,
+        "length_m": 1030.9001614516883,
+        "distance_m": 13.999378597367109,
+        "fraction": 0.013579103258482581,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.606038400012385,
+          12.98906865286711
+        ],
+        "cross_track_m": 0.20523114107001392,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.34808694951067337,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 22.5,
+      "pose": {
+        "x": -5.563122922676601,
+        "y": 7.343532226076256,
+        "heading": 1.5123165838428543
+      },
+      "camera_yaw": 0.06608126165497752,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.015388776315241407,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.19344130158424377
+      ],
+      "flow_ms": 61.76550011150539,
+      "surface_ms": 2.214832929894328,
+      "perception": {
+        "ms": 86.81379188783467,
+        "circuit_ms": 81.53283386491239,
+        "road_fraction": 0.3267283950617284,
+        "views": 4,
+        "view_road_fractions": [
+          0.3267283950617284,
+          0.36572530864197533,
+          0.37135802469135804,
+          0.3165123456790123
+        ],
+        "mean_road_probability": 0.9954409599304199,
+        "raw_road_fraction": 0.3267283950617284,
+        "applied_view_road_fractions": [
+          0.3267283950617284,
+          0.36572530864197533,
+          0.37135802469135804,
+          0.3165123456790123
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 21.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          42344,
+          47398,
+          48128,
+          41020
+        ],
+        "remaining_road_pixels": [
+          42344,
+          47398,
+          48128,
+          41020
+        ]
+      },
+      "mission": {
+        "progress_m": 14.398364029488716,
+        "length_m": 1030.9001614516883,
+        "distance_m": 14.399377364122403,
+        "fraction": 0.013966788024568057,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.620071309761918,
+          13.388486503979566
+        ],
+        "cross_track_m": 0.16710419857780748,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.31611383739050364,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 23,
+      "pose": {
+        "x": -5.5412808256875,
+        "y": 7.742934456056256,
+        "heading": 1.520010972000474
+      },
+      "camera_yaw": 0.06474065420776753,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.03093872020867727,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.14320583641529083
+      ],
+      "flow_ms": 58.84575005620718,
+      "surface_ms": 2.6692498940974474,
+      "perception": {
+        "ms": 87.68316707573831,
+        "circuit_ms": 80.50220808945596,
+        "road_fraction": 0.32698302469135804,
+        "views": 4,
+        "view_road_fractions": [
+          0.32698302469135804,
+          0.36450617283950615,
+          0.3709799382716049,
+          0.31425925925925924
+        ],
+        "mean_road_probability": 0.9951326251029968,
+        "raw_road_fraction": 0.32698302469135804,
+        "applied_view_road_fractions": [
+          0.32698302469135804,
+          0.36450617283950615,
+          0.3709799382716049,
+          0.31425925925925924
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 22,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          42377,
+          47240,
+          48079,
+          40728
+        ],
+        "remaining_road_pixels": [
+          42377,
+          47240,
+          48079,
+          40728
+        ]
+      },
+      "mission": {
+        "progress_m": 14.798358251898678,
+        "length_m": 1030.9001614516883,
+        "distance_m": 14.799376387263557,
+        "fraction": 0.014354792835670909,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.634004783033024,
+          13.788237971054519
+        ],
+        "cross_track_m": 0.13286864887513858,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.2873992196964212,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 23.5,
+      "pose": {
+        "x": -5.5240660444571965,
+        "y": 8.142559896384402,
+        "heading": 1.5354803321048127
+      },
+      "camera_yaw": 0.05478661345293934,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": -0.003027448244904995,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5713173747062683
+      ],
+      "flow_ms": 61.72754103317857,
+      "surface_ms": 1.3721669092774391,
+      "perception": {
+        "ms": 89.51729186810553,
+        "circuit_ms": 84.7330829128623,
+        "road_fraction": 0.30155864197530863,
+        "views": 4,
+        "view_road_fractions": [
+          0.3266820987654321,
+          0.36324074074074075,
+          0.37084104938271606,
+          0.3116358024691358
+        ],
+        "mean_road_probability": 0.9953657984733582,
+        "raw_road_fraction": 0.3266820987654321,
+        "applied_view_road_fractions": [
+          0.30155864197530863,
+          0.3320061728395062,
+          0.35640432098765434,
+          0.30560185185185185
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 22.5,
+        "event_id": "holes-5",
+        "remaining_s": 1.9108881632639125,
+        "removed_fraction": 0.055981288969600196,
+        "front_removed_fraction": 0.07690490812036468,
+        "raw_road_pixels": [
+          42338,
+          47076,
+          48061,
+          40388
+        ],
+        "remaining_road_pixels": [
+          39082,
+          43028,
+          46190,
+          39606
+        ]
+      },
+      "mission": {
+        "progress_m": 15.198456503954771,
+        "length_m": 1030.9001614516883,
+        "distance_m": 15.19937243880691,
+        "fraction": 0.014742898558239315,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.647821794688097,
+          14.188097572045178
+        ],
+        "cross_track_m": 0.10410774500483769,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.2633073894407769,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 24,
+      "pose": {
+        "x": -5.509640032239318,
+        "y": 8.542299636622385,
+        "heading": 1.53396660798236
+      },
+      "camera_yaw": 0.06129998539433124,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 1.2749258914768617e-05,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.5111997723579407
+      ],
+      "flow_ms": 64.34320798143744,
+      "surface_ms": 1.8822501879185438,
+      "perception": {
+        "ms": 91.99358290061355,
+        "circuit_ms": 85.21279110573232,
+        "road_fraction": 0.3024074074074074,
+        "views": 4,
+        "view_road_fractions": [
+          0.3275848765432099,
+          0.36261574074074077,
+          0.36993055555555554,
+          0.3105787037037037
+        ],
+        "mean_road_probability": 0.9951980113983154,
+        "raw_road_fraction": 0.3275848765432099,
+        "applied_view_road_fractions": [
+          0.3024074074074074,
+          0.3314737654320988,
+          0.3554938271604938,
+          0.30454475308641976
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 23,
+        "event_id": "holes-5",
+        "remaining_s": 1.4108881632639125,
+        "removed_fraction": 0.05602215667289635,
+        "front_removed_fraction": 0.07685784948769285,
+        "raw_road_pixels": [
+          42455,
+          46995,
+          47943,
+          40251
+        ],
+        "remaining_road_pixels": [
+          39192,
+          42959,
+          46072,
+          39469
+        ]
+      },
+      "mission": {
+        "progress_m": 15.598101161710172,
+        "length_m": 1030.9001614516883,
+        "distance_m": 15.599372400999458,
+        "fraction": 0.015130564282525,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.661494172279454,
+          14.587508284764235
+        ],
+        "cross_track_m": 0.0795494217091785,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.2420019472399042,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 24.5,
+      "pose": {
+        "x": -5.494912749007767,
+        "y": 8.94202842859024,
+        "heading": 1.5339729826118176
+      },
+      "camera_yaw": 0.06632182919759577,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.0023444734571482963,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.492585152387619
+      ],
+      "flow_ms": 59.52687514945865,
+      "surface_ms": 1.9903338979929686,
+      "perception": {
+        "ms": 88.6695000808686,
+        "circuit_ms": 83.12799991108477,
+        "road_fraction": 0.3021836419753086,
+        "views": 4,
+        "view_road_fractions": [
+          0.3272762345679012,
+          0.362554012345679,
+          0.36929012345679013,
+          0.3095756172839506
+        ],
+        "mean_road_probability": 0.9953711628913879,
+        "raw_road_fraction": 0.3272762345679012,
+        "applied_view_road_fractions": [
+          0.3021836419753086,
+          0.33155864197530865,
+          0.3548533950617284,
+          0.3038194444444444
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 23.5,
+        "event_id": "holes-5",
+        "remaining_s": 0.9108881632639125,
+        "removed_fraction": 0.055732511007255486,
+        "front_removed_fraction": 0.07667098903689733,
+        "raw_road_pixels": [
+          42415,
+          46987,
+          47860,
+          40121
+        ],
+        "remaining_road_pixels": [
+          39163,
+          42970,
+          45989,
+          39375
+        ]
+      },
+      "mission": {
+        "progress_m": 15.99845464977086,
+        "length_m": 1030.9001614516883,
+        "distance_m": 15.999372400998787,
+        "fraction": 0.0155189175906639,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.675053087825918,
+          14.987632102997186
+        ],
+        "cross_track_m": 0.05956927394098062,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.2203954671468516,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 25,
+      "pose": {
+        "x": -5.480421031588421,
+        "y": 9.341765807362357,
+        "heading": 1.5351452193403925
+      },
+      "camera_yaw": 0.07011083424600527,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.004126579874216058,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.4463898837566376
+      ],
+      "flow_ms": 60.92345900833607,
+      "surface_ms": 1.8062079325318336,
+      "perception": {
+        "ms": 89.69629206694663,
+        "circuit_ms": 83.29891692847013,
+        "road_fraction": 0.3014274691358025,
+        "views": 4,
+        "view_road_fractions": [
+          0.32646604938271606,
+          0.35934413580246916,
+          0.3696682098765432,
+          0.3094598765432099
+        ],
+        "mean_road_probability": 0.9955043792724609,
+        "raw_road_fraction": 0.32646604938271606,
+        "applied_view_road_fractions": [
+          0.3014274691358025,
+          0.3297762345679012,
+          0.3552314814814815,
+          0.303804012345679
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "holes",
+        "elapsed_s": 24,
+        "event_id": "holes-5",
+        "remaining_s": 0.41088816326391253,
+        "removed_fraction": 0.05472707127351664,
+        "front_removed_fraction": 0.07669581659182226,
+        "raw_road_pixels": [
+          42310,
+          46571,
+          47909,
+          40106
+        ],
+        "remaining_road_pixels": [
+          39065,
+          42739,
+          46038,
+          39373
+        ]
+      },
+      "mission": {
+        "progress_m": 16.398028376866893,
+        "length_m": 1030.9001614516883,
+        "distance_m": 16.399372378325495,
+        "fraction": 0.015906514510363054,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.6884398177414095,
+          15.386981520704078
+        ],
+        "cross_track_m": 0.0491523855872288,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.19902437013436158,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 25.5,
+      "pose": {
+        "x": -5.4665760149712135,
+        "y": 9.741526059664027,
+        "heading": 1.5372085092775012
+      },
+      "camera_yaw": 0.07286714414748818,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.03247190636754007,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        0.0072231292724609375
+      ],
+      "flow_ms": 60.76629087328911,
+      "surface_ms": 2.3178751580417156,
+      "perception": {
+        "ms": 93.64145901054144,
+        "circuit_ms": 85.47450019977987,
+        "road_fraction": 0.3268132716049383,
+        "views": 4,
+        "view_road_fractions": [
+          0.3268132716049383,
+          0.36007716049382715,
+          0.36984567901234566,
+          0.3077237654320988
+        ],
+        "mean_road_probability": 0.9954857230186462,
+        "raw_road_fraction": 0.3268132716049383,
+        "applied_view_road_fractions": [
+          0.3268132716049383,
+          0.36007716049382715,
+          0.36984567901234566,
+          0.3077237654320988
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 24.5,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          42355,
+          46666,
+          47932,
+          39881
+        ],
+        "remaining_road_pixels": [
+          42355,
+          46666,
+          47932,
+          39881
+        ]
+      },
+      "mission": {
+        "progress_m": 16.798007000737794,
+        "length_m": 1030.9001614516883,
+        "distance_m": 16.79937230808227,
+        "fraction": 0.016294504190476847,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.701685890952321,
+          15.786740747613308
+        ],
+        "cross_track_m": 0.054602400167618956,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.17829948431809567,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    {
+      "stamp_sec": 26,
+      "pose": {
+        "x": -5.4563892908415195,
+        "y": 10.141391976041131,
+        "heading": 1.5534444624612709
+      },
+      "camera_yaw": 0.06077564761341803,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.02977692210839991,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        -0.03957495093345642
+      ],
+      "flow_ms": 61.842457856982946,
+      "surface_ms": 2.182292053475976,
+      "perception": {
+        "ms": 90.64375003799796,
+        "circuit_ms": 83.93754088319838,
+        "road_fraction": 0.3273688271604938,
+        "views": 4,
+        "view_road_fractions": [
+          0.3273688271604938,
+          0.35944444444444446,
+          0.36974537037037036,
+          0.3067283950617284
+        ],
+        "mean_road_probability": 0.9954745769500732,
+        "raw_road_fraction": 0.3273688271604938,
+        "applied_view_road_fractions": [
+          0.3273688271604938,
+          0.35944444444444446,
+          0.36974537037037036,
+          0.3067283950617284
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 25,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          42427,
+          46584,
+          47919,
+          39752
+        ],
+        "remaining_road_pixels": [
+          42427,
+          46584,
+          47919,
+          39752
+        ]
+      },
+      "mission": {
+        "progress_m": 17.19824554633964,
+        "length_m": 1030.9001614516883,
+        "distance_m": 17.199367958594365,
+        "fraction": 0.016682746001437706,
+        "complete": false,
+        "checkpoints": 1,
+        "target_site": [
+          -5.714778455626397,
+          16.186765092344906
+        ],
+        "cross_track_m": 0.06933291011586645,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.1612305298429214,
+        "return_gate_half_width_m": 2.5
+      }
+    }
+  ],
+  "captured_snapshot_summary": {
+    "steps": 133,
+    "distance_m": 38.797079613577104,
+    "wall_s": 29.725137416971847,
+    "latest": {
+      "stamp_sec": 67,
+      "pose": {
+        "x": -5.736296499663057,
+        "y": 31.59579759628458,
+        "heading": 1.5654558224881
+      },
+      "camera_yaw": 0.06834275801778024,
+      "command": {
+        "vx": 0.8,
+        "vy": 0.0,
+        "yaw_rate": 0.040575822793043795,
+        "reason": "tracking"
+      },
+      "confidence": 1.0,
+      "path_end": [
+        10.0,
+        -0.3656885325908661
+      ],
+      "flow_ms": 59.03487489558756,
+      "surface_ms": 3.1300000846385956,
+      "perception": {
+        "ms": 86.60204196348786,
+        "circuit_ms": 81.24279184266925,
+        "road_fraction": 0.32709876543209876,
+        "views": 4,
+        "view_road_fractions": [
+          0.32709876543209876,
+          0.31090277777777775,
+          0.34003086419753087,
+          0.308287037037037
+        ],
+        "mean_road_probability": 0.9953449964523315,
+        "raw_road_fraction": 0.32709876543209876,
+        "applied_view_road_fractions": [
+          0.32709876543209876,
+          0.31090277777777775,
+          0.34003086419753087,
+          0.308287037037037
+        ]
+      },
+      "sensor_faults": {
+        "schema": "dangjin.sensor_faults.v1",
+        "enabled": true,
+        "profile": "normal",
+        "seed": 47,
+        "kind": "clear",
+        "elapsed_s": 66,
+        "event_id": null,
+        "remaining_s": 0.0,
+        "removed_fraction": 0.0,
+        "front_removed_fraction": 0.0,
+        "raw_road_pixels": [
+          42392,
+          40293,
+          44068,
+          39954
+        ],
+        "remaining_road_pixels": [
+          42392,
+          40293,
+          44068,
+          39954
+        ]
+      },
+      "mission": {
+        "progress_m": 38.592551138606474,
+        "length_m": 1030.9001614516883,
+        "distance_m": 38.79707961357708,
+        "fraction": 0.03743577950774728,
+        "complete": false,
+        "checkpoints": 2,
+        "target_site": [
+          -6.090735557334697,
+          37.57699939242228
+        ],
+        "cross_track_m": 0.3081361604909779,
+        "return_gate_crossed": false,
+        "return_gate_lateral_m": 0.071756081215958,
+        "return_gate_half_width_m": 2.5
+      }
+    },
+    "mission": {
+      "progress_m": 38.99287298384854,
+      "length_m": 1030.9001614516883,
+      "distance_m": 39.19707282222195,
+      "fraction": 0.037824102121528175,
+      "complete": false,
+      "checkpoints": 2,
+      "target_site": [
+        -6.092889530283686,
+        37.97731544185348
+      ],
+      "cross_track_m": 0.3102761880385901,
+      "return_gate_crossed": false,
+      "return_gate_lateral_m": 0.06679128519647137,
+      "return_gate_half_width_m": 2.5
+    },
+    "stops": 35,
+    "fault_events": 18
+  },
+  "capture_scope": "First 51 observations retained for deterministic schedule replay; original later snapshot summary preserved separately."
+}

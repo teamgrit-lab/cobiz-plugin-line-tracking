@@ -1,0 +1,14 @@
+{
+  "schema": "dangjin.neural_drive.test_plan.v1",
+  "seeds_drawn_before_rollout": true,
+  "normal_seed": 3595030419,
+  "severe_seed": 1700182996,
+  "training_fault_seeds": [
+    1000,
+    1999
+  ],
+  "validation_fault_seeds": [
+    2000,
+    2999
+  ]
+}

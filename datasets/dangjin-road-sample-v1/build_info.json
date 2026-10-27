@@ -1,0 +1,33 @@
+{
+  "python": "3.12.11",
+  "libraries": {
+    "numpy": "2.5.2",
+    "scipy": "1.18.1",
+    "opencv-python": "5.0.0.93",
+    "Pillow": "12.3.0",
+    "mcap": "1.5.0",
+    "mcap-ros2-support": "0.5.7",
+    "pytest": "9.1.1"
+  },
+  "pipeline_sha256": {
+    "tools/build_road_sample_dataset.py": "19f7be0390d57a805962e174ccba001faffaef87c08e67698f7075fcfd6f92b9",
+    "tools/label_road_sample_dataset.py": "581761167506ef922bf4b0d78879d256fd70fc7db2b4cec90e95f5a87e663a16",
+    "tools/validate_road_sample_dataset.py": "043d966b62cd755baf14f4f8c33eb49ae17479ad9c791212f78901c8c06fb858",
+    "tools/lidar_common.py": "29c586827ca156ca2ed3a57cdc5bc518714dd73b04c31f2456850775b2ee1003",
+    "tools/rosbag_mcap_to_mp4.py": "7fa2ac054ec57b88ffa0cd0bba09ae0a8233211379b0196f3acf55b9dec16681",
+    "test/test_road_sample_dataset.py": "9e692ec83b8ec950bb74985de1ef2a478c8561540b63a9b545c26e62351f2498"
+  },
+  "unit_tests": {
+    "command": ".venv/bin/python -m pytest -q test/test_road_sample_dataset.py",
+    "passed": 10,
+    "failed": 0
+  },
+  "review_ui_checks": [
+    "episode selection",
+    "sample slider",
+    "raw image toggle",
+    "camera and BEV render",
+    "estimated and recorded command separation"
+  ],
+  "source_spotcheck": "source_spotcheck.json"
+}

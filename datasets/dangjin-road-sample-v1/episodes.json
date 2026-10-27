@@ -1,0 +1,44 @@
+[
+  {
+    "id": "straight",
+    "part": "1-009",
+    "offset_s": 10.0,
+    "duration_s": 12.0,
+    "start_ns": "1789454150546023550",
+    "end_ns": "1789454162546023550",
+    "sample_count": 24,
+    "video_frames": 120,
+    "video": "context.mp4",
+    "sampling_hz": 2,
+    "video_nominal_hz": 10,
+    "video_timestamps": "video_index.json"
+  },
+  {
+    "id": "right_turn",
+    "part": "7-027",
+    "offset_s": 9.0,
+    "duration_s": 12.0,
+    "start_ns": "1789454363731009770",
+    "end_ns": "1789454375731009770",
+    "sample_count": 24,
+    "video_frames": 120,
+    "video": "context.mp4",
+    "sampling_hz": 2,
+    "video_nominal_hz": 10,
+    "video_timestamps": "video_index.json"
+  },
+  {
+    "id": "vehicle",
+    "part": "32-025",
+    "offset_s": 12.0,
+    "duration_s": 16.0,
+    "start_ns": "1789455383490641755",
+    "end_ns": "1789455399490641755",
+    "sample_count": 31,
+    "video_frames": 139,
+    "video": "context.mp4",
+    "sampling_hz": 2,
+    "video_nominal_hz": 10,
+    "video_timestamps": "video_index.json"
+  }
+]

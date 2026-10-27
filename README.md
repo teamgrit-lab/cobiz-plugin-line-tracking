@@ -10,6 +10,22 @@ Optional R50-mask + pretrained Flyvis centre-path generation is documented in
 [docs/connectome.md](docs/connectome.md). Its separate planner service returns
 validated paths; the existing line-tracking process remains the Sport API owner.
 
+The opt-in [front-camera Connectome model](docs/front-connectome.md) uses one
+front image to infer the road mask and learned speed/yaw/stop commands. Its Mac
+training package includes portable weights, model architecture and validation
+reports. `--front-connectome-url` selects it for Road mode; existing task,
+freshness and physical obstacle guards remain active. It is experimental and
+has not been deployed or validated on a real Jetson/A2 by this change.
+
+The [Dangjin browser simulator](environments/dangjin/README.md) provides a local
+360° camera robot, road detection read from frozen Flyvis neural activity,
+a trained neural readout that directly selects speed, yaw rate and stopping,
+and camera-only patrol around the five barns, without map goals. Synthetic detection dropouts
+feed the action model; collision/no-go checks only record evaluation results
+in this simulation mode. The original checked planner remains available with
+`--control baseline`.
+Its controller and model adaptation are separate from the physical robot runtime.
+
 `actual-activate` is a Cobiz `LINE_TRACKING` task listener for the Unitree A2.
 For an accepted task it follows the selected surface-center path, defaulting to
 the pinned Swin-L FP16 TensorRT profile `swin-l-aspect-224x384-fp16`. The existing

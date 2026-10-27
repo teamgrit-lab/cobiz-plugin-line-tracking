@@ -1,0 +1,24 @@
+{
+  "schema": "dangjin.neural_drive.causal_validation.v1",
+  "heldout_samples": 156,
+  "weights_sha256": "48dff44f806500b315b211433d0410d0644652c5c072927b110557820561870d",
+  "training_selected_epoch": {
+    "epoch": 109,
+    "loss": 0.0009679482877254487,
+    "speed_mae_mps": 0.0025197993963956833,
+    "yaw_mae_rad_s": 0.010194049216806889,
+    "stop_accuracy": 1.0
+  },
+  "clean_speed_mae_mps": 0.0016574201872572303,
+  "clean_yaw_mae_rad_s": 0.009041770361363888,
+  "blank_input_learned_stop_rate": 1.0,
+  "clear_input_drive_rate": 1.0,
+  "shuffled_vision_yaw_change_rad_s": 0.1844465136528015,
+  "shuffled_vision_yaw_mae_rad_s": 0.1864164024591446,
+  "goal_input": false,
+  "map_assistance": false,
+  "fault_flag_input": false,
+  "rule_based_blank_stop": false,
+  "runtime_planner": false,
+  "scope": "saved action weights on held-out simulated views; full-lap checks separate"
+}

@@ -265,3 +265,19 @@ Jetson 배포나 실제 출발을 수행하지 않는다.
 
 참고: [Flyvis 공식 구현](https://github.com/TuragaLab/flyvis),
 [Network API](https://turagalab.github.io/flyvis/reference/network/).
+
+## 당진 우사 브라우저 순환 시험
+
+[별도 로컬 시뮬레이터](../environments/dangjin/README.md)는 360° 합성 카메라의
+서로 90° 간격인 네 RGB 투영을 실제 Flyvis 시각 회로에 넣고, 34개 출력 세포형의
+신경 활동에서 새로 학습한 readout으로 차도를 검출한다. 원래 optical-flow 사전학습
+회로를 고정했으며, 생물학적 회로가 원래 차도 분류기로 학습되었다고 가정하지 않는다.
+readout에 RGB 우회 입력이나 지도·pose를 주지 않는다. 현재 기본 `--control neural`은
+손상된 네 방향 검출 마스크만 학습된 행동 CNN에 넣어 속도·회전·정지를
+직접 출력한다. 지도 목표점·pose는 행동 입력에서 제외하며, 지도는 완주 평가에만 사용한다.
+Pure Pursuit와 비상 정지 검사는 실행하지 않으며, footprint·금지 구역·도로
+이탈은 평가 기록에만 남긴다. Flyvis 회로와 차도 출력층은 고정하고 행동 출력층을 새로
+학습한다. `--control baseline`은 기존 광류·표면 경로 검사와 Pure Pursuit를 재현한다.
+정답 마스크는 오프라인 인식기 학습에만 쓰며 주행 API는 RGB만 받는다.
+시뮬레이션 위치와 운동학 모델을 사용하는 별도 실행 경로이며, 실제 로봇의 Sport 제어
+소유권·ROS 실행 설정에는 영향을 주지 않는다.

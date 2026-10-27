@@ -1,0 +1,39 @@
+# Explicit opt-in for the trained FRONT camera package. No automatic activation.
+services:
+  front-connectome:
+    build:
+      context: .
+      dockerfile: Dockerfile.connectome
+      args:
+        CONNECTOME_BASE_IMAGE: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+    image: cobiz-plugin-line-tracking-connectome
+    entrypoint: ["/opt/connectome-venv/bin/python", "/workspace/tools/front_connectome_service.py"]
+    command: ["--model", "/front-model", "--device", "cuda", "--port", "8092"]
+    network_mode: host
+    runtime: nvidia
+    volumes:
+      - ${CONNECTUM_FRONT_MODEL_DIR:?set the copied front model package directory}:/front-model:ro
+    environment:
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+    healthcheck:
+      test: ["CMD", "/opt/connectome-venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      start_period: 180s
+      retries: 3
+    restart: unless-stopped
+  actual-activate:
+    depends_on:
+      front-connectome:
+        condition: service_healthy
+    environment:
+      SWIN_L_MODE: task-drive
+      SWIN_L_PATH_MASK_CLASS: "1"
+      SWIN_L_INFERENCE_PROCESS: "false"
+      LINE_TRACKING_PATH_PLANNER: local
+      LINE_TRACKING_MOTION_ENABLED: "false"
+      LINE_TRACKING_FRONT_CONNECTOME_URL: http://127.0.0.1:8092/v1/front-road
+      LINE_TRACKING_FRONT_CONNECTOME_SHA256: ${CONNECTUM_FRONT_SHA256:?set front_model.pt SHA-256}
+      LINE_TRACKING_FRONT_CONNECTOME_TIMEOUT_SEC: ${LINE_TRACKING_FRONT_CONNECTOME_TIMEOUT_SEC:-1.0}
+      LINE_TRACKING_CONNECTOME_MAX_AGE_SEC: ${LINE_TRACKING_CONNECTOME_MAX_AGE_SEC:-1.0}

@@ -1,0 +1,97 @@
+{
+  "schema": "dangjin.validation.v1",
+  "test_date": "2026-10-27",
+  "unit_checks": {
+    "node": 5,
+    "python": 35
+  },
+  "recording_integrity": {
+    "files": 26,
+    "frames": 78,
+    "scans": 26,
+    "gps_samples": 63
+  },
+  "runs": {
+    "bend": {
+      "steps": 647,
+      "recorded_pose_distance_m": 64.59995731892417,
+      "zero_commands": 0,
+      "server_errors": 0,
+      "center_rms_m": 0.2534767994913043,
+      "center_start_m": 0.0007064410539393747,
+      "center_end_m": 0.22115970895480996,
+      "blocked_pose_count": 0,
+      "model_backend": "flyvis",
+      "bundle_sha256": "97f853183f79d2e987532ca2716ce3c33c2f41f875af05396e0cd8b14a7bc3c2",
+      "latest_command": {
+        "vx": 0.5,
+        "vy": 0,
+        "yaw_rate": 0.010247973698607528,
+        "reason": "tracking"
+      }
+    },
+    "offset": {
+      "steps": 274,
+      "recorded_pose_distance_m": 27.29998351571651,
+      "zero_commands": 0,
+      "server_errors": 0,
+      "center_rms_m": 0.2360777408735533,
+      "center_start_m": 0.5992918912744809,
+      "center_end_m": 0.23208899554345558,
+      "blocked_pose_count": 0,
+      "model_backend": "flyvis",
+      "bundle_sha256": "97f853183f79d2e987532ca2716ce3c33c2f41f875af05396e0cd8b14a7bc3c2",
+      "latest_command": {
+        "vx": 0.5,
+        "vy": 0,
+        "yaw_rate": -0.01892651575781384,
+        "reason": "tracking"
+      }
+    },
+    "no-go": {
+      "steps": 2,
+      "recorded_pose_distance_m": 0.09999981515661692,
+      "zero_commands": 1,
+      "server_errors": 0,
+      "center_rms_m": 0.18360977637829135,
+      "center_start_m": 0.18405525638967146,
+      "center_end_m": 0.18316321289687135,
+      "blocked_pose_count": 0,
+      "model_backend": "flyvis",
+      "bundle_sha256": "97f853183f79d2e987532ca2716ce3c33c2f41f875af05396e0cd8b14a7bc3c2",
+      "latest_command": {
+        "vx": 0,
+        "vy": 0,
+        "yaw_rate": 0,
+        "reason": "no_go_zone"
+      },
+      "browser_observed_stop": "no_go_zone after 0.1 m; both server command and browser exclusion guard reject the path"
+    },
+    "obstacle": {
+      "steps": 1,
+      "recorded_pose_distance_m": 0,
+      "zero_commands": 1,
+      "server_errors": 0,
+      "center_rms_m": 0.0005331593822232772,
+      "center_start_m": 0.0005331593822232772,
+      "center_end_m": 0.0005331593822232772,
+      "blocked_pose_count": 0,
+      "model_backend": "flyvis",
+      "bundle_sha256": "97f853183f79d2e987532ca2716ce3c33c2f41f875af05396e0cd8b14a7bc3c2",
+      "latest_command": {
+        "vx": 0,
+        "vy": 0,
+        "yaw_rate": 0,
+        "reason": "path_unavailable"
+      }
+    }
+  },
+  "notes": [
+    "HTTP trace records pre-step poses; an in-flight response may be discarded when the browser pauses.",
+    "Recorded-pose RMS uses shared model road centerlines, not real-world tracking error.",
+    "Both moving trials use real pretrained Flyvis with synthetic RGB + ground-truth surface masks.",
+    "No GPS registration, R50 segmentation, robot dynamics or sim-to-real validation."
+  ],
+  "world": "world-before-layout-correction.json",
+  "superseded_by": "layout-correction-report.json"
+}

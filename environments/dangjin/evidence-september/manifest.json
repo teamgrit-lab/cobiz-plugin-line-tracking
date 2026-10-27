@@ -1,0 +1,4345 @@
+{
+  "schema_version": 1,
+  "recorded_date": "2026-09-15",
+  "files": [
+    {
+      "file": "a2_record_default_20260915_153503_0-019.mcap",
+      "bytes": 2147836258,
+      "start_ns": "1789454104204126839",
+      "end_ns": "1789454140541709236",
+      "duration_s": 36.337582397,
+      "topics": {
+        "/livox/lidar": {
+          "count": 353,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/livox/imu": {
+          "count": 7069,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/navheading": {
+          "count": 286,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 286,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 286,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/rosout": {
+          "count": 1516,
+          "type": "rcl_interfaces/msg/Log"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_1-009.mcap",
+      "bytes": 2148866616,
+      "start_ns": "1789454140546023550",
+      "end_ns": "1789454176029039286",
+      "duration_s": 35.483015736,
+      "topics": {
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/rosout": {
+          "count": 1468,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/lidar": {
+          "count": 355,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/livox/imu": {
+          "count": 7097,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_2-020.mcap",
+      "bytes": 2148344638,
+      "start_ns": "1789454176033031376",
+      "end_ns": "1789454211451261343",
+      "duration_s": 35.418229967,
+      "topics": {
+        "/navheading": {
+          "count": 283,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 283,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 283,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/livox/lidar": {
+          "count": 354,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/rosout": {
+          "count": 1471,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/livox/imu": {
+          "count": 7084,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_3-004.mcap",
+      "bytes": 2148875058,
+      "start_ns": "1789454211456323067",
+      "end_ns": "1789454246897204002",
+      "duration_s": 35.440880935,
+      "topics": {
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/rosout": {
+          "count": 1467,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/lidar": {
+          "count": 355,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/livox/imu": {
+          "count": 7089,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_4-024.mcap",
+      "bytes": 2147995381,
+      "start_ns": "1789454246902816399",
+      "end_ns": "1789454283799761482",
+      "duration_s": 36.896945083,
+      "topics": {
+        "/livox/lidar": {
+          "count": 369,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/navheading": {
+          "count": 295,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 295,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 295,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 706,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 706,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/rosout": {
+          "count": 1537,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 7381,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_5-007.mcap",
+      "bytes": 2148346968,
+      "start_ns": "1789454283802691365",
+      "end_ns": "1789454319242290987",
+      "duration_s": 35.439599622,
+      "topics": {
+        "/livox/lidar": {
+          "count": 354,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/rosout": {
+          "count": 1476,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 7088,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_6-006.mcap",
+      "bytes": 2148868460,
+      "start_ns": "1789454319246837208",
+      "end_ns": "1789454354728583837",
+      "duration_s": 35.481746629,
+      "topics": {
+        "/navheading": {
+          "count": 283,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/livox/lidar": {
+          "count": 355,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/rosout": {
+          "count": 1470,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 7098,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_7-027.mcap",
+      "bytes": 2148352272,
+      "start_ns": "1789454354731009770",
+      "end_ns": "1789454390176258584",
+      "duration_s": 35.445248814,
+      "topics": {
+        "/ublox_gps_node/fix_velocity": {
+          "count": 283,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 283,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/livox/lidar": {
+          "count": 354,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 708,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/livox/imu": {
+          "count": 7089,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/rosout": {
+          "count": 1488,
+          "type": "rcl_interfaces/msg/Log"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_8-021.mcap",
+      "bytes": 2148867990,
+      "start_ns": "1789454390176882859",
+      "end_ns": "1789454425608089960",
+      "duration_s": 35.431207101,
+      "topics": {
+        "/rosout": {
+          "count": 1468,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/livox/lidar": {
+          "count": 355,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/livox/imu": {
+          "count": 7087,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 710,
+          "type": "sensor_msgs/msg/CameraInfo"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_9-017.mcap",
+      "bytes": 2148345725,
+      "start_ns": "1789454425615264808",
+      "end_ns": "1789454461050934479",
+      "duration_s": 35.435669671,
+      "topics": {
+        "/navheading": {
+          "count": 283,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 283,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 283,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/livox/lidar": {
+          "count": 354,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/rosout": {
+          "count": 1474,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 7088,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_10-028.mcap",
+      "bytes": 2148871125,
+      "start_ns": "1789454461057103918",
+      "end_ns": "1789454496528612678",
+      "duration_s": 35.47150876,
+      "topics": {
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/rosout": {
+          "count": 1471,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/lidar": {
+          "count": 355,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/livox/imu": {
+          "count": 7096,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_11-014.mcap",
+      "bytes": 2148348025,
+      "start_ns": "1789454496534412185",
+      "end_ns": "1789454531952719345",
+      "duration_s": 35.41830716,
+      "topics": {
+        "/navheading": {
+          "count": 283,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 283,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 283,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/livox/lidar": {
+          "count": 354,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/rosout": {
+          "count": 1480,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 7083,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_12-015.mcap",
+      "bytes": 2148872710,
+      "start_ns": "1789454531954550567",
+      "end_ns": "1789454567429650769",
+      "duration_s": 35.475100202,
+      "topics": {
+        "/a2/front_camera/camera_info": {
+          "count": 708,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/rosout": {
+          "count": 1469,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/lidar": {
+          "count": 355,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/livox/imu": {
+          "count": 7097,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_13-026.mcap",
+      "bytes": 2148338259,
+      "start_ns": "1789454567430786804",
+      "end_ns": "1789454602871839388",
+      "duration_s": 35.441052584,
+      "topics": {
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/livox/lidar": {
+          "count": 354,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/rosout": {
+          "count": 1471,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 7088,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_14-011.mcap",
+      "bytes": 2149932806,
+      "start_ns": "1789454602877826423",
+      "end_ns": "1789454638514320652",
+      "duration_s": 35.636494229,
+      "topics": {
+        "/navheading": {
+          "count": 285,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 285,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 285,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/livox/imu": {
+          "count": 7126,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/rosout": {
+          "count": 1475,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/lidar": {
+          "count": 357,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 710,
+          "type": "sensor_msgs/msg/CameraInfo"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_15-023.mcap",
+      "bytes": 2150586817,
+      "start_ns": "1789454638516571985",
+      "end_ns": "1789454673801089751",
+      "duration_s": 35.284517766,
+      "topics": {
+        "/navheading": {
+          "count": 282,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 282,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 282,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/livox/lidar": {
+          "count": 353,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 710,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 710,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/rosout": {
+          "count": 1501,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 7060,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_16-013.mcap",
+      "bytes": 2148284694,
+      "start_ns": "1789454673806246158",
+      "end_ns": "1789454709254542846",
+      "duration_s": 35.448296688,
+      "topics": {
+        "/livox/lidar": {
+          "count": 354,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/rosout": {
+          "count": 1475,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 7089,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_17-018.mcap",
+      "bytes": 2148930686,
+      "start_ns": "1789454709261435535",
+      "end_ns": "1789454744736154041",
+      "duration_s": 35.474718506,
+      "topics": {
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/rosout": {
+          "count": 1469,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/lidar": {
+          "count": 355,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/livox/imu": {
+          "count": 7098,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_18-016.mcap",
+      "bytes": 2148873705,
+      "start_ns": "1789454744740640961",
+      "end_ns": "1789454780189520914",
+      "duration_s": 35.448879953,
+      "topics": {
+        "/navheading": {
+          "count": 283,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 283,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 283,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/rosout": {
+          "count": 1490,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/lidar": {
+          "count": 355,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/livox/imu": {
+          "count": 7090,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_19-012.mcap",
+      "bytes": 2148334528,
+      "start_ns": "1789454780196201567",
+      "end_ns": "1789454815646682122",
+      "duration_s": 35.450480555,
+      "topics": {
+        "/livox/lidar": {
+          "count": 354,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/rosout": {
+          "count": 1472,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/navheading": {
+          "count": 284,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 284,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 284,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/livox/imu": {
+          "count": 7092,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_20-005.mcap",
+      "bytes": 2148897421,
+      "start_ns": "1789454815652818180",
+      "end_ns": "1789454851166921936",
+      "duration_s": 35.514103756,
+      "topics": {
+        "/navheading": {
+          "count": 268,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/ublox_gps_node/fix_velocity": {
+          "count": 268,
+          "type": "geometry_msgs/msg/TwistWithCovarianceStamped"
+        },
+        "/ublox_gps_node/fix": {
+          "count": 268,
+          "type": "sensor_msgs/msg/NavSatFix"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 709,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 709,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/livox/lidar": {
+          "count": 355,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/rosout": {
+          "count": 1598,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 7103,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_30-022.mcap",
+      "bytes": 2149511994,
+      "start_ns": "1789455276355847600",
+      "end_ns": "1789455324046980670",
+      "duration_s": 47.69113307,
+      "topics": {
+        "/a2/front_camera/camera_info": {
+          "count": 686,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 686,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/livox/lidar": {
+          "count": 477,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/rosout": {
+          "count": 2022,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 9539,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_31-010.mcap",
+      "bytes": 2148469034,
+      "start_ns": "1789455324051347111",
+      "end_ns": "1789455371485537500",
+      "duration_s": 47.434190389,
+      "topics": {
+        "/a2/front_camera/camera_info": {
+          "count": 685,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 686,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/livox/lidar": {
+          "count": 475,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/rosout": {
+          "count": 2018,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 9481,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_32-025.mcap",
+      "bytes": 2149625874,
+      "start_ns": "1789455371490641755",
+      "end_ns": "1789455423416822434",
+      "duration_s": 51.926180679,
+      "topics": {
+        "/livox/lidar": {
+          "count": 519,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 678,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/rosout": {
+          "count": 2231,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 10387,
+          "type": "sensor_msgs/msg/Imu"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 679,
+          "type": "sensor_msgs/msg/CameraInfo"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_33-003.mcap",
+      "bytes": 2149382838,
+      "start_ns": "1789455423422147905",
+      "end_ns": "1789455476296885074",
+      "duration_s": 52.874737169,
+      "topics": {
+        "/livox/lidar": {
+          "count": 529,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/a2/front_camera/camera_info": {
+          "count": 676,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 676,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/rosout": {
+          "count": 2293,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 10575,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    },
+    {
+      "file": "a2_record_default_20260915_153503_34-002.mcap",
+      "bytes": 2148028371,
+      "start_ns": "1789455476307222579",
+      "end_ns": "1789455527935488332",
+      "duration_s": 51.628265753,
+      "topics": {
+        "/a2/front_camera/camera_info": {
+          "count": 678,
+          "type": "sensor_msgs/msg/CameraInfo"
+        },
+        "/a2/front_camera/image_raw": {
+          "count": 678,
+          "type": "sensor_msgs/msg/Image"
+        },
+        "/livox/lidar": {
+          "count": 516,
+          "type": "sensor_msgs/msg/PointCloud2"
+        },
+        "/rosout": {
+          "count": 2207,
+          "type": "rcl_interfaces/msg/Log"
+        },
+        "/livox/imu": {
+          "count": 10328,
+          "type": "sensor_msgs/msg/Imu"
+        }
+      },
+      "camera_info": {
+        "width": 1280,
+        "height": 720,
+        "k": [
+          535.088326,
+          0.0,
+          643.406605,
+          0.0,
+          532.843368,
+          355.973065,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "d": [
+          -2.13869731,
+          0.77162026,
+          0.00048845,
+          -0.001401,
+          0.42753978,
+          -1.85354262,
+          0.07940282,
+          0.84793409
+        ],
+        "distortion_model": "rational_polynomial"
+      }
+    }
+  ],
+  "frames": [
+    {
+      "file": "a2_record_default_20260915_153503_0-019.mcap",
+      "image": "camera-00-00.jpg",
+      "timestamp_ns": "1789454107889764144",
+      "elapsed_s": 3.686,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_0-019.mcap",
+      "image": "camera-00-01.jpg",
+      "timestamp_ns": "1789454122392645500",
+      "elapsed_s": 18.189,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_0-019.mcap",
+      "image": "camera-00-02.jpg",
+      "timestamp_ns": "1789454136944271239",
+      "elapsed_s": 32.74,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_1-009.mcap",
+      "image": "camera-01-00.jpg",
+      "timestamp_ns": "1789454144113030734",
+      "elapsed_s": 39.909,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_1-009.mcap",
+      "image": "camera-01-01.jpg",
+      "timestamp_ns": "1789454158295563434",
+      "elapsed_s": 54.091,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_1-009.mcap",
+      "image": "camera-01-02.jpg",
+      "timestamp_ns": "1789454172519542921",
+      "elapsed_s": 68.315,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_2-020.mcap",
+      "image": "camera-02-00.jpg",
+      "timestamp_ns": "1789454179612874691",
+      "elapsed_s": 75.409,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_2-020.mcap",
+      "image": "camera-02-01.jpg",
+      "timestamp_ns": "1789454193754986470",
+      "elapsed_s": 89.551,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_2-020.mcap",
+      "image": "camera-02-02.jpg",
+      "timestamp_ns": "1789454207943032027",
+      "elapsed_s": 103.739,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_3-004.mcap",
+      "image": "camera-03-00.jpg",
+      "timestamp_ns": "1789454215042698661",
+      "elapsed_s": 110.839,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_3-004.mcap",
+      "image": "camera-03-01.jpg",
+      "timestamp_ns": "1789454229204632135",
+      "elapsed_s": 125.001,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_3-004.mcap",
+      "image": "camera-03-02.jpg",
+      "timestamp_ns": "1789454243358334372",
+      "elapsed_s": 139.154,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_4-024.mcap",
+      "image": "camera-04-00.jpg",
+      "timestamp_ns": "1789454250643524742",
+      "elapsed_s": 146.439,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_4-024.mcap",
+      "image": "camera-04-01.jpg",
+      "timestamp_ns": "1789454265360399259",
+      "elapsed_s": 161.156,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_4-024.mcap",
+      "image": "camera-04-02.jpg",
+      "timestamp_ns": "1789454280146434994",
+      "elapsed_s": 175.942,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_5-007.mcap",
+      "image": "camera-05-00.jpg",
+      "timestamp_ns": "1789454287363798011",
+      "elapsed_s": 183.16,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_5-007.mcap",
+      "image": "camera-05-01.jpg",
+      "timestamp_ns": "1789454301538807461",
+      "elapsed_s": 197.335,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_5-007.mcap",
+      "image": "camera-05-02.jpg",
+      "timestamp_ns": "1789454315741869886",
+      "elapsed_s": 211.538,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_6-006.mcap",
+      "image": "camera-06-00.jpg",
+      "timestamp_ns": "1789454322827294372",
+      "elapsed_s": 218.623,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_6-006.mcap",
+      "image": "camera-06-01.jpg",
+      "timestamp_ns": "1789454337005655550",
+      "elapsed_s": 232.802,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_6-006.mcap",
+      "image": "camera-06-02.jpg",
+      "timestamp_ns": "1789454351207779182",
+      "elapsed_s": 247.004,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_7-027.mcap",
+      "image": "camera-07-00.jpg",
+      "timestamp_ns": "1789454358306158393",
+      "elapsed_s": 254.102,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_7-027.mcap",
+      "image": "camera-07-01.jpg",
+      "timestamp_ns": "1789454372455878909",
+      "elapsed_s": 268.252,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_7-027.mcap",
+      "image": "camera-07-02.jpg",
+      "timestamp_ns": "1789454386659380255",
+      "elapsed_s": 282.455,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_8-021.mcap",
+      "image": "camera-08-00.jpg",
+      "timestamp_ns": "1789454393742555544",
+      "elapsed_s": 289.538,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_8-021.mcap",
+      "image": "camera-08-01.jpg",
+      "timestamp_ns": "1789454407893344139",
+      "elapsed_s": 303.689,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_8-021.mcap",
+      "image": "camera-08-02.jpg",
+      "timestamp_ns": "1789454422090493147",
+      "elapsed_s": 317.886,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_9-017.mcap",
+      "image": "camera-09-00.jpg",
+      "timestamp_ns": "1789454429175117401",
+      "elapsed_s": 324.971,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_9-017.mcap",
+      "image": "camera-09-01.jpg",
+      "timestamp_ns": "1789454443353993849",
+      "elapsed_s": 339.15,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_9-017.mcap",
+      "image": "camera-09-02.jpg",
+      "timestamp_ns": "1789454457516734322",
+      "elapsed_s": 353.313,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_10-028.mcap",
+      "image": "camera-10-00.jpg",
+      "timestamp_ns": "1789454464644267961",
+      "elapsed_s": 360.44,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_10-028.mcap",
+      "image": "camera-10-01.jpg",
+      "timestamp_ns": "1789454478804852777",
+      "elapsed_s": 374.601,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_10-028.mcap",
+      "image": "camera-10-02.jpg",
+      "timestamp_ns": "1789454493021094852",
+      "elapsed_s": 388.817,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_11-014.mcap",
+      "image": "camera-11-00.jpg",
+      "timestamp_ns": "1789454500118409491",
+      "elapsed_s": 395.914,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_11-014.mcap",
+      "image": "camera-11-01.jpg",
+      "timestamp_ns": "1789454514248960006",
+      "elapsed_s": 410.045,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_11-014.mcap",
+      "image": "camera-11-02.jpg",
+      "timestamp_ns": "1789454528447651793",
+      "elapsed_s": 424.244,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_12-015.mcap",
+      "image": "camera-12-00.jpg",
+      "timestamp_ns": "1789454535536490275",
+      "elapsed_s": 431.332,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_12-015.mcap",
+      "image": "camera-12-01.jpg",
+      "timestamp_ns": "1789454549727235399",
+      "elapsed_s": 445.523,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_12-015.mcap",
+      "image": "camera-12-02.jpg",
+      "timestamp_ns": "1789454563921464753",
+      "elapsed_s": 459.717,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_13-026.mcap",
+      "image": "camera-13-00.jpg",
+      "timestamp_ns": "1789454570991635241",
+      "elapsed_s": 466.788,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_13-026.mcap",
+      "image": "camera-13-01.jpg",
+      "timestamp_ns": "1789454585166172447",
+      "elapsed_s": 480.962,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_13-026.mcap",
+      "image": "camera-13-02.jpg",
+      "timestamp_ns": "1789454599386699330",
+      "elapsed_s": 495.183,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_14-011.mcap",
+      "image": "camera-14-00.jpg",
+      "timestamp_ns": "1789454606462293177",
+      "elapsed_s": 502.258,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_14-011.mcap",
+      "image": "camera-14-01.jpg",
+      "timestamp_ns": "1789454620728931281",
+      "elapsed_s": 516.525,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_14-011.mcap",
+      "image": "camera-14-02.jpg",
+      "timestamp_ns": "1789454634959724426",
+      "elapsed_s": 530.756,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_15-023.mcap",
+      "image": "camera-15-00.jpg",
+      "timestamp_ns": "1789454642062689697",
+      "elapsed_s": 537.859,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_15-023.mcap",
+      "image": "camera-15-01.jpg",
+      "timestamp_ns": "1789454656209476041",
+      "elapsed_s": 552.005,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_15-023.mcap",
+      "image": "camera-15-02.jpg",
+      "timestamp_ns": "1789454670307744561",
+      "elapsed_s": 566.104,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_16-013.mcap",
+      "image": "camera-16-00.jpg",
+      "timestamp_ns": "1789454677393062451",
+      "elapsed_s": 573.189,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_16-013.mcap",
+      "image": "camera-16-01.jpg",
+      "timestamp_ns": "1789454691545604526",
+      "elapsed_s": 587.341,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_16-013.mcap",
+      "image": "camera-16-02.jpg",
+      "timestamp_ns": "1789454705756108828",
+      "elapsed_s": 601.552,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_17-018.mcap",
+      "image": "camera-17-00.jpg",
+      "timestamp_ns": "1789454712809707543",
+      "elapsed_s": 608.606,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_17-018.mcap",
+      "image": "camera-17-01.jpg",
+      "timestamp_ns": "1789454727006008831",
+      "elapsed_s": 622.802,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_17-018.mcap",
+      "image": "camera-17-02.jpg",
+      "timestamp_ns": "1789454741205561620",
+      "elapsed_s": 637.001,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_18-016.mcap",
+      "image": "camera-18-00.jpg",
+      "timestamp_ns": "1789454748349056764",
+      "elapsed_s": 644.145,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_18-016.mcap",
+      "image": "camera-18-01.jpg",
+      "timestamp_ns": "1789454762514741690",
+      "elapsed_s": 658.311,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_18-016.mcap",
+      "image": "camera-18-02.jpg",
+      "timestamp_ns": "1789454776689365951",
+      "elapsed_s": 672.485,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_19-012.mcap",
+      "image": "camera-19-00.jpg",
+      "timestamp_ns": "1789454783794142660",
+      "elapsed_s": 679.59,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_19-012.mcap",
+      "image": "camera-19-01.jpg",
+      "timestamp_ns": "1789454797943209886",
+      "elapsed_s": 693.739,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_19-012.mcap",
+      "image": "camera-19-02.jpg",
+      "timestamp_ns": "1789454812135402634",
+      "elapsed_s": 707.931,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_20-005.mcap",
+      "image": "camera-20-00.jpg",
+      "timestamp_ns": "1789454819206767606",
+      "elapsed_s": 715.003,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_20-005.mcap",
+      "image": "camera-20-01.jpg",
+      "timestamp_ns": "1789454833446838813",
+      "elapsed_s": 729.243,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_20-005.mcap",
+      "image": "camera-20-02.jpg",
+      "timestamp_ns": "1789454847636376888",
+      "elapsed_s": 743.432,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_30-022.mcap",
+      "image": "camera-21-00.jpg",
+      "timestamp_ns": "1789455281171676075",
+      "elapsed_s": 1176.968,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_30-022.mcap",
+      "image": "camera-21-01.jpg",
+      "timestamp_ns": "1789455300212457076",
+      "elapsed_s": 1196.008,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_30-022.mcap",
+      "image": "camera-21-02.jpg",
+      "timestamp_ns": "1789455319337540374",
+      "elapsed_s": 1215.133,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_31-010.mcap",
+      "image": "camera-22-00.jpg",
+      "timestamp_ns": "1789455328804196959",
+      "elapsed_s": 1224.6,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_31-010.mcap",
+      "image": "camera-22-01.jpg",
+      "timestamp_ns": "1789455347801077205",
+      "elapsed_s": 1243.597,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_31-010.mcap",
+      "image": "camera-22-02.jpg",
+      "timestamp_ns": "1789455366748787789",
+      "elapsed_s": 1262.545,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_32-025.mcap",
+      "image": "camera-23-00.jpg",
+      "timestamp_ns": "1789455376795315508",
+      "elapsed_s": 1272.591,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_32-025.mcap",
+      "image": "camera-23-01.jpg",
+      "timestamp_ns": "1789455397509282894",
+      "elapsed_s": 1293.305,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_32-025.mcap",
+      "image": "camera-23-02.jpg",
+      "timestamp_ns": "1789455418259843887",
+      "elapsed_s": 1314.056,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_33-003.mcap",
+      "image": "camera-24-00.jpg",
+      "timestamp_ns": "1789455428711264022",
+      "elapsed_s": 1324.507,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_33-003.mcap",
+      "image": "camera-24-01.jpg",
+      "timestamp_ns": "1789455450769261620",
+      "elapsed_s": 1346.565,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_33-003.mcap",
+      "image": "camera-24-02.jpg",
+      "timestamp_ns": "1789455471012936523",
+      "elapsed_s": 1366.809,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_34-002.mcap",
+      "image": "camera-25-00.jpg",
+      "timestamp_ns": "1789455481545365091",
+      "elapsed_s": 1377.341,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_34-002.mcap",
+      "image": "camera-25-01.jpg",
+      "timestamp_ns": "1789455502150500612",
+      "elapsed_s": 1397.946,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "file": "a2_record_default_20260915_153503_34-002.mcap",
+      "image": "camera-25-02.jpg",
+      "timestamp_ns": "1789455522840204525",
+      "elapsed_s": 1418.636,
+      "frame_id": "camera_optical_frame",
+      "width": 1280,
+      "height": 720
+    }
+  ],
+  "clouds": [
+    {
+      "file": "a2_record_default_20260915_153503_0-019.mcap",
+      "points": "lidar-00.json",
+      "timestamp_ns": "1789454122375327825",
+      "elapsed_s": 18.171,
+      "original_points": 8155,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_1-009.mcap",
+      "points": "lidar-01.json",
+      "timestamp_ns": "1789454158374135359",
+      "elapsed_s": 54.17,
+      "original_points": 9681,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_2-020.mcap",
+      "points": "lidar-02.json",
+      "timestamp_ns": "1789454193775088019",
+      "elapsed_s": 89.571,
+      "original_points": 12599,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_3-004.mcap",
+      "points": "lidar-03.json",
+      "timestamp_ns": "1789454229177947343",
+      "elapsed_s": 124.974,
+      "original_points": 10128,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_4-024.mcap",
+      "points": "lidar-04.json",
+      "timestamp_ns": "1789454265374446319",
+      "elapsed_s": 161.17,
+      "original_points": 7662,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_5-007.mcap",
+      "points": "lidar-05.json",
+      "timestamp_ns": "1789454301573661636",
+      "elapsed_s": 197.37,
+      "original_points": 8601,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_6-006.mcap",
+      "points": "lidar-06.json",
+      "timestamp_ns": "1789454337074489177",
+      "elapsed_s": 232.87,
+      "original_points": 9509,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_7-027.mcap",
+      "points": "lidar-07.json",
+      "timestamp_ns": "1789454372474372128",
+      "elapsed_s": 268.27,
+      "original_points": 8887,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_8-021.mcap",
+      "points": "lidar-08.json",
+      "timestamp_ns": "1789454407975073153",
+      "elapsed_s": 303.771,
+      "original_points": 8569,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_9-017.mcap",
+      "points": "lidar-09.json",
+      "timestamp_ns": "1789454443386586798",
+      "elapsed_s": 339.182,
+      "original_points": 8171,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_10-028.mcap",
+      "points": "lidar-10.json",
+      "timestamp_ns": "1789454478875451176",
+      "elapsed_s": 374.671,
+      "original_points": 8638,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_11-014.mcap",
+      "points": "lidar-11.json",
+      "timestamp_ns": "1789454514273984842",
+      "elapsed_s": 410.07,
+      "original_points": 9476,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_12-015.mcap",
+      "points": "lidar-12.json",
+      "timestamp_ns": "1789454549775137163",
+      "elapsed_s": 445.571,
+      "original_points": 8495,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_13-026.mcap",
+      "points": "lidar-13.json",
+      "timestamp_ns": "1789454585177655264",
+      "elapsed_s": 480.974,
+      "original_points": 8765,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_14-011.mcap",
+      "points": "lidar-14.json",
+      "timestamp_ns": "1789454620774445340",
+      "elapsed_s": 516.57,
+      "original_points": 8420,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_15-023.mcap",
+      "points": "lidar-15.json",
+      "timestamp_ns": "1789454656173444700",
+      "elapsed_s": 551.969,
+      "original_points": 8497,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_16-013.mcap",
+      "points": "lidar-16.json",
+      "timestamp_ns": "1789454691576190860",
+      "elapsed_s": 587.372,
+      "original_points": 11515,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_17-018.mcap",
+      "points": "lidar-17.json",
+      "timestamp_ns": "1789454727074201267",
+      "elapsed_s": 622.87,
+      "original_points": 15480,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_18-016.mcap",
+      "points": "lidar-18.json",
+      "timestamp_ns": "1789454762479148452",
+      "elapsed_s": 658.275,
+      "original_points": 8289,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_19-012.mcap",
+      "points": "lidar-19.json",
+      "timestamp_ns": "1789454797978748887",
+      "elapsed_s": 693.775,
+      "original_points": 5533,
+      "displayed_points": 5533,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_20-005.mcap",
+      "points": "lidar-20.json",
+      "timestamp_ns": "1789454833474676011",
+      "elapsed_s": 729.271,
+      "original_points": 6325,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_30-022.mcap",
+      "points": "lidar-21.json",
+      "timestamp_ns": "1789455300277150684",
+      "elapsed_s": 1196.073,
+      "original_points": 7085,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_31-010.mcap",
+      "points": "lidar-22.json",
+      "timestamp_ns": "1789455347775635512",
+      "elapsed_s": 1243.572,
+      "original_points": 8106,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_32-025.mcap",
+      "points": "lidar-23.json",
+      "timestamp_ns": "1789455397474250760",
+      "elapsed_s": 1293.27,
+      "original_points": 7841,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_33-003.mcap",
+      "points": "lidar-24.json",
+      "timestamp_ns": "1789455449874836115",
+      "elapsed_s": 1345.671,
+      "original_points": 6693,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    },
+    {
+      "file": "a2_record_default_20260915_153503_34-002.mcap",
+      "points": "lidar-25.json",
+      "timestamp_ns": "1789455502201544457",
+      "elapsed_s": 1397.997,
+      "original_points": 8554,
+      "displayed_points": 6000,
+      "frame_id": "livox_frame"
+    }
+  ],
+  "gps_samples": [
+    {
+      "file": "a2_record_default_20260915_153503_0-019.mcap",
+      "timestamp_ns": "1789454107847189387",
+      "elapsed_s": 3.643,
+      "latitude": 36.9629561,
+      "longitude": 126.5369573,
+      "altitude": 27.351,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.43033600000000005,
+        0.0,
+        0.0,
+        0.0,
+        0.43033600000000005,
+        0.0,
+        0.0,
+        0.0,
+        1.3248010000000001
+      ],
+      "enu_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_0-019.mcap",
+      "timestamp_ns": "1789454122477148850",
+      "elapsed_s": 18.273,
+      "latitude": 36.9629565,
+      "longitude": 126.5369573,
+      "altitude": 27.191,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.065536,
+        0.0,
+        0.0,
+        0.0,
+        0.065536,
+        0.0,
+        0.0,
+        0.0,
+        0.126736
+      ],
+      "enu_m": [
+        0.0,
+        0.04452779604669304,
+        -0.16000000000000014
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_0-019.mcap",
+      "timestamp_ns": "1789454136967936817",
+      "elapsed_s": 32.764,
+      "latitude": 36.9629348,
+      "longitude": 126.5370174,
+      "altitude": 26.969,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.188356,
+        0.0,
+        0.0,
+        0.0,
+        0.188356,
+        0.0,
+        0.0,
+        0.0,
+        0.190096
+      ],
+      "enu_m": [
+        5.34571432277074,
+        -2.3711051539216537,
+        -0.3819999999999979
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_1-009.mcap",
+      "timestamp_ns": "1789454144215479099",
+      "elapsed_s": 40.011,
+      "latitude": 36.9629453,
+      "longitude": 126.5370686,
+      "altitude": 27.01,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.7224999999999999,
+        0.0,
+        0.0,
+        0.0,
+        0.7224999999999999,
+        0.0,
+        0.0,
+        0.0,
+        0.8445610000000001
+      ],
+      "enu_m": [
+        9.899800401618574,
+        -1.202250500379465,
+        -0.3409999999999975
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_1-009.mcap",
+      "timestamp_ns": "1789454158342691056",
+      "elapsed_s": 54.139,
+      "latitude": 36.9629761,
+      "longitude": 126.5371644,
+      "altitude": 27.964000000000002,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        1.425636,
+        0.0,
+        0.0,
+        0.0,
+        1.425636,
+        0.0,
+        0.0,
+        0.0,
+        3.779136
+      ],
+      "enu_m": [
+        18.420922400189383,
+        2.2263898157811854,
+        0.6130000000000031
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_1-009.mcap",
+      "timestamp_ns": "1789454172592874666",
+      "elapsed_s": 68.389,
+      "latitude": 36.962999599999996,
+      "longitude": 126.5372701,
+      "altitude": 27.68,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.224676,
+        0.0,
+        0.0,
+        0.0,
+        0.224676,
+        0.0,
+        0.0,
+        0.0,
+        0.6336160000000001
+      ],
+      "enu_m": [
+        27.82261963744748,
+        4.84239784914611,
+        0.3290000000000006
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_2-020.mcap",
+      "timestamp_ns": "1789454179596312329",
+      "elapsed_s": 75.392,
+      "latitude": 36.963016599999996,
+      "longitude": 126.53732009999999,
+      "altitude": 27.472,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.23136099999999998,
+        0.0,
+        0.0,
+        0.0,
+        0.23136099999999998,
+        0.0,
+        0.0,
+        0.0,
+        0.6806249999999999
+      ],
+      "enu_m": [
+        32.26996932257805,
+        6.7348291925996655,
+        0.12100000000000222
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_2-020.mcap",
+      "timestamp_ns": "1789454193845397037",
+      "elapsed_s": 89.641,
+      "latitude": 36.9630568,
+      "longitude": 126.5374174,
+      "altitude": 27.244,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.5285289999999999,
+        0.0,
+        0.0,
+        0.0,
+        0.5285289999999999,
+        0.0,
+        0.0,
+        0.0,
+        1.5376
+      ],
+      "enu_m": [
+        40.92451181266343,
+        11.209872722580869,
+        -0.10699999999999932
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_2-020.mcap",
+      "timestamp_ns": "1789454207968513292",
+      "elapsed_s": 103.764,
+      "latitude": 36.9630891,
+      "longitude": 126.5375169,
+      "altitude": 27.528000000000002,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.42510400000000004,
+        0.0,
+        0.0,
+        0.0,
+        0.42510400000000004,
+        0.0,
+        0.0,
+        0.0,
+        1.4472090000000002
+      ],
+      "enu_m": [
+        49.77473768870242,
+        14.805492275300821,
+        0.17700000000000315
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_3-004.mcap",
+      "timestamp_ns": "1789454215097137457",
+      "elapsed_s": 110.893,
+      "latitude": 36.963101699999996,
+      "longitude": 126.53755869999999,
+      "altitude": 29.033,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.613089,
+        0.0,
+        0.0,
+        0.0,
+        0.613089,
+        0.0,
+        0.0,
+        0.0,
+        1.7239689999999999
+      ],
+      "enu_m": [
+        53.492722025613155,
+        16.208117859076864,
+        1.6820000000000022
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_3-004.mcap",
+      "timestamp_ns": "1789454229217647193",
+      "elapsed_s": 125.014,
+      "latitude": 36.963117499999996,
+      "longitude": 126.5376342,
+      "altitude": 35.787,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        3.651921,
+        0.0,
+        0.0,
+        0.0,
+        3.651921,
+        0.0,
+        0.0,
+        0.0,
+        7.317025
+      ],
+      "enu_m": [
+        60.20822005258723,
+        17.966965813599366,
+        8.436
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_3-004.mcap",
+      "timestamp_ns": "1789454243472982490",
+      "elapsed_s": 139.269,
+      "latitude": 36.963158799999995,
+      "longitude": 126.5377405,
+      "altitude": 33.526,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.8779690000000001,
+        0.0,
+        0.0,
+        0.0,
+        0.8779690000000001,
+        0.0,
+        0.0,
+        0.0,
+        1.028196
+      ],
+      "enu_m": [
+        69.66328548543993,
+        22.56446078330221,
+        6.175000000000004
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_4-024.mcap",
+      "timestamp_ns": "1789454250595025452",
+      "elapsed_s": 146.391,
+      "latitude": 36.9631766,
+      "longitude": 126.5377877,
+      "altitude": 34.107,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        1.334025,
+        0.0,
+        0.0,
+        0.0,
+        1.334025,
+        0.0,
+        0.0,
+        0.0,
+        2.9309439999999998
+      ],
+      "enu_m": [
+        73.86158358902227,
+        24.54594771964012,
+        6.756
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_4-024.mcap",
+      "timestamp_ns": "1789454265476210949",
+      "elapsed_s": 161.272,
+      "latitude": 36.9632139,
+      "longitude": 126.53788619999999,
+      "altitude": 34.498,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        1.798281,
+        0.0,
+        0.0,
+        0.0,
+        1.798281,
+        0.0,
+        0.0,
+        0.0,
+        3.6366490000000002
+      ],
+      "enu_m": [
+        82.6228624702969,
+        28.698164726503112,
+        7.1469999999999985
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_4-024.mcap",
+      "timestamp_ns": "1789454280220359807",
+      "elapsed_s": 176.016,
+      "latitude": 36.963249999999995,
+      "longitude": 126.53799889999999,
+      "altitude": 33.204,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.181476,
+        0.0,
+        0.0,
+        0.0,
+        0.181476,
+        0.0,
+        0.0,
+        0.0,
+        0.405769
+      ],
+      "enu_m": [
+        92.64718866332159,
+        32.71679834364408,
+        5.8530000000000015
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_5-007.mcap",
+      "timestamp_ns": "1789454287477136457",
+      "elapsed_s": 183.273,
+      "latitude": 36.9632643,
+      "longitude": 126.53805109999999,
+      "altitude": 33.315,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.5625,
+        0.0,
+        0.0,
+        0.0,
+        0.5625,
+        0.0,
+        0.0,
+        0.0,
+        1.3688999999999998
+      ],
+      "enu_m": [
+        97.29022173566979,
+        34.30866706239826,
+        5.963999999999999
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_5-007.mcap",
+      "timestamp_ns": "1789454301595923673",
+      "elapsed_s": 197.392,
+      "latitude": 36.9633007,
+      "longitude": 126.53814849999999,
+      "altitude": 33.2,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        1.385329,
+        0.0,
+        0.0,
+        0.0,
+        1.385329,
+        0.0,
+        0.0,
+        0.0,
+        3.1648409999999996
+      ],
+      "enu_m": [
+        105.95365892459961,
+        38.36069652716747,
+        5.849000000000004
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_5-007.mcap",
+      "timestamp_ns": "1789454315719659369",
+      "elapsed_s": 211.516,
+      "latitude": 36.963329099999996,
+      "longitude": 126.538241,
+      "altitude": 34.269,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        1.532644,
+        0.0,
+        0.0,
+        0.0,
+        1.532644,
+        0.0,
+        0.0,
+        0.0,
+        3.4894240000000005
+      ],
+      "enu_m": [
+        114.18125584487198,
+        41.52217006546602,
+        6.917999999999999
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_6-006.mcap",
+      "timestamp_ns": "1789454322841907179",
+      "elapsed_s": 218.638,
+      "latitude": 36.963345499999996,
+      "longitude": 126.5382923,
+      "altitude": 34.045,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        3.013696,
+        0.0,
+        0.0,
+        0.0,
+        3.013696,
+        0.0,
+        0.0,
+        0.0,
+        5.721664
+      ],
+      "enu_m": [
+        118.74423662256426,
+        43.347809714454044,
+        6.694000000000003
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_6-006.mcap",
+      "timestamp_ns": "1789454337091230114",
+      "elapsed_s": 232.887,
+      "latitude": 36.9633811,
+      "longitude": 126.53839339999999,
+      "altitude": 33.993,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        5.326864,
+        0.0,
+        0.0,
+        0.0,
+        5.326864,
+        0.0,
+        0.0,
+        0.0,
+        9.193024
+      ],
+      "enu_m": [
+        127.73677768769822,
+        47.310783587129876,
+        6.642000000000003
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_6-006.mcap",
+      "timestamp_ns": "1789454351219153720",
+      "elapsed_s": 247.015,
+      "latitude": 36.9634092,
+      "longitude": 126.53849439999999,
+      "altitude": 33.357,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.285156,
+        0.0,
+        0.0,
+        0.0,
+        0.285156,
+        0.0,
+        0.0,
+        0.0,
+        0.540225
+      ],
+      "enu_m": [
+        136.72042405398776,
+        50.43886127859115,
+        6.006
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_7-027.mcap",
+      "timestamp_ns": "1789454358345569117",
+      "elapsed_s": 254.141,
+      "latitude": 36.9634217,
+      "longitude": 126.5385384,
+      "altitude": 33.031,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.597529,
+        0.0,
+        0.0,
+        0.0,
+        0.597529,
+        0.0,
+        0.0,
+        0.0,
+        1.3133159999999997
+      ],
+      "enu_m": [
+        140.63409177811616,
+        51.83035491315777,
+        5.68
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_7-027.mcap",
+      "timestamp_ns": "1789454372474060022",
+      "elapsed_s": 268.27,
+      "latitude": 36.963435499999996,
+      "longitude": 126.5386503,
+      "altitude": 32.158,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.29593600000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.29593600000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.5760810000000001
+      ],
+      "enu_m": [
+        150.58726037659335,
+        53.36656388586487,
+        4.807000000000002
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_7-027.mcap",
+      "timestamp_ns": "1789454386718932738",
+      "elapsed_s": 282.515,
+      "latitude": 36.963400899999996,
+      "longitude": 126.5387464,
+      "altitude": 31.956,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.675684,
+        0.0,
+        0.0,
+        0.0,
+        0.675684,
+        0.0,
+        0.0,
+        0.0,
+        0.8854809999999999
+      ],
+      "enu_m": [
+        159.13506647296148,
+        49.51490950449222,
+        4.605
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_8-021.mcap",
+      "timestamp_ns": "1789454393723075320",
+      "elapsed_s": 289.519,
+      "latitude": 36.963367,
+      "longitude": 126.53878309999999,
+      "altitude": 31.944,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.27878400000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.27878400000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.561001
+      ],
+      "enu_m": [
+        162.3994211422619,
+        45.74117876679453,
+        4.593
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_8-021.mcap",
+      "timestamp_ns": "1789454407971319116",
+      "elapsed_s": 303.767,
+      "latitude": 36.9632888,
+      "longitude": 126.53882739999999,
+      "altitude": 31.906000000000002,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.224676,
+        0.0,
+        0.0,
+        0.0,
+        0.224676,
+        0.0,
+        0.0,
+        0.0,
+        0.4529290000000001
+      ],
+      "enu_m": [
+        166.33977296418757,
+        37.03599458706637,
+        4.555000000000003
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_8-021.mcap",
+      "timestamp_ns": "1789454422099999043",
+      "elapsed_s": 317.896,
+      "latitude": 36.9632414,
+      "longitude": 126.5388583,
+      "altitude": 31.372,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.21622500000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.21622500000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.43560000000000004
+      ],
+      "enu_m": [
+        169.08823507143867,
+        31.759450723498855,
+        4.021000000000001
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_9-017.mcap",
+      "timestamp_ns": "1789454429222018830",
+      "elapsed_s": 325.018,
+      "latitude": 36.9632138,
+      "longitude": 126.53886759999999,
+      "altitude": 31.159,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.196249,
+        0.0,
+        0.0,
+        0.0,
+        0.196249,
+        0.0,
+        0.0,
+        0.0,
+        0.378225
+      ],
+      "enu_m": [
+        169.91544211200332,
+        28.687032777293695,
+        3.808
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_9-017.mcap",
+      "timestamp_ns": "1789454443345201352",
+      "elapsed_s": 339.141,
+      "latitude": 36.9631323,
+      "longitude": 126.5389082,
+      "altitude": 31.194,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.19448100000000001,
+        0.0,
+        0.0,
+        0.0,
+        0.19448100000000001,
+        0.0,
+        0.0,
+        0.0,
+        0.386884
+      ],
+      "enu_m": [
+        173.5266900577248,
+        19.614494277609655,
+        3.843
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_9-017.mcap",
+      "timestamp_ns": "1789454457599500949",
+      "elapsed_s": 353.395,
+      "latitude": 36.963053699999996,
+      "longitude": 126.5389491,
+      "altitude": 30.616,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.164836,
+        0.0,
+        0.0,
+        0.0,
+        0.164836,
+        0.0,
+        0.0,
+        0.0,
+        0.332929
+      ],
+      "enu_m": [
+        177.16462210124362,
+        10.864782301043823,
+        3.2650000000000006
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_10-028.mcap",
+      "timestamp_ns": "1789454464721856575",
+      "elapsed_s": 360.518,
+      "latitude": 36.963010499999996,
+      "longitude": 126.5389628,
+      "altitude": 30.541,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.173889,
+        0.0,
+        0.0,
+        0.0,
+        0.173889,
+        0.0,
+        0.0,
+        0.0,
+        0.31248100000000006
+      ],
+      "enu_m": [
+        178.38319591497952,
+        6.055780298734991,
+        3.1900000000000013
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_10-028.mcap",
+      "timestamp_ns": "1789454478844830936",
+      "elapsed_s": 374.641,
+      "latitude": 36.962931,
+      "longitude": 126.5389998,
+      "altitude": 30.174,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.21436900000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.21436900000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.356409
+      ],
+      "enu_m": [
+        181.67423468334124,
+        -2.7941192191336413,
+        2.8230000000000004
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_10-028.mcap",
+      "timestamp_ns": "1789454493097246990",
+      "elapsed_s": 388.893,
+      "latitude": 36.9628505,
+      "longitude": 126.5390437,
+      "altitude": 30.162,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.21529600000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.21529600000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.41602500000000003
+      ],
+      "enu_m": [
+        185.57900770736114,
+        -11.755338227514493,
+        2.811
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_11-014.mcap",
+      "timestamp_ns": "1789454500094473998",
+      "elapsed_s": 395.89,
+      "latitude": 36.962811599999995,
+      "longitude": 126.53906309999999,
+      "altitude": 30.232,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.20070400000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.20070400000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.33756099999999994
+      ],
+      "enu_m": [
+        187.304579385566,
+        -16.0856664201462,
+        2.8810000000000002
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_11-014.mcap",
+      "timestamp_ns": "1789454514345893143",
+      "elapsed_s": 410.142,
+      "latitude": 36.9627288,
+      "longitude": 126.5390936,
+      "altitude": 30.357,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.275625,
+        0.0,
+        0.0,
+        0.0,
+        0.275625,
+        0.0,
+        0.0,
+        0.0,
+        0.5959840000000001
+      ],
+      "enu_m": [
+        190.01746269491133,
+        -25.30292025717974,
+        3.0060000000000002
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_11-014.mcap",
+      "timestamp_ns": "1789454528474401478",
+      "elapsed_s": 424.27,
+      "latitude": 36.962648699999995,
+      "longitude": 126.5391339,
+      "altitude": 30.498,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.275625,
+        0.0,
+        0.0,
+        0.0,
+        0.275625,
+        0.0,
+        0.0,
+        0.0,
+        0.616225
+      ],
+      "enu_m": [
+        193.6020265415715,
+        -34.21961147030487,
+        3.147000000000002
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_12-015.mcap",
+      "timestamp_ns": "1789454535594698713",
+      "elapsed_s": 431.391,
+      "latitude": 36.9626089,
+      "longitude": 126.53915429999999,
+      "altitude": 30.395,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.28408900000000004,
+        0.0,
+        0.0,
+        0.0,
+        0.28408900000000004,
+        0.0,
+        0.0,
+        0.0,
+        0.6432040000000001
+      ],
+      "enu_m": [
+        195.4165452132767,
+        -38.650127203448406,
+        3.0440000000000005
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_12-015.mcap",
+      "timestamp_ns": "1789454549719484409",
+      "elapsed_s": 445.515,
+      "latitude": 36.9625299,
+      "longitude": 126.53919789999999,
+      "altitude": 30.277,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.265225,
+        0.0,
+        0.0,
+        0.0,
+        0.265225,
+        0.0,
+        0.0,
+        0.0,
+        0.6068410000000001
+      ],
+      "enu_m": [
+        199.2946341394993,
+        -47.44436697606093,
+        2.926000000000002
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_12-015.mcap",
+      "timestamp_ns": "1789454563970762944",
+      "elapsed_s": 459.767,
+      "latitude": 36.9624485,
+      "longitude": 126.53923209999999,
+      "altitude": 30.325,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.374544,
+        0.0,
+        0.0,
+        0.0,
+        0.374544,
+        0.0,
+        0.0,
+        0.0,
+        0.710649
+      ],
+      "enu_m": [
+        202.33662132504878,
+        -56.505773526535556,
+        2.974
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_13-026.mcap",
+      "timestamp_ns": "1789454571097428067",
+      "elapsed_s": 466.893,
+      "latitude": 36.9624087,
+      "longitude": 126.5392481,
+      "altitude": 30.762,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.3721,
+        0.0,
+        0.0,
+        0.0,
+        0.3721,
+        0.0,
+        0.0,
+        0.0,
+        0.7361639999999999
+      ],
+      "enu_m": [
+        203.75977322484673,
+        -60.93628926047007,
+        3.4110000000000014
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_13-026.mcap",
+      "timestamp_ns": "1789454585219661100",
+      "elapsed_s": 481.016,
+      "latitude": 36.9623311,
+      "longitude": 126.53928699999999,
+      "altitude": 30.668,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.413449,
+        0.0,
+        0.0,
+        0.0,
+        0.413449,
+        0.0,
+        0.0,
+        0.0,
+        0.976144
+      ],
+      "enu_m": [
+        207.2198112801008,
+        -69.5746817457327,
+        3.317
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_13-026.mcap",
+      "timestamp_ns": "1789454599344275543",
+      "elapsed_s": 495.14,
+      "latitude": 36.96225,
+      "longitude": 126.5393216,
+      "altitude": 30.736,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.28944400000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.28944400000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.8335690000000001
+      ],
+      "enu_m": [
+        210.29737726355606,
+        -78.60269244937005,
+        3.3850000000000016
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_14-011.mcap",
+      "timestamp_ns": "1789454606477389450",
+      "elapsed_s": 502.273,
+      "latitude": 36.962207899999996,
+      "longitude": 126.5393333,
+      "altitude": 30.698,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.21436900000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.21436900000000003,
+        0.0,
+        0.0,
+        0.0,
+        0.47886399999999996
+      ],
+      "enu_m": [
+        211.33805709029124,
+        -83.28924301195725,
+        3.3470000000000013
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_14-011.mcap",
+      "timestamp_ns": "1789454620719473002",
+      "elapsed_s": 516.515,
+      "latitude": 36.9621213,
+      "longitude": 126.53934179999999,
+      "altitude": 30.538,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.190969,
+        0.0,
+        0.0,
+        0.0,
+        0.190969,
+        0.0,
+        0.0,
+        0.0,
+        0.400689
+      ],
+      "enu_m": [
+        212.0941065363084,
+        -92.92951091420278,
+        3.187000000000001
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_14-011.mcap",
+      "timestamp_ns": "1789454634970919873",
+      "elapsed_s": 530.767,
+      "latitude": 36.9620362,
+      "longitude": 126.5393398,
+      "altitude": 30.394000000000002,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.21344400000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.21344400000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.407044
+      ],
+      "enu_m": [
+        211.91621254930763,
+        -102.40279958067998,
+        3.043000000000003
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_15-023.mcap",
+      "timestamp_ns": "1789454642093716435",
+      "elapsed_s": 537.89,
+      "latitude": 36.9619936,
+      "longitude": 126.5393304,
+      "altitude": 30.491,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.210681,
+        0.0,
+        0.0,
+        0.0,
+        0.210681,
+        0.0,
+        0.0,
+        0.0,
+        0.398161
+      ],
+      "enu_m": [
+        211.08011080863454,
+        -107.14500988852329,
+        3.1400000000000006
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_15-023.mcap",
+      "timestamp_ns": "1789454656219734367",
+      "elapsed_s": 552.016,
+      "latitude": 36.961927599999996,
+      "longitude": 126.5393326,
+      "altitude": 30.689,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.21715600000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.21715600000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.408321
+      ],
+      "enu_m": [
+        211.2757941945882,
+        -114.49209628131307,
+        3.338000000000001
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_15-023.mcap",
+      "timestamp_ns": "1789454670342696420",
+      "elapsed_s": 566.139,
+      "latitude": 36.9618476,
+      "longitude": 126.53936979999999,
+      "altitude": 31.153000000000002,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        1.435204,
+        0.0,
+        0.0,
+        0.0,
+        1.435204,
+        0.0,
+        0.0,
+        0.0,
+        2.6438759999999997
+      ],
+      "enu_m": [
+        214.58462236063878,
+        -123.39765554443781,
+        3.802000000000003
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_16-013.mcap",
+      "timestamp_ns": "1789454677467880459",
+      "elapsed_s": 573.264,
+      "latitude": 36.9618059,
+      "longitude": 126.5393866,
+      "altitude": 31.526,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.6320250000000001,
+        0.0,
+        0.0,
+        0.0,
+        0.6320250000000001,
+        0.0,
+        0.0,
+        0.0,
+        1.2365440000000003
+      ],
+      "enu_m": [
+        216.07893185624823,
+        -128.03967831018733,
+        4.175000000000001
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_16-013.mcap",
+      "timestamp_ns": "1789454691592185713",
+      "elapsed_s": 587.388,
+      "latitude": 36.961724499999995,
+      "longitude": 126.5394189,
+      "altitude": 31.407,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        2.2470010000000005,
+        0.0,
+        0.0,
+        0.0,
+        2.2470010000000005,
+        0.0,
+        0.0,
+        0.0,
+        4.4901610000000005
+      ],
+      "enu_m": [
+        218.95191975364148,
+        -137.10108486145293,
+        4.056000000000001
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_16-013.mcap",
+      "timestamp_ns": "1789454705715776278",
+      "elapsed_s": 601.512,
+      "latitude": 36.9616457,
+      "longitude": 126.5394599,
+      "altitude": 32.995,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        5.489649,
+        0.0,
+        0.0,
+        0.0,
+        5.489649,
+        0.0,
+        0.0,
+        0.0,
+        11.868025
+      ],
+      "enu_m": [
+        222.59874649600468,
+        -145.87306073564662,
+        5.643999999999998
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_17-018.mcap",
+      "timestamp_ns": "1789454712841978729",
+      "elapsed_s": 608.638,
+      "latitude": 36.9616105,
+      "longitude": 126.5394917,
+      "altitude": 33.624,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        6.880129000000001,
+        0.0,
+        0.0,
+        0.0,
+        6.880129000000001,
+        0.0,
+        0.0,
+        0.0,
+        15.186608999999999
+      ],
+      "enu_m": [
+        225.42726089664768,
+        -149.7915068114848,
+        6.273000000000003
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_17-018.mcap",
+      "timestamp_ns": "1789454727092310392",
+      "elapsed_s": 622.888,
+      "latitude": 36.9615316,
+      "longitude": 126.5395315,
+      "altitude": 34.396,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.717409,
+        0.0,
+        0.0,
+        0.0,
+        0.717409,
+        0.0,
+        0.0,
+        0.0,
+        1.5006250000000003
+      ],
+      "enu_m": [
+        228.9673512465577,
+        -158.5746146348879,
+        7.045000000000002
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_17-018.mcap",
+      "timestamp_ns": "1789454741217302520",
+      "elapsed_s": 637.013,
+      "latitude": 36.9614498,
+      "longitude": 126.53956409999999,
+      "altitude": 34.534,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.580644,
+        0.0,
+        0.0,
+        0.0,
+        0.580644,
+        0.0,
+        0.0,
+        0.0,
+        1.481089
+      ],
+      "enu_m": [
+        231.86702324174823,
+        -167.68054898220018,
+        7.183
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_18-016.mcap",
+      "timestamp_ns": "1789454748341299377",
+      "elapsed_s": 644.137,
+      "latitude": 36.9614061,
+      "longitude": 126.53955239999999,
+      "altitude": 34.546,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.4760999999999999,
+        0.0,
+        0.0,
+        0.0,
+        0.4760999999999999,
+        0.0,
+        0.0,
+        0.0,
+        1.1342249999999998
+      ],
+      "enu_m": [
+        230.82634341501307,
+        -172.54521072976513,
+        7.195
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_18-016.mcap",
+      "timestamp_ns": "1789454762473578907",
+      "elapsed_s": 658.269,
+      "latitude": 36.9613249,
+      "longitude": 126.53952989999999,
+      "altitude": 34.525,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.29702500000000004,
+        0.0,
+        0.0,
+        0.0,
+        0.29702500000000004,
+        0.0,
+        0.0,
+        0.0,
+        0.617796
+      ],
+      "enu_m": [
+        228.82503605619866,
+        -181.58435338182093,
+        7.1739999999999995
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_18-016.mcap",
+      "timestamp_ns": "1789454776720996295",
+      "elapsed_s": 672.517,
+      "latitude": 36.9612499,
+      "longitude": 126.5394731,
+      "altitude": 34.549,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.266256,
+        0.0,
+        0.0,
+        0.0,
+        0.266256,
+        0.0,
+        0.0,
+        0.0,
+        0.49843599999999993
+      ],
+      "enu_m": [
+        223.77284681299037,
+        -189.9333151915936,
+        7.198
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_19-012.mcap",
+      "timestamp_ns": "1789454783844720817",
+      "elapsed_s": 679.641,
+      "latitude": 36.9612279,
+      "longitude": 126.5394271,
+      "altitude": 34.303,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.3283289999999999,
+        0.0,
+        0.0,
+        0.0,
+        0.3283289999999999,
+        0.0,
+        0.0,
+        0.0,
+        0.586756
+      ],
+      "enu_m": [
+        219.6812851018613,
+        -192.38234398919022,
+        6.951999999999998
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_19-012.mcap",
+      "timestamp_ns": "1789454797970248533",
+      "elapsed_s": 693.766,
+      "latitude": 36.961193699999995,
+      "longitude": 126.53932669999999,
+      "altitude": 33.847,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.31584400000000007,
+        0.0,
+        0.0,
+        0.0,
+        0.31584400000000007,
+        0.0,
+        0.0,
+        0.0,
+        0.583696
+      ],
+      "enu_m": [
+        210.7510069311664,
+        -196.18947057451615,
+        6.496000000000002
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_19-012.mcap",
+      "timestamp_ns": "1789454812219888596",
+      "elapsed_s": 708.016,
+      "latitude": 36.9611296,
+      "longitude": 126.5392521,
+      "altitude": 33.646,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.245025,
+        0.0,
+        0.0,
+        0.0,
+        0.245025,
+        0.0,
+        0.0,
+        0.0,
+        0.43560000000000004
+      ],
+      "enu_m": [
+        204.1155612001122,
+        -203.32504993390896,
+        6.295000000000002
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_20-005.mcap",
+      "timestamp_ns": "1789454819221526422",
+      "elapsed_s": 715.017,
+      "latitude": 36.9610883,
+      "longitude": 126.53923209999999,
+      "altitude": 33.452,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.228484,
+        0.0,
+        0.0,
+        0.0,
+        0.228484,
+        0.0,
+        0.0,
+        0.0,
+        0.48441599999999996
+      ],
+      "enu_m": [
+        202.33662132504878,
+        -207.9225449036118,
+        6.100999999999999
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_20-005.mcap",
+      "timestamp_ns": "1789454833473764623",
+      "elapsed_s": 729.27,
+      "latitude": 36.961000899999995,
+      "longitude": 126.539233,
+      "altitude": 33.893,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.32604099999999997,
+        0.0,
+        0.0,
+        0.0,
+        0.32604099999999997,
+        0.0,
+        0.0,
+        0.0,
+        0.6448090000000001
+      ],
+      "enu_m": [
+        202.41667361970474,
+        -217.65186839953265,
+        6.542000000000002
+      ]
+    },
+    {
+      "file": "a2_record_default_20260915_153503_20-005.mcap",
+      "timestamp_ns": "1789454847719951719",
+      "elapsed_s": 743.516,
+      "latitude": 36.9609181,
+      "longitude": 126.53927119999999,
+      "altitude": 33.434,
+      "status": 0,
+      "service": 15,
+      "covariance_type": 2,
+      "covariance": [
+        0.228484,
+        0.0,
+        0.0,
+        0.0,
+        0.228484,
+        0.0,
+        0.0,
+        0.0,
+        0.5112249999999999
+      ],
+      "enu_m": [
+        205.81444877925574,
+        -226.86912223656623,
+        6.082999999999998
+      ]
+    }
+  ],
+  "gps_origin": {
+    "latitude": 36.9629561,
+    "longitude": 126.5369573,
+    "altitude": 27.351
+  },
+  "registration": "none",
+  "sampling": "3 camera/GPS samples and 1 raw LiDAR scan per supplied file",
+  "coverage_s": 998.428093174,
+  "timeline_span_s": 1423.731361493,
+  "limitations": [
+    "Only supplied split files; temporal gaps remain.",
+    "GPS is not aligned to the site plan.",
+    "Raw point clouds are independent sensor frames."
+  ]
+}

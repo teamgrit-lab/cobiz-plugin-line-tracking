@@ -1,0 +1,11 @@
+{
+  "schema": "dangjin.navigation.v1",
+  "frame": "site_xy",
+  "registered_to_gps": false,
+  "resolution_m": 0.25,
+  "robot_radius_m": 0.65,
+  "occupancy": "unbuffered solid footprints + no-go + outside roads",
+  "robot-clearance": "already inflated for radius; do not inflate a second time",
+  "limitations": "planar approximate layout; conservative solid barn footprints; no ground elevation/contact physics",
+  "source": "../world.json"
+}

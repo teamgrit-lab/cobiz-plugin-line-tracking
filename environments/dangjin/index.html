@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="도면과 현장 MCAP 기록을 참고한 당진 우사 3D 환경">
+  <title>당진 우사 · Field Atlas</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="importmap">{"imports":{"three":"./vendor/three.module.js","three/addons/controls/OrbitControls.js":"./vendor/OrbitControls.js"}}</script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="당진 우사 처음으로"><span class="brand-mark">F<span>↗</span></span><span>FIELD ATLAS<small>DANGJIN · SITE STUDY</small></span></a>
+    <div class="project-title">당진 우사 <span>/</span> 주변 환경</div>
+    <div class="header-actions"><span class="status"><i></i> 도면 기반 재구성</span><button id="gps-button" class="quiet">GPS 기록 ↗</button><button id="source-button" class="quiet">자료와 정확도 ↗</button></div>
+  </header>
+  <main>
+    <aside class="sidebar">
+      <div class="section-label">01 / EXPLORE</div>
+      <h1>현장을<br>둘러보세요.</h1>
+      <p class="intro">다섯 개의 축사, 이어지는 통로,<br>그리고 우사 바깥의 풍경.</p>
+      <div class="overview-meta"><span><strong>5</strong> 축사</span><span><strong>134.3<span> m</span></strong> 동별 길이</span></div>
+      <button id="overview" class="location-button active"><span class="location-icon">◎</span><span>전체 부지<small>진입로부터 외곽도로까지</small></span><span class="arrow">↗</span></button>
+      <div class="section-label places-label">시설로 이동</div>
+      <nav id="locations" aria-label="시설 선택"></nav>
+      <button id="entrance" class="location-button"><span class="location-icon">↳</span><span>진입로<small>관리동 방향</small></span><span class="arrow">↗</span></button>
+      <button id="rear-road" class="location-button"><span class="location-icon">↝</span><span>4동 뒤편 외곽길<small>퇴비사 바깥 연결로</small></span><span class="arrow">↗</span></button>
+      <div id="sim-controls" hidden>
+        <div class="section-label places-label">ROBOT / CONNECTOME</div>
+        <label for="sim-scenario">출발 구간</label><select id="sim-scenario"><option value="patrol">우사 전체 한 바퀴</option><option value="bend">퇴비사 옆 굽은 길</option><option value="east">4동 동쪽 외곽도로</option><option value="west">1·2동 외곽도로</option><option value="blocked">중앙도로 접근 · 금지 시험</option></select>
+        <label for="sim-rate">재생 속도</label><select id="sim-rate"><option value="1">1배속</option><option value="5" selected>최대 5배속</option><option value="20">가능한 빠르게</option></select>
+        <div class="sim-actions"><button id="sim-start" class="primary">▶ 추종 시작</button><button id="sim-reset">↺ 새 시험</button></div>
+        <fieldset class="fault-controls"><legend>검출 누락 실험</legend>
+          <label class="sim-check"><input type="checkbox" id="sim-fault-enabled" checked>랜덤 구멍 · 순간 전체 누락</label>
+          <label for="sim-fault-profile">누락 강도</label><select id="sim-fault-profile"><option value="mild">약하게</option><option value="normal" selected>보통</option><option value="severe">강하게</option></select>
+          <details><summary>패턴 재현 · 시드</summary><label for="sim-fault-seed">시험 시드</label><div class="fault-seed-row"><input id="sim-fault-seed" type="number" min="0" max="4294967295" step="1" aria-label="시험 시드"><button id="sim-fault-replay" type="button">재현</button></div></details>
+          <p>새 시험마다 새 패턴 · 일시 정지는 유지<br>정지·재출발도 학습된 모델이 판단</p>
+        </fieldset>
+        <label class="sim-check"><input type="checkbox" id="sim-follow" checked>로봇 따라가기</label>
+        <label class="sim-check"><input type="checkbox" id="sim-obstacle">마주 오는 승용차 · 0.35 m/s</label>
+        <button id="sim-nudge" class="sim-secondary">옆으로 0.6 m 이동</button><button id="sim-export" class="sim-secondary">주행 기록 저장 ↓</button>
+        <p class="sim-note">최대 0.8 m/s · 곡선 구간 감속<br>커넥톰 차도 인식 → 학습된 속도·조향<br>영상만 입력 · 지도 목표점 없음<br>다리·접촉 물리는 모사하지 않습니다.</p>
+      <details class="sim-note"><summary>커넥톰 제어 흐름</summary><p id="sim-control-flow">360° 영상 → Flyvis 시각 회로 → 차도 검출 → 랜덤 누락 → 학습된 행동 출력층 → 속도·회전 → 로봇</p><p>지도·목표점은 행동 모델에 전달되지 않습니다. 지도는 완주·이탈 평가에만 사용합니다.</p></details><details class="sim-note"><summary>인식 모델 개발</summary><button id="sim-collect" class="sim-secondary">학습 표본 수집</button><button id="sim-policy-collect" class="sim-secondary">주행 정책 학습 영상 수집</button></details></div>
+      <div class="sidebar-bottom"><span class="tiny-dot"></span><span>1 unit = 1 metre<br><small>높이·지형·부속 시설은 추정 포함</small></span></div>
+    </aside>
+    <section class="viewport" id="viewport" aria-label="3D 환경 탐색">
+      <div id="scene" tabindex="0" aria-label="3D 부지. 드래그로 회전, 휠로 확대, 우클릭으로 이동."></div>
+      <div id="labels" aria-hidden="true"></div>
+      <div id="loading" role="status">현장 환경을 불러오고 있습니다…</div>
+      <div class="viewport-top">
+        <div class="view-switch" role="group" aria-label="보기 선택"><button id="model-mode" aria-pressed="true">3D 환경</button><button id="cloud-mode" aria-pressed="false">LiDAR 스캔</button><button id="robot-mode" aria-pressed="false">로봇 실험</button></div>
+        <div class="view-tools"><button id="facility-layout-view">3동 뒤편 보기</button><button id="top-view" aria-label="위에서 보기">평면 보기</button><button id="fullscreen" aria-label="전체 화면">⛶</button></div>
+      </div>
+      <div class="scene-caption" id="scene-caption"><span class="eyebrow">SITE OVERVIEW</span><strong>당진 축산 단지</strong><span>도면의 평면 배치 + 영상 참고 외관</span></div>
+      <select id="facility-select" aria-label="이동할 시설"><option value="overview">전체 부지</option><option value="rear-road">4동 뒤편 외곽길</option></select>
+      <div class="compass" aria-label="좌표축은 도면 기준이며 진북이 아닙니다"><span>+Y</span><span class="compass-arrow">↑</span><small>도면 좌표</small></div>
+      <div id="cloud-panel" class="cloud-panel" hidden>
+        <label for="cloud-select">실측 LiDAR · 독립 스캔</label><select id="cloud-select"></select>
+        <p id="cloud-info"></p><small>센서 좌표계 · 모델 미정합 · 카메라와 비동기</small>
+      </div>
+      <div class="selection-card" id="selection" hidden><button id="close-selection" class="close" aria-label="시설 설명 닫기">×</button><span class="eyebrow">SELECTED FACILITY</span><h2 id="selection-title"></h2><p id="selection-info"></p><button id="visit" class="primary">입구에서 둘러보기 ↗</button></div>
+      <div class="photo-card" id="photo-card">
+        <button id="open-evidence" class="photo-link" aria-label="현장 기록 32개 장면 보기"><img id="preview-photo" src="./evidence/camera-00-01.jpg" alt="MCAP에서 추출한 축사 주변 실제 촬영 장면"><span class="photo-badge">현장 기록 <span>↗</span></span></button>
+        <div class="photo-caption"><span><span id="recording-caption">2026.10.21</span> <b>MCAP</b></span><button id="evidence-button"><span id="evidence-count">32개 장면 보기 →</span></button></div>
+      </div>
+      <section id="robot-panel" hidden aria-label="로봇 카메라와 추종 상태">
+        <div class="robot-panel-head"><div><strong id="sim-status" role="status">주행 준비</strong><small id="sim-detail"></small></div><span id="sim-backend">Flyvis 연결 확인 중</span><button id="sim-panel-toggle" class="quiet" aria-expanded="true" aria-controls="robot-panel-body">로봇 화면 접기 ▾</button></div>
+        <div id="robot-panel-body">
+        <div class="fault-readout"><span id="sim-fault-live" role="status">검출 누락 시험 준비</span><span id="sim-fault-counts">전체 누락 0회 · 재검출 대기 0.0 s</span></div>
+        <div class="sensor-grid">
+          <figure><canvas id="sim-panorama" width="768" height="384" aria-label="로봇 위 360도 카메라 파노라마"></canvas><figcaption>360° 카메라 · 높이 1.6 m</figcaption></figure>
+          <figure><canvas id="sim-forward" width="480" height="270" aria-label="전방 가상 카메라와 추종 경로"></canvas><figcaption>전방 영상 + 모델 명령의 예상 궤적</figcaption></figure>
+          <figure><canvas id="sim-mask" width="768" height="384" aria-label="커넥톰이 360도 영상에서 추정한 차도 영역"></canvas><figcaption>360° 차도 검출 · 초록: 통행 추정 / 회색: 미관측</figcaption></figure>
+        </div>
+        <div class="patrol-progress"><span>순환 진행</span><strong id="sim-progress">0%</strong></div><div class="sim-metrics"><span>이동 <b id="sim-distance">0 m</b></span><span>속도 <b id="sim-speed">0 m/s</b></span><span>중앙 오차 RMS <b id="sim-error">0 m</b></span><span>추론 <b id="sim-frames">0</b></span><span>가상 시간 <b id="sim-time">0 s</b></span></div>
+        </div>
+      </section>
+      <div class="bottom-bar">
+        <div class="display-options"><label><input type="checkbox" id="roof-toggle" checked><span>지붕</span></label><label><input type="checkbox" id="label-toggle" checked><span>시설명</span></label><label><input type="checkbox" id="green-toggle" checked><span>주변 수목</span></label></div>
+        <div class="mode-actions"><button id="tour">▷ 부지 투어</button><button id="walk" class="primary">보행 시점 ↗</button></div>
+      </div>
+      <div class="help" id="help">드래그 회전 <span>·</span> 스크롤 확대 <span>·</span> 우클릭 이동</div>
+      <div class="scale"><span></span>50 m <small>도면 기준</small></div>
+      <div id="walk-pad" hidden aria-label="보행 이동"><button data-move="forward" aria-label="전진">↑</button><div><button data-move="left" aria-label="왼쪽 이동">←</button><button data-move="back" aria-label="후진">↓</button><button data-move="right" aria-label="오른쪽 이동">→</button></div></div>
+    </section>
+  </main>
+  <dialog id="evidence-dialog">
+    <div class="dialog-head"><div><span class="eyebrow">02 / FIELD RECORDINGS</span><h2>기록에서 현장으로</h2></div><button class="close" data-close aria-label="기록 창 닫기">×</button></div>
+    <label class="recording-label">기록 선택 <select id="recording-select"><option value="september">2026.09.15 · 26개 파일 · 78장</option><option value="october">2026.10.21 · 8개 파일 · 32장</option></select></label>
+    <div class="evidence-layout"><div class="main-photo"><img id="evidence-photo" alt="선택한 MCAP 카메라 프레임"><div class="frame-controls"><button id="previous-frame" aria-label="이전 장면">←</button><span id="frame-time"></span><button id="next-frame" aria-label="다음 장면">→</button></div><input id="frame-slider" type="range" min="0" max="31" value="0" aria-label="카메라 장면 선택"><p id="frame-source"></p></div><div class="evidence-description"><h3 id="evidence-heading">기록 장면</h3><p id="evidence-description"></p><div class="evidence-stats" id="evidence-stats"></div><p class="subtle">촬영 위치는 지도에 정합되지 않았습니다. 장면을 선택해도 3D 모델의 위치를 추정해 이동하지 않습니다.</p></div></div>
+    <div id="thumbnails" class="thumbnails" aria-label="기록 장면 목록"></div>
+  </dialog>
+  <dialog id="source-dialog">
+    <div class="dialog-head"><div><span class="eyebrow">03 / SOURCES & ASSUMPTIONS</span><h2>어디까지 실제와 같을까요?</h2></div><button class="close" data-close aria-label="자료 창 닫기">×</button></div>
+    <p class="source-intro">이 환경은 도면 배치에 현장 영상의 외관을 더한 근사 모델입니다. LiDAR로 복원한 전역 지도나 측량 모델은 아닙니다.</p>
+    <div id="source-notes"></div>
+    <div id="feature-references"></div>
+    <div class="reference-links"><a href="./references/site-plan.png" target="_blank" rel="noopener"><img src="./references/site-plan.png" alt="제공된 현장 평면 배치도"><span>평면 배치도 ↗</span></a><a href="./references/survey.jpg" target="_blank" rel="noopener"><img src="./references/survey.jpg" alt="제공된 우사 외부 도면 사진"><span>우사 외부 도면 ↗</span></a></div>
+  </dialog>
+  <dialog id="gps-dialog"><div class="dialog-head"><div><span class="eyebrow">MEASURED / NOT REGISTERED</span><h2>9월 GPS 기록</h2></div><button class="close" data-close aria-label="GPS 창 닫기">×</button></div><p id="gps-summary"></p><canvas id="gps-canvas" width="800" height="600" aria-label="첫 유효 GPS 지점 기준 동북 방향 미터 좌표의 표본 궤적"></canvas><p class="source-intro">첫 유효 위치 기준 로컬 ENU 좌표입니다. 제공되지 않은 시간 구간은 연결하지 않습니다. 도면 좌표의 건물 배치나 지형 고도와 정합한 결과가 아닙니다.</p></dialog>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

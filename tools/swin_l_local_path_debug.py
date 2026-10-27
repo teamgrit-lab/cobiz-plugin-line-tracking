@@ -71,6 +71,7 @@ from cobiz_line_tracking_task import (
     ActiveTask,
     LineTrackingTasks,
     TaskPolicy,
+    requested_selected_mask,
 )
 from connectome_client import ConnectomeClient, ConnectomePathTracker, reference_stop_reason
 from connectome_surface import PlannerConfig
@@ -121,6 +122,14 @@ from unitree_sport_api import (
     populate_move_request,
     populate_stop_move_request,
 )
+
+
+def _segmenter_from_args(args):
+    if getattr(args, 'front_connectome_url', ''):
+        from front_connectome_client import FrontConnectomeSegmenter
+        return FrontConnectomeSegmenter(args.front_connectome_url,
+            args.front_connectome_sha256, args.front_connectome_timeout_sec)
+    return BestSoFarSegmenter(_runtime_config(args))
 
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
 # Published by apriltag_camera_relay, paired with each detector frame.
@@ -682,7 +691,7 @@ def run_mcap(args):
         raise FileNotFoundError(f"MCAP input does not exist: {path}")
     with_path = args.overlay_mode == "local-path"
     local_config = _local_path_config_from_args(args) if with_path else None
-    segmenter = BestSoFarSegmenter(_runtime_config(args))
+    segmenter = _segmenter_from_args(args)
     planner = _surface_planner_from_args(args, local_config) if with_path else None
     smoother = _path_smoother(args.path_mask_class, args, local_config) if with_path else None
     sensors = LidarRuntime(args, _lidar_config_from_args(args), _avoidance_config_from_args(args),
@@ -727,8 +736,9 @@ def run_mcap(args):
                 overlay = segmenter.render_overlay(frame, result.selected_mask, frame_index=count, fps=args.output_fps)
             else:
                 if args.unrestricted_path_mode or now >= next_inference:
+                    extra = {'source_stamp': now} if getattr(args, 'front_connectome_url', '') else {}
                     result = segmenter.segment(frame, detect_road_hazards=planner is not None,
-                                               path_mask_class=args.path_mask_class)
+                                               path_mask_class=args.path_mask_class, **extra)
                     previous_mask = result.selected_mask
                     if planner:
                         estimates = planner.plan(frame, previous_mask, result.road_hazard_mask,
@@ -851,23 +861,24 @@ def _path_message(path: SmoothedPath | None, header: Any, frame_id: str, *, stam
 def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
     """Reject task-driven control unless its model and calibration are explicit."""
 
-    if args.profile not in (SWIN_L_ASPECT_FP16_PROFILE, *R50_PROFILES):
+    front_model = bool(getattr(args, 'front_connectome_url', ''))
+    if not front_model and args.profile not in (SWIN_L_ASPECT_FP16_PROFILE, *R50_PROFILES):
         raise ValueError(
             "task-drive mode requires a pinned FP16 deployment profile: "
             f"{SWIN_L_ASPECT_FP16_PROFILE}, {R50_PROFILE}, or {FINETUNED_PROFILE}"
         )
-    pinned = resolve_profile(args.profile)
-    if args.profile == FINETUNED_PROFILE:
+    pinned = resolve_profile(args.profile) if not front_model else None
+    if not front_model and args.profile == FINETUNED_PROFILE:
         if args.model_revision is not None:
             raise ValueError("local R50 task-drive cannot override model_revision")
-    elif args.model_id not in (None, pinned.model_id) or args.model_revision not in (
+    elif not front_model and (args.model_id not in (None, pinned.model_id) or args.model_revision not in (
         None,
         pinned.model_revision,
-    ):
+    )):
         raise ValueError("task-drive mode cannot override the pinned checkpoint")
-    if args.profile in R50_PROFILES and args.backend != "pytorch":
+    if not front_model and args.profile in R50_PROFILES and args.backend != "pytorch":
         raise ValueError("R50 task-drive mode requires the pytorch backend")
-    if tuple(args.evaluation_size) != DEFAULT_EVALUATION_SIZE:
+    if not front_model and tuple(args.evaluation_size) != DEFAULT_EVALUATION_SIZE:
         raise ValueError("task-drive mode requires a 360x640 score map")
     if args.path_frame_id != "base_link":
         raise ValueError("task-drive mode requires a calibrated base_link path")
@@ -878,7 +889,7 @@ def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
             "task-drive mode prohibits automatic inference-backend fallback"
         )
     _drive_config_from_args(args)
-    if args.profile == FINETUNED_PROFILE:
+    if args.profile == FINETUNED_PROFILE and not front_model:
         validate_checkpoint(
             args.model_id or pinned.model_id,
             args.checkpoint_manifest_sha256,
@@ -941,7 +952,7 @@ def run_ros2(args: argparse.Namespace) -> int:
     segmenter = (PerceptionProcess(_runtime_config(args), {
         'url': planner.client.url, 'local_config': local_config,
         'planner_config': planner.client.config, 'timeout': planner.client.timeout})
-        if args.inference_process else BestSoFarSegmenter(_runtime_config(args)))
+        if args.inference_process else _segmenter_from_args(args))
     if task_mode and segmenter.device.type != "cuda":
         if args.inference_process: segmenter.close()
         raise RuntimeError("task-drive mode requires a CUDA model device")
@@ -975,6 +986,8 @@ def run_ros2(args: argparse.Namespace) -> int:
         "planner_status": _waiting_planner_status(args, args.path_mask_class),
         "motion_epoch": None,
         "pipeline_timing": {},
+        "front_command": None,
+        "front_metrics": {},
     }
     worker_error: list[BaseException] = []
 
@@ -1449,6 +1462,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             # to the worker, which alone owns the segmenter during forward().
             with state_lock:
                 latest.set_enabled(enabled)
+                state['front_command'] = None
+                state['front_metrics'] = {}
                 # Replace path histories instead of locking an old smoother:
                 # SIGTERM may have interrupted its current() call on this thread.
                 for mask_class in smoothers:
@@ -1559,6 +1574,19 @@ def run_ros2(args: argparse.Namespace) -> int:
             inference_age_sec = _effective_source_age_sec(
                 last_inference_at, last_inference_stamp_ns, now, clock_now_ns
             )
+            if getattr(args, 'front_connectome_url', ''):
+                from front_connectome_client import front_drive_decision, limit_front_command
+                with state_lock:
+                    learned = state['front_command']
+                decision = front_drive_decision(learned, mask_class,
+                    (camera_age_sec, inference_age_sec), args.connectome_max_age_sec, camera_fault_reason)
+                decision = limit_front_command(decision, self.drive_config.max_forward_mps,
+                                               self.drive_config.max_yaw_rps)
+                # The learned policy owns Road speed/yaw. Existing physical
+                # obstacle and task lifecycle guards still apply downstream.
+                if self.obstacles is not None:
+                    decision = self.obstacles.apply(decision, path, mask_class, now, clock_now_ns)
+                return path, decision
             connectome_path = uses_connectome(mask_class, planner is not None, planner_status)
             if connectome_path:
                 # This gate also overrides optional legacy path-loss recovery:
@@ -1643,6 +1671,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.on_shared_task_event(event, now)
                 return
             rejection_reason = None
+            if getattr(args, 'front_connectome_url', ''):
+                try:
+                    if requested_selected_mask(event, args.path_mask_class) != 1:
+                        rejection_reason = 'front_connectome_requires_road'
+                except ValueError:
+                    rejection_reason = 'invalid_selected_mask'
             if self.command_publisher is not None and self.tasks.active is None:
                 rejection_reason = "control_release_pending"
             previous_task = self.tasks.active
@@ -1722,6 +1756,21 @@ def run_ros2(args: argparse.Namespace) -> int:
                 reason = reason or _waypoint_stop_reason(guidance)
                 if reason:
                     decision = DriveDecision.stop(reason)
+            if getattr(args, 'front_connectome_url', '') and (decision.vx or decision.vy or decision.yaw_rate):
+                from front_connectome_client import front_drive_decision, limit_front_command
+                now = time.monotonic(); clock_ns = self.get_clock().now().nanoseconds
+                with state_lock:
+                    active = self.tasks.active if self.tasks is not None else None
+                    mask_class = active_path_mask_class(active, args.path_mask_class)
+                    ages = [_effective_source_age_sec(state[received], state[stamp], now, clock_ns)
+                        for received, stamp in [('last_image_at', 'last_image_stamp_ns'),
+                                                ('last_inference_at', 'last_inference_stamp_ns')]]
+                    guard = front_drive_decision(state['front_command'], mask_class, ages,
+                        args.connectome_max_age_sec, state['camera_fault_reason'])
+                if guard.reason != 'tracking':
+                    decision = guard
+                decision = limit_front_command(decision, self.drive_config.max_forward_mps,
+                                               self.drive_config.max_yaw_rps)
             if planner and (decision.vx or decision.vy or decision.yaw_rate):
                 now = time.monotonic()
                 clock_ns = self.get_clock().now().nanoseconds
@@ -2033,6 +2082,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "control_hz": args.avoidance_control_hz,
                     **(self.obstacles.metrics if self.obstacles else {})},
                 "profile": args.profile,
+                "front_connectome": (dict(state['front_metrics'], command=state['front_command'])
+                    if getattr(args, 'front_connectome_url', '') else None),
                 "camera_topic": args.image_topic,
                 "path_mask_class": mask_class,
                 "path_roi_polygon": list(path_config_for_mode(local_config, mask_class).roi_polygon),
@@ -2210,6 +2261,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                     target_xy = guidance_packet['target_xy'] if guidance_packet else None
                     guidance_kwargs = guidance_packet or {}
                 kwargs = {"color_order": "rgb", "path_mask_class": requested_mode}
+                if getattr(args, 'front_connectome_url', ''):
+                    kwargs['source_stamp'] = _stamp_ns(packet.source_header) / 1e9
                 if planner or guided:
                     kwargs['detect_road_hazards'] = True
                 if args.inference_process:
@@ -2253,6 +2306,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                         continue
                     if planner:
                         state['planner_status'] = dict(planner.metrics)
+                    if getattr(args, 'front_connectome_url', ''):
+                        state['front_command'] = result.front_command
+                        state['front_metrics'] = result.front_metrics
                     state['waypoint_guidance'] = (
                         {'ready': False, 'reason': guidance_reason} if guidance_reason else
                         dict(planner.metrics.get('waypoint_guidance', {})) if planner else
@@ -2354,6 +2410,10 @@ def run_ros2(args: argparse.Namespace) -> int:
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument('--front-connectome-url', default=_env('LINE_TRACKING_FRONT_CONNECTOME_URL', ''))
+    parser.add_argument('--front-connectome-sha256', default=_env('LINE_TRACKING_FRONT_CONNECTOME_SHA256', ''))
+    parser.add_argument('--front-connectome-timeout-sec', type=float,
+        default=_env_float('LINE_TRACKING_FRONT_CONNECTOME_TIMEOUT_SEC', 1.))
     parser.add_argument('--path-planner', choices=('local', 'connectome'),
                         default=_env('LINE_TRACKING_PATH_PLANNER', 'local'))
     parser.add_argument('--connectome-url', default=_env('LINE_TRACKING_CONNECTOME_URL', 'http://127.0.0.1:8091/v1/plan'))
@@ -2726,6 +2786,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument("--segment-status-topic", default="/line_tracking/segment_status")
             live.add_argument("--segment-velocity-topic", default="/line_tracking/command")
     args = parser.parse_args(argv)
+    if args.front_connectome_url:
+        if args.path_mask_class != 1 or args.path_planner != 'local' or args.inference_process or args.motion_enabled or args.mode == 'navigation-worker':
+            parser.error('front connectome requires Road mask 1, local visualization, no legacy planner/process/motion controller')
+        if not math.isfinite(args.front_connectome_timeout_sec) or args.front_connectome_timeout_sec <= 0:
+            parser.error('positive front connectome timeout required')
     if not math.isfinite(args.telemetry_hz) or not 0 <= args.telemetry_hz <= 50:
         parser.error('telemetry rate must be finite and 0..50 Hz')
     if args.inference_process and (args.path_planner != 'connectome' or args.mode == 'mcap'):

@@ -1,0 +1,40 @@
+{
+  "schema": "dangjin.patrol.validation.v1",
+  "source": "environments/dangjin/validation/patrol-full-lap.json",
+  "frames": 2443,
+  "distance_m": 976.7941253087688,
+  "route_length_m": 978.4359079273124,
+  "simulation_seconds": 1221,
+  "checkpoints": 49,
+  "complete": true,
+  "automatic_stop": {
+    "vx": 0,
+    "vy": 0,
+    "yaw_rate": 0,
+    "reason": "lap_complete"
+  },
+  "unexpected_stops": 0,
+  "swept_collisions": 0,
+  "minimum_center_clearance_m": 1.8876966300688602,
+  "minimum_footprint_clearance_m": 1.2376966300688603,
+  "route_center_rmse_m": 0.17949644299991804,
+  "route_center_max_error_m": 0.9730739618921589,
+  "max_step_m": 0.3999999999999999,
+  "flyvis_sha256": "97f853183f79d2e987532ca2716ce3c33c2f41f875af05396e0cd8b14a7bc3c2",
+  "road_model_sha256": "4b87c40a90a36d5912bb738ecaf3fed4d85e60246cba029f151ad4888a0ab0a3",
+  "runtime_ground_truth": false,
+  "localization": "known simulation pose",
+  "physics": "kinematic",
+  "scope": "One synthetic RGB closed-loop lap; not a real-world robot performance claim",
+  "source_sha256": {
+    "site.json": "938aa4d0b46c96c52f2c4055a9f6d8a1ecec0a96cec3ba4e09b441f5c540b61b",
+    "world.json": "66e1f6b892e0b5492b1b6908e21045baeaba3340be49e46b2112147962cf80d0",
+    "world-geometry.js": "6fd620ef034a7f444fd2d3558e0991ccc9c697df9e928a9471d6ec91e907fbba",
+    "scene-details.js": "c9f882d909f2f38a0e5383e3431d96562deba1f2a166d295d7d3730ce26ad176",
+    "robot-sim.js": "52fd71717a7db8b792e78dd953c7cb60228ae35986fb484f0e55edd96966163a",
+    "app.js": "ae1f86d4281675a4cc0646e751b20614f8bcc21e01be59ff198b7217898f54e3",
+    "../../tools/dangjin_sim_server.py": "385a22effd807ebd760f3df6e25e12d03b3deb63ce1d8c63f1d3bacd67c2ac9b",
+    "../../tools/dangjin_patrol.py": "88209dde11f72536fe6ad5ff2b3cb7ed5ea34f7d40067f6a53f1b67cc57a1826",
+    "../../tools/dangjin_perception.py": "24600785c8460905ca3d51a00262f3bd199cae78e3deaf2bbb617d7f857c327b"
+  }
+}

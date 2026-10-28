@@ -125,6 +125,13 @@ function road(points, width, material = M.road, elevation = 0.08, sharedCurve=nu
   mesh.userData.sensorHidden=sensorHidden;
   return curve;
 }
+function pavedArea(area){
+  const contour=area.points.map(([x,y])=>new THREE.Vector2(x,y));
+  const indices=THREE.ShapeUtils.triangulateShape(contour,[]).flat();
+  const mesh=surface(area.points.map(([x,y])=>[x,y,.085]),indices,M.road);
+  mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(area.points.flatMap(([x,y])=>[x/8,y/8]),2));
+  mesh.userData.semantic='road';mesh.userData.pavedArea=area.id;
+}
 let randomSeed = 11618;
 function random() { randomSeed = (randomSeed * 1664525 + 1013904223) >>> 0; return randomSeed / 4294967296; }
 function terrainHeight(x, y) {
@@ -257,6 +264,7 @@ function buildSite(site){
   terrain();trees();
   box(145.5,94,-.02,320,225,.12,M.grass);
   for(const r of world.roads){road(r.points,r.width+.4,M.curb,.055,r.curve);road(r.points,r.width,M.road,.08,r.curve);}
+  world.pavedAreas.forEach(pavedArea);
   // Policy guides belong to the overview, not to the robot's RGB observation.
   road([[145.65,5],[145.65,178]],.18,M.lane,.115,null,true);
   for(const p of world.lamps)lamp(p.x,p.y);

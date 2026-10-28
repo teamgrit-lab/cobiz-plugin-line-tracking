@@ -25,6 +25,17 @@ test('compost outer road has usable footprint clearance and the nonexistent road
     }
   }
 });
+test('widened perimeter and compost apron are traversable without opening the central exclusion',()=>{
+  // Former verge (the old half-width was 4 m); now usable with a robot footprint.
+  assert.equal(world.blocked(-10.8,85,.65),null);
+  assert.equal(world.blocked(-13,85,.65),'road_edge');
+  // The photographed grass wedge west of the compost building is now paved.
+  for(const [x,y] of [[160,140],[170,145],[170,155]])assert.equal(world.blocked(x,y,.65),null);
+  assert.equal(world.swept({x:170,y:145},{x:165,y:166},.65),null);
+  assert.equal(world.blocked(160,131,.65),'road_edge');
+  assert.equal(world.blocked(145.65,150,.65),'no_go_zone');
+  assert.equal(world.blocked(175,145,.65),'obstacle');
+});
 test('closed perimeter permits an entire lap with a 0.65 m footprint',()=>{
   const route=world.perimeterRoute();assert.ok(route.length>1000);
   assert.ok(Math.hypot(route[0][0]-route.at(-1)[0],route[0][1]-route.at(-1)[1])<1e-6);
@@ -73,4 +84,11 @@ test('camera forward/left and positive yaw have the same site handedness',()=>{
   assert.deepEqual(localToSite([4,2],p),[8,24]);
   const next=stepPose(p,{vx:.5,yaw_rate:.1},.2);
   assert.ok(next.x<10&&next.y>20&&next.heading>p.heading);
+});
+test('sidestepping moves sideways in the body frame without rotating the body',()=>{
+  const p={x:10,y:20,heading:Math.PI/2};
+  const left=stepPose(p,{vx:0,vy:.8,yaw_rate:0},.5);
+  assert.equal(left.x,9.6);assert.equal(left.y,20);assert.equal(left.heading,p.heading);
+  const right=stepPose(p,{vx:.2,vy:-.3,yaw_rate:0},1);
+  assert.equal(right.x,10.3);assert.equal(right.y,20.2);
 });

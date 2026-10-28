@@ -203,6 +203,13 @@ def test_navigation_export_uses_same_exclusions_and_radius():
     assert not available(145.65,94)
     assert not available(25,25)
     assert available(204,158)
+    assert available(-10.8,85)
+    assert not available(-13,85)
+    for x,y in [(160,140),(170,145),(170,155)]:
+        assert available(x,y)
+    assert not available(160,131)
+    assert not available(145.65,150)
+    assert not available(175,145)
     assert not available(-100,0)
 
 

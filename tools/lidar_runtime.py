@@ -25,6 +25,13 @@ class LidarRuntime:
             raise ValueError("local avoidance requires base_link paths")
         self.detector = ObstacleDetector(obstacle_config)
         self.controller = AvoidanceController(avoidance_config, obstacle_config)
+        self.default_controller = self.controller
+        self.road_controller = None
+        if getattr(args, 'road_objects_enabled', False):
+            from road_objects import RoadObjectConfig
+            from road_object_avoidance import RoadObjectAvoidanceController
+            settings = RoadObjectConfig(**{k: getattr(args, 'road_object_'+k) for k in RoadObjectConfig.__dataclass_fields__})
+            self.road_controller = RoadObjectAvoidanceController(avoidance_config, obstacle_config, settings)
         self.lookup = lookup
         self.drive_config = drive_config
         self.motion = motion
@@ -47,6 +54,8 @@ class LidarRuntime:
         )
         self.scan = None
         self.reference = None
+        self.object_reference = None
+        self.object_target_cache = None
         self.fault = "lidar_waiting_for_cloud"
         self.metrics = {
             "state": "waiting",
@@ -62,7 +71,11 @@ class LidarRuntime:
     def reset_reference(self):
         with self.lock:
             self.reference = None
-            self.controller.reset()
+            self.object_reference = None
+            self.object_target_cache = None
+            self.default_controller.reset()
+            if self.road_controller:
+                self.road_controller.reset()
 
     def on_imu(self, message, arrival):
         with self.lock:
@@ -120,11 +133,12 @@ class LidarRuntime:
                     else "lidar_processing_error"
                 )
 
-    def set_reference(self, mask, header, image_shape, arrival):
+    def set_reference(self, mask, header, image_shape, arrival, *, detections=None):
         with self.lock:
             if self.reference and stamp_ns(header) < stamp_ns(self.reference[1]):
                 return
             self.reference = (mask.copy(), header, tuple(image_shape), arrival)
+            self.object_reference = detections
 
     def _context(self, mask_class, now, clock_ns):
         if self.fault:
@@ -180,10 +194,32 @@ class LidarRuntime:
             return_visibility=True,
         )
         self.camera_frame = header.frame_id
+        self.projection = matching[-1], camera
         self.metrics.update(
             path_age_sec=age, camera_visible_ratio=float(visible.mean())
         )
         return scan, allowed | ~visible
+
+    def _road_objects(self, scan, now, clock_ns):
+        from road_objects import associate_objects
+        mask, header, _, arrival = self.reference
+        config = self.road_controller.object_config
+        if self.object_reference is None:
+            raise ValueError('road_object_detections_unavailable')
+        if not (0 <= now-arrival <= config.max_age_sec and
+                -.05 <= (clock_ns-stamp_ns(header))/1e9 <= config.max_age_sec):
+            raise ValueError('road_object_detections_stale')
+        if self.motion is None and abs(scan.stamp_ns-stamp_ns(header))/1e9 > config.max_sync_sec:
+            raise ValueError('road_object_lidar_unsynchronized')
+        info, camera = self.projection
+        key = (scan.stamp_ns, stamp_ns(header), id(self.object_reference), clock_ns if self.motion else None)
+        if self.object_target_cache is None or self.object_target_cache[0] != key:
+            targets = associate_objects(self.object_reference, scan, info, camera, mask, config)
+            self.object_target_cache = key, targets
+        else:
+            targets = self.object_target_cache[1]
+        self.road_controller.set_objects(targets, stamp_ns(header))
+        self.metrics['road_objects'] = targets
 
     def _compensate_scan(self, scan, matrix):
         from motion_tracking import move_points
@@ -200,12 +236,16 @@ class LidarRuntime:
         costs[valid] = np.max([scan.costs[a[valid], b[valid]] for a, b in corners], axis=0)
         origin = scan.origin_base.copy(); origin[:2] = move_points(origin[None, :2], matrix)[0]
         up = scan.up_base.copy(); up[:2] = matrix[:2, :2] @ up[:2]
-        return replace(scan, points=move_points(scan.points, matrix),
+        xyz = None if scan.obstacle_xyz is None else scan.obstacle_xyz.copy()
+        if xyz is not None:
+            xyz[:, :2] = move_points(xyz[:, :2], matrix)
+        return replace(scan, points=move_points(scan.points, matrix), obstacle_xyz=xyz,
                        observed=observed.reshape(self.config.shape), costs=costs.reshape(self.config.shape),
                        origin_base=origin, up_base=up)
 
-    def apply(self, nominal, path, mask_class, now, clock_ns):
+    def apply(self, nominal, path, mask_class, now, clock_ns, *, preserve_nominal=False):
         with self.lock:
+            self.controller = self.road_controller if self.road_controller and mask_class == 1 else self.default_controller
             if nominal.reason not in ("tracking", "tracking_slow_turn"):
                 reason = nominal.reason
                 if reason in ("tracking_path_recovery", "tracking_path_hold") or reason.startswith("path_recovery_"):
@@ -215,7 +255,9 @@ class LidarRuntime:
                 return result
             try:
                 scan, region = self._context(mask_class, now, clock_ns)
-                if self.drive_config is not None and self.motion is None:
+                if self.controller is self.road_controller:
+                    self._road_objects(scan, now, clock_ns)
+                if self.drive_config is not None and self.motion is None and not preserve_nominal:
                     nominal = decide_drive(
                         path,
                         camera_age_sec=0.0,
@@ -240,7 +282,7 @@ class LidarRuntime:
             except (ValueError, AttributeError, TypeError, cv2.error) as error:
                 reason = (
                     str(error)
-                    if str(error).startswith(("lidar_", "avoidance_", "motion_"))
+                    if str(error).startswith(("lidar_", "avoidance_", "motion_", "road_object_"))
                     else "avoidance_processing_error"
                 )
                 result = self.controller.stop(reason)
@@ -263,6 +305,8 @@ class LidarRuntime:
                 if decision.reason in ("tracking_path_recovery", "tracking_path_hold") or decision.reason.startswith("path_recovery_"):
                     raise ValueError("avoidance_path_unavailable")
                 scan, region = self._context(mask_class, now, clock_ns)
+                if self.road_controller and mask_class == 1:
+                    self._road_objects(scan, now, clock_ns)
                 plan = self.controller.planned_velocity
                 target = (
                     plan[1]

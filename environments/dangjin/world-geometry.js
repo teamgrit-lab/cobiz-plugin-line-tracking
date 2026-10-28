@@ -14,10 +14,11 @@ export function roadDefinitions(site) {
   const loop=new THREE.CatmullRomCurve3(ring.map(([x,y])=>new THREE.Vector3(x,0,-y)),true,'centripetal');
   const westEnd=(west.length-1)/ring.length,compostEnd=(west.length+compost.length-2)/ring.length;
   const perimeter={'west-north':new CurveSection(loop,0,westEnd),'compost-outer':new CurveSection(loop,westEnd,compostEnd),'south-east':new CurveSection(loop,1,compostEnd)};
+  const outerWidth=site.assumptions.outer_road_width;
   const roads = [
-    ['access',site.access_road,8],['west-north',site.outer_road,8],
-    ['south-east',site.south_east_road,8],['central',site.central_road,12],
-    ['compost-outer',site.compost_outer_road,7],
+    ['access',site.access_road,site.assumptions.access_road_width],['west-north',site.outer_road,outerWidth],
+    ['south-east',site.south_east_road,outerWidth],['central',site.central_road,site.assumptions.central_road_width],
+    ['compost-outer',site.compost_outer_road,outerWidth],
     ['south-barn-west-dead-end',site.south_barn_west_dead_end,8],
     ['south-barn-east-dead-end',site.south_barn_east_dead_end,8],
   ];
@@ -35,6 +36,17 @@ export function roadDefinitions(site) {
 export function distanceToSegment(x,y,a,b){
   const dx=b[0]-a[0],dy=b[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/(dx*dx+dy*dy||1)));
   return Math.hypot(x-a[0]-t*dx,y-a[1]-t*dy);
+}
+// Positive inside a paved polygon; negative outside. Kept in site metres,
+// shared by footprint checks and the curb junction test.
+export function polygonClearance(x,y,points){
+  let inside=false,distance=Infinity;
+  for(let i=0,j=points.length-1;i<points.length;j=i++){
+    const a=points[j],b=points[i];
+    distance=Math.min(distance,distanceToSegment(x,y,a,b));
+    if((a[1]>y)!==(b[1]>y)&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])inside=!inside;
+  }
+  return inside?distance:-distance;
 }
 export function rectangleDistance(x,y,r){
   if(r.heading){const cx=r.x+r.length/2,cy=r.y+r.width/2,dx=x-cx,dy=y-cy,c=Math.cos(r.heading),s=Math.sin(r.heading);x=cx+c*dx+s*dy;y=cy-s*dx+c*dy;}
@@ -65,12 +77,13 @@ export function lampPositions(roads){
 export function localToSite(point,pose){return [pose.x+point[0]*Math.cos(pose.heading)-point[1]*Math.sin(pose.heading),pose.y+point[0]*Math.sin(pose.heading)+point[1]*Math.cos(pose.heading)];}
 export function stepPose(pose,command,dt){
   const mid=pose.heading+command.yaw_rate*dt/2;
-  return {x:pose.x+command.vx*Math.cos(mid)*dt,y:pose.y+command.vx*Math.sin(mid)*dt,heading:pose.heading+command.yaw_rate*dt};
+  const vy=command.vy??0;
+  return {x:pose.x+(command.vx*Math.cos(mid)-vy*Math.sin(mid))*dt,y:pose.y+(command.vx*Math.sin(mid)+vy*Math.cos(mid))*dt,heading:pose.heading+command.yaw_rate*dt};
 }
 
 export class WorldGeometry {
   constructor(site){
-    this.site=site;this.roads=roadDefinitions(site);
+    this.site=site;this.roads=roadDefinitions(site);this.pavedAreas=site.paved_areas||[];
     const supports=site.barns.flatMap(b=>barnSilos(b).flatMap((s,i)=>[-1,1].flatMap(dx=>[-1,1].map(dy=>({id:`${b.id}-silo-${i}-${dx}-${dy}`,x:s.x+dx-.065,y:s.y+dy-.065,length:.13,width:.13})))));
     this.lamps=lampPositions(this.roads);
     const poles=this.lamps.map((p,i)=>({id:`lamp-${i}`,x:p.x-.075,y:p.y-.075,length:.15,width:.15}));
@@ -95,6 +108,10 @@ export class WorldGeometry {
       const clearance=road.width/2-distance;
       if(clearance>best.clearance)best={distance,clearance,id:road.id};
     }
+    for(const area of this.pavedAreas){
+      const clearance=polygonClearance(x,y,area.points);
+      if(clearance>best.clearance)best={distance:Math.max(0,-clearance),clearance,id:area.id};
+    }
     return best;
   }
   blocked(x,y,radius=0){
@@ -109,5 +126,5 @@ export class WorldGeometry {
     for(let i=0;i<=n;i++){const t=i/n;const reason=this.blocked(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,radius);if(reason)return reason;}
     return null;
   }
-  export(){return {schema:'dangjin.world.v1',layout_revision:this.site.layout_revision,units:'metres',frame:'site_xy',roads:this.roads.map(({id,width,samples})=>({id,width,samples})),perimeter_route:this.perimeterRoute(),obstacles:this.obstacles,no_go_zones:this.zones,robot_radius_m:this.site.simulation.robot_radius_m,provenance:'plan dimensions + visual interpretation; not a registered survey or SLAM map'};}
+  export(){return {schema:'dangjin.world.v1',layout_revision:this.site.layout_revision,units:'metres',frame:'site_xy',roads:this.roads.map(({id,width,samples})=>({id,width,samples})),paved_areas:this.pavedAreas,perimeter_route:this.perimeterRoute(),obstacles:this.obstacles,no_go_zones:this.zones,robot_radius_m:this.site.simulation.robot_radius_m,provenance:'plan dimensions + visual interpretation; not a registered survey or SLAM map'};}
 }

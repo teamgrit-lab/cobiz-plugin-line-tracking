@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {localToSite,stepPose} from './world-geometry.js';
 import {OncomingCar} from './oncoming-car.js';
 import {newFaultSeed,shouldReobserve} from './sensor-fault-control.js';
+import {WalkingCameraSway,applyCameraSway} from './camera-sway.js';
 
 const $=id=>document.getElementById(id);
 const W=480,H=270,DT=.5;
@@ -39,6 +40,7 @@ export class RobotSimulation {
     this.black=new THREE.MeshBasicMaterial({color:0,side:THREE.DoubleSide});this.white=new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide});this.red=new THREE.MeshBasicMaterial({color:0xff0000,side:THREE.DoubleSide});
     this.pathLine=new THREE.Line(new THREE.BufferGeometry(),new THREE.LineBasicMaterial({color:'#66e1c5',depthTest:false}));this.pathLine.renderOrder=10;this.visuals.add(this.pathLine);
     this.trailLine=new THREE.Line(new THREE.BufferGeometry(),new THREE.LineBasicMaterial({color:'#d38b42'}));this.visuals.add(this.trailLine);this.trail=[];
+    this.cameraSway=new WalkingCameraSway({enabled:false});
     this.bind();this.reset('patrol');
   }
   makeRobot(){
@@ -64,12 +66,13 @@ export class RobotSimulation {
     $('sim-reset').onclick=()=>this.reset($('sim-scenario').value);
     $('sim-scenario').onchange=()=>this.reset($('sim-scenario').value);
     for(const id of ['sim-fault-enabled','sim-fault-profile'])$(id).onchange=()=>this.reset($('sim-scenario').value);
+    $('sim-camera-sway').onchange=()=>this.reset($('sim-scenario').value,this.faultConfig.seed);
     $('sim-fault-replay').onclick=()=>{const input=$('sim-fault-seed');if(input.value!==''&&input.reportValidity())this.reset($('sim-scenario').value,Number(input.value));};
     $('sim-nudge').onclick=()=>{this.pause();const point=localToSite([0,.6],this.pose);const next={...this.pose,x:point[0],y:point[1]};if(!this.world.swept(this.pose,next,.65)){this.pose=next;this.generation++;this.events.push({t:this.stamp,pose:{...next},reason:'manual_offset'});this.place();this.capture();}};
     $('sim-collect').onclick=()=>this.collect();
     $('sim-policy-collect').onclick=()=>this.collectPolicy();
     $('sim-obstacle').onchange=e=>this.placeObstacle(e.target.checked);
-    $('sim-export').onclick=()=>{const blob=new Blob([JSON.stringify({schema:'dangjin.simulation.trace.v1',model:this.health?.model,perception:this.health?.perception,policy:this.health?.policy,evaluation:{violations:this.violations,emergency_stop_override:!this.health?.policy},mission:this.mission,physics:'kinematic',sensor_faults:{...this.faultConfig,schema:'dangjin.sensor_faults.v1'},wait_seconds:this.waitSeconds,inference_count:this.inferenceCount,samples:this.samples,events:this.events},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='dangjin-simulation-trace.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+    $('sim-export').onclick=()=>{const blob=new Blob([JSON.stringify({schema:'dangjin.simulation.trace.v1',model:this.health?.model,perception:this.health?.perception,policy:this.health?.policy,evaluation:{violations:this.violations,emergency_stop_override:!this.health?.policy},mission:this.mission,physics:'kinematic',camera_sway:this.cameraSway.snapshot(),sensor_faults:{...this.faultConfig,schema:'dangjin.sensor_faults.v1'},wait_seconds:this.waitSeconds,inference_count:this.inferenceCount,samples:this.samples,events:this.events},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='dangjin-simulation-trace.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
     document.addEventListener('visibilitychange',()=>{if(document.hidden&&this.running)this.pause();});
   }
   open(){this.onOpen();document.body.classList.add('robot-active');this.active=true;this.group.visible=true;this.visuals.visible=true;$('robot-panel').hidden=false;$('sim-controls').hidden=false;$('photo-card').hidden=true;$('model-mode').setAttribute('aria-pressed','false');$('robot-mode').setAttribute('aria-pressed','true');this.place();this.capture();this.follow(true);this.checkBackend();}
@@ -79,9 +82,11 @@ export class RobotSimulation {
     this.surroundHousing.forEach(mesh=>mesh.visible=!this.frontOnly);
     this.frontHousing.forEach(mesh=>mesh.visible=this.frontOnly);
     $('sim-mask').setAttribute('aria-label',this.frontOnly?'커넥톰이 전면 영상에서 추정한 차도 영역':'커넥톰이 360도 영상에서 추정한 차도 영역');
+    $('sim-camera-sway').disabled=!this.frontOnly;
+    this.cameraSway.setEnabled(!!this.frontOnly&&$('sim-camera-sway').checked);
   }
   async checkBackend(){
-    try{const response=await fetch('/api/status',{signal:AbortSignal.timeout(3000)});if(!response.ok)throw Error('서버 미연결');const value=await response.json();if(value.model?.backend!=='flyvis'||!value.model.flow_decoder_loaded||!value.perception||value.perception.uses_ground_truth_at_runtime)throw Error('학습된 회로 필요');if(value.layout_revision!==this.world.site.layout_revision)throw Error('지도 변경 후 서버를 다시 시작하세요.');if(value.sensor_faults_version!=='dangjin.sensor_faults.v1')throw Error('검출 누락 시험 서버를 다시 시작하세요.');this.health=value;this.frontOnly=value.perception.views===1;this.fixedCamera=!!value.policy;$('sim-panorama').parentElement.hidden=this.frontOnly;$('sim-collect').disabled=this.frontOnly;$('sim-policy-collect').disabled=this.frontOnly;const flow=document.getElementById('sim-control-flow');if(flow)flow.textContent=(this.frontOnly?'전면 영상 1장':'360° 영상')+' → Flyvis 시각 회로 → 차도 검출 → 랜덤 누락 → 학습된 행동 출력층 → 속도·회전 → 로봇';$('sim-backend').textContent=this.frontOnly?'전면 카메라 · 학습된 커넥톰':value.policy?'Flyvis · 학습된 속도·조향':value.perception.backend==='flyvis-road-readout'?`Flyvis ${value.model.version} · 360° 차도 검출`:`RGB SegFormer + Flyvis ${value.model.version}`;$('sim-start').disabled=false;return true;}
+    try{const response=await fetch('/api/status',{signal:AbortSignal.timeout(3000)});if(!response.ok)throw Error('서버 미연결');const value=await response.json();if(value.model?.backend!=='flyvis'||!value.model.flow_decoder_loaded||!value.perception||value.perception.uses_ground_truth_at_runtime)throw Error('학습된 회로 필요');if(value.layout_revision!==this.world.site.layout_revision)throw Error('지도 변경 후 서버를 다시 시작하세요.');if(value.sensor_faults_version!=='dangjin.sensor_faults.v1')throw Error('검출 누락 시험 서버를 다시 시작하세요.');this.health=value;this.frontOnly=value.perception.views===1;this.fixedCamera=!!value.policy;$('sim-panorama').parentElement.hidden=this.frontOnly;$('sim-collect').disabled=this.frontOnly;$('sim-policy-collect').disabled=this.frontOnly;const flow=document.getElementById('sim-control-flow');if(flow)flow.textContent=(this.frontOnly?'전면 영상 1장':'360° 영상')+' → Flyvis 시각 회로 → 차도 검출 → 랜덤 누락 → 학습된 행동 출력층 → 속도·회전 → 로봇';$('sim-backend').textContent=this.frontOnly?'전면 카메라 · 학습된 커넥톰':value.policy?'Flyvis · 학습된 속도·조향':value.perception.backend==='flyvis-road-readout'?`Flyvis ${value.model.version} · 360° 차도 검출`:`RGB SegFormer + Flyvis ${value.model.version}`;$('sim-start').disabled=false;this.configureFrontCamera();if(this.active&&!this.running)this.capture();return true;}
     catch{this.health=null;$('sim-backend').textContent='시뮬레이션 서버: localhost:8766';$('sim-start').disabled=true;this.status('backend','README의 시뮬레이션 실행 명령을 사용하세요.');return false;}
   }
   async start(){if(!this.active)this.open();if(this.lastStatus==='lap_complete')this.reset(this.scenario);const generation=this.generation;if(!await this.checkBackend()||generation!==this.generation)return;this.configureFrontCamera();this.running=true;this.next=0;$('sim-start').textContent='Ⅱ 일시 정지';this.status('tracking');}
@@ -89,6 +94,7 @@ export class RobotSimulation {
   reset(scenario,seed){
     this.pause('idle');this.scenario=scenario;this.missionKey=crypto.randomUUID();this.mission=null;this.navTarget=null;this.viewYaw=0;this.stamp=1;this.distance=0;this.samples=[];this.events=[];this.violations=[];this.trail=[];this.sequence=0;this.pathLine.geometry.setFromPoints([]);this.trailLine.geometry.setFromPoints([]);
     this.faultConfig={enabled:$('sim-fault-enabled').checked,profile:$('sim-fault-profile').value,seed:seed??newFaultSeed(this.faultConfig?.seed)};
+    this.cameraSway.reset();this.configureFrontCamera();
     $('sim-fault-seed').value=String(this.faultConfig.seed);this.lastFault=null;this.faultDropouts=new Set();this.waitSeconds=0;this.inferenceCount=0;
     $('sim-fault-live').dataset.kind='clear';$('sim-fault-live').textContent=this.faultConfig.enabled?'랜덤 검출 누락 시험 · 새 패턴 준비':'검출 누락 효과 꺼짐';
     $('sim-mask').nextElementSibling.textContent=this.faultConfig.enabled?'누락 적용 후 검출 · 행동 모델 입력':(this.frontOnly?'전면':'360°')+' 차도 검출 · 초록: 통행 추정 / 회색: 미관측';
@@ -132,7 +138,9 @@ export class RobotSimulation {
     const x=this.pose.x,y=this.pose.y,h=this.world.site.simulation.camera_height_m;
     this.viewYaw=this.fixedCamera?0:this.navTarget?Math.max(-1.25,Math.min(1.25,Math.atan2(Math.sin(Math.atan2(this.navTarget[1]-y,this.navTarget[0]-x)-this.pose.heading),Math.cos(Math.atan2(this.navTarget[1]-y,this.navTarget[0]-x)-this.pose.heading)))):0;
     this.cameraPose={...this.pose,heading:this.pose.heading+this.viewYaw};
-    this.frontCamera.position.set(x,h,-y);const f=localToSite([10,0],this.cameraPose);this.frontCamera.lookAt(f[0],h,-f[1]);this.frontCamera.updateMatrixWorld();
+    this.frontCamera.position.set(x,h,-y);const f=localToSite([10,0],this.cameraPose);this.frontCamera.lookAt(f[0],h,-f[1]);
+    this.cameraSample=this.cameraSway.snapshot();applyCameraSway(this.frontCamera,this.cameraSample);
+    $('sim-camera-pitch').textContent=this.cameraSample.enabled?`보행 피치 ${this.cameraSample.pitch_deg>=0?'+':''}${this.cameraSample.pitch_deg.toFixed(1)}° / ±${this.cameraSample.amplitude_deg}°`:'카메라 흔들림 꺼짐';
     this.cubeCamera.position.copy(this.frontCamera.position);
     this.model.visible=true;this.roofs.visible=true;this.vegetation.visible=true;this.group.visible=false;
     // Only planned lines/trail are hidden. A test obstruction is physical evidence.
@@ -193,10 +201,12 @@ export class RobotSimulation {
   }
   async plan(now){
     this.busy=true;const generation=this.generation,pose={...this.pose},stamp=this.stamp,id=`${this.session}:${generation}:${++this.sequence}`;
+    // Sample the 1.7 Hz walking motion at 10 Hz; a 0.5 s step aliases the camera swing.
+    const dt=this.cameraSway.config.enabled ? .1 : DT,substeps=Math.round(dt/.05);
     const started=performance.now();
     try{
       const pixels=this.capture();
-      const request={schema:'line_tracking.connectome.v1',stream_id:`${this.session}:${generation}`,request_id:id,stamp_sec:stamp,requested_modes:[1],local_config:this.localConfig,planner_config:{half_width_m:.3,margin_m:.35,min_length_m:1,max_center_offset_m:.2,flow_weight:.02,road_corridor_smoothing_m:1,road_building_cost_weight:0,road_building_distance_m:2},pose,speed_mps:.8,camera_yaw:this.viewYaw,scenario:this.scenario,mission_id:this.missionKey,sensor_faults:this.faultConfig,environment:{oncoming_car:this.oncomingCar?.snapshot()||null},evaluation:{violation_frames:this.violations?.length||0,latest_violation:this.violations?.at(-1)||null},...pixels};
+      const request={schema:'line_tracking.connectome.v1',stream_id:`${this.session}:${generation}`,request_id:id,stamp_sec:stamp,requested_modes:[1],local_config:this.localConfig,planner_config:{half_width_m:.3,margin_m:.35,min_length_m:1,max_center_offset_m:.2,flow_weight:.02,road_corridor_smoothing_m:1,road_building_cost_weight:0,road_building_distance_m:2},pose,speed_mps:.8,camera_yaw:this.viewYaw,scenario:this.scenario,mission_id:this.missionKey,sensor_faults:this.faultConfig,environment:{oncoming_car:this.oncomingCar?.snapshot()||null,camera_sway:this.cameraSample,simulation_step_sec:dt},evaluation:{violation_frames:this.violations?.length||0,latest_violation:this.violations?.at(-1)||null},...pixels};
       const response=await fetch('/api/step',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request),signal:AbortSignal.timeout(10000)});
       const reply=await response.json();if(generation!==this.generation||!this.running)return;
       if(!response.ok)throw Error(reply.error||'추론 요청 실패');
@@ -211,9 +221,9 @@ export class RobotSimulation {
       this.lastFault=faults;
       $('sim-fault-live').dataset.kind=faults.kind;
       $('sim-fault-live').textContent=faults.kind==='dropout'?`전체 검출 누락 · 남은 ${faults.remaining_s.toFixed(1)} s`:faults.kind==='holes'?`랜덤 구멍 · 차도 픽셀 ${(faults.removed_fraction*100).toFixed(1)}% 누락`:faults.enabled?'검출 유지 구간':'검출 누락 효과 꺼짐';
-      if(!command||!Number.isFinite(command.vx)||!Number.isFinite(command.yaw_rate)||command.vx<0||command.vx>.800001||Math.abs(command.yaw_rate)>.350001)throw Error('제어 한계 위반');
+      if(!command||!Number.isFinite(command.vx)||!Number.isFinite(command.vy)||!Number.isFinite(command.yaw_rate)||command.vx<0||command.vx>.800001||Math.abs(command.vy)>.800001||Math.abs(command.yaw_rate)>.350001)throw Error('제어 한계 위반');
       let points=command.vx>0||command.reason==='lap_complete'?(reply.paths?.['1']?.points_xy||[]):[];
-      if(neural&&command.vx>0){let arc={x:0,y:0,heading:0};points=[[0,0]];for(let i=0;i<30;i++){arc=stepPose(arc,command,.1);points.push([arc.x,arc.y]);}}
+      if(neural&&(command.vx>0||command.vy)){let arc={x:0,y:0,heading:0};points=[[0,0]];for(let i=0;i<30;i++){arc=stepPose(arc,command,.1);points.push([arc.x,arc.y]);}}
       const worldPoints=points.map(p=>localToSite(p,this.cameraPose));
       this.mission=reply.mission;this.navTarget=neural?null:reply.mission?.target_site||null;
       const prediction=new Image();prediction.src='data:image/png;base64,'+(reply.surround_prediction_png||reply.prediction_png);await prediction.decode();if(generation!==this.generation)return;
@@ -231,25 +241,25 @@ export class RobotSimulation {
           // A stopped robot still receives new sensor frames. Advancing only
           // sensor time lets a transient dropout end without blind motion.
           this.command={...zero};
-          for(let i=0;i<10;i++){this.advanceObstacle(DT/10);const reason=this.world.blocked(pose.x,pose.y,.65);if(reason&&!this.violations.some(v=>v.t===stamp))this.violations.push({t:stamp,reason,pose:{...pose}});}
-          this.stamp+=DT;this.waitSeconds+=DT;
+          for(let i=0;i<substeps;i++){this.advanceObstacle(dt/substeps);this.cameraSway.advance(dt/substeps,zero);const reason=this.world.blocked(pose.x,pose.y,.65);if(reason&&!this.violations.some(v=>v.t===stamp))this.violations.push({t:stamp,reason,pose:{...pose}});}
+          this.stamp+=dt;this.waitSeconds+=dt;
           this.samples.push({t:stamp,pose,next_pose:{...pose},command,environment:request.environment,waiting:true,policy:reply.policy_metrics,center_error_m:this.world.nearestRoad(pose.x,pose.y).distance,perception:reply.perception_metrics,sensor_faults:faults,mission:reply.mission});
-          this.status(neural?'neural_wait':faults.kind==='dropout'?'detection_dropout':'reobserving','정지 상태에서 새 영상을 확인합니다.');this.updateMetrics();this.scheduleNext(started);return;
+          this.status(neural?'neural_wait':faults.kind==='dropout'?'detection_dropout':'reobserving','정지 상태에서 새 영상을 확인합니다.');this.updateMetrics();this.scheduleNext(started,dt);return;
         }
         this.pause(command.reason);return;
       }
       let next=pose;
-      for(let i=0;i<10;i++){this.advanceObstacle(DT/10);const step=stepPose(next,command,DT/10);const reason=this.world.swept(next,step,.65);if(reason){if(!neural){this.pause(reason);return;}if(!this.violations.some(v=>v.t===stamp))this.violations.push({t:stamp,reason,pose:{...step}});}next=step;}
-      this.command=command;this.distance+=Math.hypot(next.x-pose.x,next.y-pose.y);this.pose=next;this.stamp+=DT;
+      for(let i=0;i<substeps;i++){this.advanceObstacle(dt/substeps);this.cameraSway.advance(dt/substeps,command);const step=stepPose(next,command,dt/substeps);const reason=this.world.swept(next,step,.65);if(reason){if(!neural){this.pause(reason);return;}if(!this.violations.some(v=>v.t===stamp))this.violations.push({t:stamp,reason,pose:{...step}});}next=step;}
+      this.command=command;this.distance+=Math.hypot(next.x-pose.x,next.y-pose.y);this.pose=next;this.stamp+=dt;
       const nearest=this.world.nearestRoad(next.x,next.y);const duration=performance.now()-started;
       this.samples.push({t:stamp,pose,next_pose:next,command,environment:request.environment,center_error_m:nearest.distance,planner_ms:duration,policy:reply.policy_metrics,evaluation:{violation_frames:this.violations.length},flow_ms:reply.timing.flow_ms,model_inferred_frames:reply.model.inferred_frames,perception:reply.perception_metrics,sensor_faults:faults,mission:reply.mission});
       this.trail.push(new THREE.Vector3(next.x,.22,-next.y));if(this.trail.length>5000)this.trail.shift();this.trailLine.geometry.dispose();this.trailLine.geometry=new THREE.BufferGeometry().setFromPoints(this.trail);
       this.place();this.status(command.reason,neural?`행동 추론 ${reply.policy_metrics.ms.toFixed(1)} ms · 회전 ${command.yaw_rate.toFixed(3)} rad/s · 이탈/접촉 ${this.violations.length}회`:`${reply.perception_metrics.views===4?'360° 4방향 검출':'차도 인식'} ${reply.perception_metrics.ms.toFixed(0)} ms · 광류 ${reply.timing.flow_ms.toFixed(0)} ms`);this.updateMetrics();
-      this.scheduleNext(started);
+      this.scheduleNext(started,dt);
     }catch(error){if(generation===this.generation)this.pause('planner_error',error.message);}
     finally{this.busy=false;}
   }
-  scheduleNext(started){const rate=Number($('sim-rate').value);this.next=performance.now()+Math.max(0,DT*1000/rate-(performance.now()-started));}
+  scheduleNext(started,dt){const rate=Number($('sim-rate').value);this.next=performance.now()+Math.max(0,dt*1000/rate-(performance.now()-started));}
   updateMetrics(){
     $('sim-progress').textContent=this.mission?`${(this.mission.fraction*100).toFixed(1)}% · ${this.mission.progress_m.toFixed(0)} / ${this.mission.length_m.toFixed(0)} m`:this.scenario==='patrol'?'0.0% · 순환 시작점':'구간 시험';
     $('sim-distance').textContent=`${this.distance.toFixed(1)} m`;$('sim-speed').textContent=`${this.command.vx.toFixed(2)} m/s`;

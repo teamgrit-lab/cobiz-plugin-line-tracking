@@ -93,3 +93,13 @@ def test_saturated_neural_output_respects_exact_transport_limits():
     model.actor = lambda _: (torch.tensor([[1., -1.]]), torch.tensor([[20., -20.]]))
     command, _ = model.act(np.ones((270, 480), np.uint8))
     assert validated_command(asdict(command)) == DriveDecision(.8, 0., -.35, 'tracking')
+
+
+def test_lidar_overlay_survives_front_output_limit_but_raw_model_cannot_request_lateral():
+    command = DriveDecision(.2, -.6, .04, 'lidar_avoiding')
+    assert limit_front_command(command, .5, .18, max_lateral=.8) == command
+    assert limit_front_command(command, .5, .18).vy == 0
+    capped = limit_front_command(command, .5, .18, max_lateral=.3)
+    assert capped.vy == -.3 and capped.vx == .1 and capped.yaw_rate == .02
+    with pytest.raises(ValueError):
+        validated_command(asdict(DriveDecision(.2, -.6, .04, 'tracking')))

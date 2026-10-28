@@ -84,6 +84,7 @@ from lidar_common import (
 )
 from lidar_obstacles import ObstacleConfig
 from local_avoidance import AvoidanceConfig
+from road_objects import RoadObjectConfig
 from lidar_runtime import LidarRuntime
 from local_path import (
     DEFAULT_ROI_POLYGON,
@@ -953,6 +954,12 @@ def run_ros2(args: argparse.Namespace) -> int:
         'url': planner.client.url, 'local_config': local_config,
         'planner_config': planner.client.config, 'timeout': planner.client.timeout})
         if args.inference_process else _segmenter_from_args(args))
+    object_detector = None
+    if args.road_objects_enabled:
+        from road_objects import RoadObjectDetector
+        object_detector = RoadObjectDetector(args.road_object_weights, args.road_object_sha256,
+                                             str(segmenter.device), args.road_object_min_score,
+                                             path_config_for_mode(local_config, 1).roi_exclusion_polygon)
     if task_mode and segmenter.device.type != "cuda":
         if args.inference_process: segmenter.close()
         raise RuntimeError("task-drive mode requires a CUDA model device")
@@ -1585,7 +1592,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 # The learned policy owns Road speed/yaw. Existing physical
                 # obstacle and task lifecycle guards still apply downstream.
                 if self.obstacles is not None:
-                    decision = self.obstacles.apply(decision, path, mask_class, now, clock_now_ns)
+                    decision = self.obstacles.apply(decision, path, mask_class, now, clock_now_ns,
+                                                    preserve_nominal=True)
                 return path, decision
             connectome_path = uses_connectome(mask_class, planner is not None, planner_status)
             if connectome_path:
@@ -1770,7 +1778,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 if guard.reason != 'tracking':
                     decision = guard
                 decision = limit_front_command(decision, self.drive_config.max_forward_mps,
-                                               self.drive_config.max_yaw_rps)
+                                               self.drive_config.max_yaw_rps,
+                                               max_lateral=self.obstacles.controller.config.max_lateral_mps if self.obstacles else 0.)
             if planner and (decision.vx or decision.vy or decision.yaw_rate):
                 now = time.monotonic()
                 clock_ns = self.get_clock().now().nanoseconds
@@ -2081,6 +2090,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "topic": args.lidar_topic, "expected_hz": 10,
                     "control_hz": args.avoidance_control_hz,
                     **(self.obstacles.metrics if self.obstacles else {})},
+                "road_object_avoidance": {"enabled": args.road_objects_enabled,
+                    "active_mode": mask_class == 1,
+                    "detector": "torchvision-fasterrcnn-mobilenet-coco-v1" if args.road_objects_enabled else None,
+                    "min_target_lateral_mps": args.road_object_min_lateral_mps,
+                    "max_target_lateral_mps": args.road_object_max_lateral_mps},
                 "profile": args.profile,
                 "front_connectome": (dict(state['front_metrics'], command=state['front_command'])
                     if getattr(args, 'front_connectome_url', '') else None),
@@ -2275,6 +2289,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 else:
                     result = segmenter.segment(frame_rgb, **kwargs)
                     segmentation_finished_at = time.monotonic()
+                detections = object_detector.detect(frame_rgb) if object_detector and requested_mode == 1 else None
                 with state_lock:
                     if not latest.is_current(packet):
                         continue
@@ -2323,7 +2338,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                         smoother.update(estimates[mask_class], path_updated_at)
                     if node.obstacles is not None:
                         node.obstacles.set_reference(result.selected_mask, packet.source_header,
-                            (packet.image_message.height, packet.image_message.width), path_updated_at)
+                            (packet.image_message.height, packet.image_message.width), path_updated_at,
+                            detections=detections)
                     inference_finished_at = time.monotonic()
                     if task_mode:
                         if packet.sequence >= state["camera_fault_min_sequence"]:
@@ -2439,6 +2455,13 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--path-frame-id", default=_env("SWIN_L_PATH_FRAME_ID", "base_link"))
     parser.add_argument("--avoidance-enabled", action=argparse.BooleanOptionalAction,
                         default=_env_bool("LINE_TRACKING_AVOIDANCE_ENABLED", True))
+    parser.add_argument('--road-objects-enabled', action=argparse.BooleanOptionalAction,
+                        default=_env_bool('LINE_TRACKING_ROAD_OBJECTS_ENABLED', False))
+    parser.add_argument('--road-object-weights', default=_env('LINE_TRACKING_ROAD_OBJECT_WEIGHTS', '/models/road-objects-mobilenet-fpn.pth'))
+    parser.add_argument('--road-object-sha256', default=_env('LINE_TRACKING_ROAD_OBJECT_SHA256', ''))
+    for name, value in asdict(RoadObjectConfig()).items():
+        parser.add_argument('--road-object-'+name.replace('_', '-'), type=float,
+                            default=_env_float('LINE_TRACKING_ROAD_OBJECT_'+name.upper(), value))
     parser.add_argument("--lidar-topic", default=_env("SWIN_L_LIDAR_TOPIC", DEFAULT_LIDAR_TOPIC))
     parser.add_argument("--lidar-imu-topic", default=_env("SWIN_L_LIDAR_IMU_TOPIC", DEFAULT_IMU_TOPIC))
     parser.add_argument("--camera-info-topic", default=_env("SWIN_L_CAMERA_INFO_TOPIC", ""))
@@ -2786,6 +2809,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument("--segment-status-topic", default="/line_tracking/segment_status")
             live.add_argument("--segment-velocity-topic", default="/line_tracking/command")
     args = parser.parse_args(argv)
+    try:
+        RoadObjectConfig(**{k: getattr(args, 'road_object_'+k) for k in RoadObjectConfig.__dataclass_fields__}).validate()
+        if args.road_objects_enabled:
+            if not args.avoidance_enabled or args.mode == 'mcap':
+                raise ValueError('road objects require live LiDAR avoidance')
+            if len(args.road_object_sha256) != 64 or any(c not in '0123456789abcdef' for c in args.road_object_sha256):
+                raise ValueError('road object detector weights SHA-256 required')
+    except ValueError as error:
+        parser.error(str(error))
     if args.front_connectome_url:
         if args.path_mask_class != 1 or args.path_planner != 'local' or args.inference_process or args.motion_enabled or args.mode == 'navigation-worker':
             parser.error('front connectome requires Road mask 1, local visualization, no legacy planner/process/motion controller')

@@ -30,9 +30,11 @@ for(let i=0;i<run.trace.length;i++){
   minClearance=Math.min(minClearance,world.nearestRoad(t.pose.x,t.pose.y).clearance,
     ...world.obstacles.map(r=>rectangleDistance(t.pose.x,t.pose.y,r)),...world.zones.map(r=>rectangleDistance(t.pose.x,t.pose.y,r)));
   if(i+1<run.trace.length){
-    const next=run.trace[i+1];assert.equal(next.stamp_sec-t.stamp_sec,.5);
+    const next=run.trace[i+1],dt=t.environment?.simulation_step_sec??.5;
+    assert.ok([.1,.5].includes(dt)&&Math.abs(next.stamp_sec-t.stamp_sec-dt)<1e-8);
+    const substeps=Math.round(dt/.05);
     let integrated={...t.pose},violation=null;
-    for(let j=0;j<10;j++){
+    for(let j=0;j<substeps;j++){
       const step=stepPose(integrated,t.command,.05);
       violation=violation||world.swept(integrated,step,.65);integrated=step;
     }
@@ -57,11 +59,13 @@ const report={schema:'connectum.front.closed_loop.v1',passed,complete,source:inp
   route_center_rmse_m:Math.sqrt(sumSquare/run.trace.length),route_center_max_error_m:maxError,
   minimum_footprint_clearance_m:minClearance-.65,max_command_integration_error_m:maxIntegrationError,
   model_sha256:run.policy.weights_sha256,encoder_sha256:run.policy.encoder_sha256,
-  input:'one rendered front RGB image; optional simulated detection holes/dropout',
+  camera_sway:run.trace[0].environment?.camera_sway??{enabled:false},
+  camera_pitch_range_deg:[Math.min(...run.trace.map(t=>t.environment?.camera_sway?.pitch_deg??0)),Math.max(...run.trace.map(t=>t.environment?.camera_sway?.pitch_deg??0))],
+  input:'one rendered front RGB image; optional walking pitch and detection holes/dropout',
   control:'actual learned speed/yaw; no map, goal, pose or planner input; episode end only',
   scope:'Same-site synthetic browser RGB and kinematics. Not quadruped dynamics, new-site or real-robot certification.'};
 report.source_sha256={};
-for(const path of ['robot-sim.js','site.json','world-geometry.js','../../tools/front_connectome.py',
+for(const path of ['robot-sim.js','camera-sway.js','site.json','world-geometry.js','../../tools/front_connectome.py',
   '../../tools/dangjin_sim_server.py','../../tools/dangjin_sensor_faults.py','../../tools/validate_front_drive.mjs']){
   report.source_sha256[path]=createHash('sha256').update(await readFile(new URL(path,root))).digest('hex');
 }

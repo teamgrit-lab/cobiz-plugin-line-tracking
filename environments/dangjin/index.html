@@ -36,6 +36,10 @@
           <details><summary>패턴 재현 · 시드</summary><label for="sim-fault-seed">시험 시드</label><div class="fault-seed-row"><input id="sim-fault-seed" type="number" min="0" max="4294967295" step="1" aria-label="시험 시드"><button id="sim-fault-replay" type="button">재현</button></div></details>
           <p>새 시험마다 새 패턴 · 일시 정지는 유지<br>정지·재출발도 학습된 모델이 판단</p>
         </fieldset>
+        <fieldset class="fault-controls"><legend>보행 카메라 흔들림</legend>
+          <label class="sim-check"><input type="checkbox" id="sim-camera-sway" checked>전면 카메라 위아래 ±5°</label>
+          <p>전면 모델에서 사용 · 초당 1.7회 왕복<br>정지하면 잦아듭니다. 변경 시 같은 누락 시드로 새 시험을 시작합니다.</p>
+        </fieldset>
         <label class="sim-check"><input type="checkbox" id="sim-follow" checked>로봇 따라가기</label>
         <label class="sim-check"><input type="checkbox" id="sim-obstacle">마주 오는 승용차 · 0.35 m/s</label>
         <button id="sim-nudge" class="sim-secondary">옆으로 0.6 m 이동</button><button id="sim-export" class="sim-secondary">주행 기록 저장 ↓</button>
@@ -67,6 +71,7 @@
         <div class="robot-panel-head"><div><strong id="sim-status" role="status">주행 준비</strong><small id="sim-detail"></small></div><span id="sim-backend">Flyvis 연결 확인 중</span><button id="sim-panel-toggle" class="quiet" aria-expanded="true" aria-controls="robot-panel-body">로봇 화면 접기 ▾</button></div>
         <div id="robot-panel-body">
         <div class="fault-readout"><span id="sim-fault-live" role="status">검출 누락 시험 준비</span><span id="sim-fault-counts">전체 누락 0회 · 재검출 대기 0.0 s</span></div>
+        <div class="camera-readout" id="sim-camera-pitch" aria-live="off">보행 피치 0.0° / ±5°</div>
         <div class="sensor-grid">
           <figure><canvas id="sim-panorama" width="768" height="384" aria-label="로봇 위 360도 카메라 파노라마"></canvas><figcaption>360° 카메라 · 높이 1.6 m</figcaption></figure>
           <figure><canvas id="sim-forward" width="480" height="270" aria-label="전방 가상 카메라와 추종 경로"></canvas><figcaption>전방 영상 + 모델 명령의 예상 궤적</figcaption></figure>

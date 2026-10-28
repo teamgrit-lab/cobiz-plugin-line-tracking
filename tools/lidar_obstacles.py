@@ -111,6 +111,7 @@ class ObstacleScan:
     input_count: int
     up_base: np.ndarray
     origin_base: np.ndarray
+    obstacle_xyz: np.ndarray | None = None
 
 
 def gravity_direction(imu, cloud, config):
@@ -254,7 +255,12 @@ class ObstacleDetector:
         costs = np.where(
             distance < c.inflation_m, np.exp(-3 * distance / c.inflation_m), 0.0
         )
-        scan = ObstacleScan(xy, observed, costs, source, arrival, len(raw), up, origin)
+        # Keep measured 3D returns beyond the local grid for camera association:
+        # a visible distant vehicle must not be mistaken for missing nearby depth.
+        association_hits = points[(heights >= c.min_height_m-1e-6)
+                                  & (heights <= c.max_height_m+1e-6) & ~self_hit]
+        scan = ObstacleScan(xy, observed, costs, source, arrival, len(raw), up, origin,
+                            association_hits)
         self.previous = scan
         return scan
 

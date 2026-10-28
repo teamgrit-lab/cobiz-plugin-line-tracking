@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import {distanceToSegment} from './world-geometry.js';
+import {distanceToSegment,polygonClearance} from './world-geometry.js';
 
 export function roadTexture(){
   const c=document.createElement('canvas');c.width=c.height=512;const ctx=c.getContext('2d');
@@ -23,7 +23,7 @@ export function enrichScene({model,world,box,cylinder,line,M,addLabel}){
       const x=(a[0]+b[0])/2-dy/l*offset,y=(a[1]+b[1])/2+dx/l*offset;
       // A road union has no curb across its junction. Individual ribbons
       // otherwise leave a raised diagonal barrier through the shared asphalt.
-      const junction=world.roads.some(other=>other!==road&&other.samples.some((p,j)=>j>0&&distanceToSegment(x,y,other.samples[j-1],p)<other.width/2+.35));
+      const junction=world.pavedAreas.some(area=>polygonClearance(x,y,area.points)>-.35)||world.roads.some(other=>other!==road&&other.samples.some((p,j)=>j>0&&distanceToSegment(x,y,other.samples[j-1],p)<other.width/2+.35));
       if(!junction)segments.push({x,y,angle:Math.atan2(dy,dx),length:l+.03});
     }
   }
@@ -34,7 +34,8 @@ export function enrichScene({model,world,box,cylinder,line,M,addLabel}){
   const fenceRoad=world.roads.find(r=>r.id==='compost-outer');const fence=[];
   fenceRoad.samples.forEach((p,i)=>{
     const a=fenceRoad.samples[Math.max(0,i-1)],b=fenceRoad.samples[Math.min(i+1,fenceRoad.samples.length-1)];const dx=b[0]-a[0],dy=b[1]-a[1],l=Math.hypot(dx,dy)||1;
-    fence.push([p[0]-dy/l*6,p[1]+dx/l*6]);
+    const offset=fenceRoad.width/2+2.5;
+    fence.push([p[0]-dy/l*offset,p[1]+dx/l*offset]);
   });
   for(const h of [.45,.95,1.55,1.85])line(fence.map(p=>[...p,h]),'#777f6b',details);
   let since=10;

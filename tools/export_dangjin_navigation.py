@@ -12,7 +12,8 @@ ROOT=Path(__file__).resolve().parents[1]/'environments/dangjin'
 
 
 def raster(world, resolution=.25, radius=0.):
-    points=np.concatenate([r['samples'] for r in world['roads']])
+    areas=world.get('paved_areas',[])
+    points=np.concatenate([r['samples'] for r in world['roads']]+[a['points'] for a in areas])
     lo=np.floor((points.min(axis=0)-15)/resolution)*resolution
     hi=np.ceil((points.max(axis=0)+15)/resolution)*resolution
     width,height=np.ceil((hi-lo)/resolution).astype(int)
@@ -33,6 +34,18 @@ def raster(world, resolution=.25, radius=0.):
             sl,x,y=window(*(np.minimum(a,b)-clearance),*(np.maximum(a,b)+clearance))
             t=np.clip(((x-a[0])*delta[0]+(y-a[1])*delta[1])/max(float(delta@delta),1e-12),0,1)
             free[sl]|=(x-a[0]-t*delta[0])**2+(y-a[1]-t*delta[1])**2<=clearance**2
+    for area in areas:
+        polygon=np.asarray(area['points'],float)
+        sl,x,y=window(*polygon.min(axis=0),*polygon.max(axis=0))
+        inside=np.zeros((y.shape[0],x.shape[1]),bool)
+        distance_squared=np.full(inside.shape,np.inf)
+        for a,b in zip(polygon,np.roll(polygon,-1,axis=0)):
+            delta=b-a
+            if delta[1]:
+                inside^=((a[1]>y)!=(b[1]>y))&(x<delta[0]*(y-a[1])/delta[1]+a[0])
+            t=np.clip(((x-a[0])*delta[0]+(y-a[1])*delta[1])/max(float(delta@delta),1e-12),0,1)
+            distance_squared=np.minimum(distance_squared,(x-a[0]-t*delta[0])**2+(y-a[1]-t*delta[1])**2)
+        free[sl]|=inside&(distance_squared>=radius**2)
     for box in world['obstacles']+world['no_go_zones']:
         x0,y0=box['x'],box['y'];x1,y1=x0+box['length'],y0+box['width']
         # Occupy every cell intersecting a support, even when a 13 cm pole
@@ -56,9 +69,9 @@ def main():
         if radius:
             rgb=np.empty((*free.shape,3),np.uint8);rgb[:]=[233,231,222];rgb[free]=[52,105,91]
             Image.fromarray(rgb).save(out/'drivable-preview.png')
-    metadata={'schema':'dangjin.navigation.v1','frame':'site_xy','registered_to_gps':False,
+    metadata={'schema':'dangjin.navigation.v1','layout_revision':world.get('layout_revision'),'frame':'site_xy','registered_to_gps':False,
               'resolution_m':.25,'robot_radius_m':world['robot_radius_m'],
-              'occupancy':'unbuffered solid footprints + no-go + outside roads',
+              'occupancy':'unbuffered solid footprints + no-go + outside road ribbons and paved polygons',
               'robot-clearance':'already inflated for radius; do not inflate a second time',
               'limitations':'planar approximate layout; conservative solid barn footprints; no ground elevation/contact physics',
               'source':'../world.json'}

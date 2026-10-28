@@ -1,0 +1,22 @@
+{
+  "layout_revision": "2026-10-28-wider-perimeter-compost-apron",
+  "scope": "Geometry and footprint checks only; not a model-driven lap or real robot validation",
+  "outer_road_width_m": 12,
+  "dimensions_measured": false,
+  "paved_areas": [
+    "compost-west-apron"
+  ],
+  "route_samples": 5157,
+  "route_length_m": 1030.9001614516883,
+  "robot_radius_m": 0.65,
+  "min_center_clearance_m": 1.1349999999999998,
+  "min_footprint_margin_m": 0.48499999999999976,
+  "violations": [],
+  "source_sha256": {
+    "site.json": "b40bee4a26a34b0f66d4d6026baa4610c5490a557b120a14b18168daf56b024f",
+    "world-geometry.js": "bb92de7009ee732bcfe0b83de5eaf8aab801f95c482197d0702ddcd3df79e1b5",
+    "app.js": "5dad008979e8aad94e3142b3445cc188b53bbb072c974eb79843740dc19e2c59",
+    "scene-details.js": "8be2339d4d4e120c5d12d41a78a1afbee06a9e64774c569b1ee3f3e1d339a7b8",
+    "world.json": "4a628eb312bede1b972b73e15e585152335e219870e8171f10d05767282ec90a"
+  }
+}

@@ -31,10 +31,11 @@ def validated_command(value):
     return DriveDecision(**value)
 
 
-def limit_front_command(command, max_speed, max_yaw):
+def limit_front_command(command, max_speed, max_yaw, *, max_lateral=0.):
     factor = min(1., max_speed / command.vx if command.vx else 1.,
                  max_yaw / abs(command.yaw_rate) if command.yaw_rate else 1.)
-    return DriveDecision(command.vx * factor, 0., command.yaw_rate * factor, command.reason)
+    factor = min(factor, max_lateral / abs(command.vy) if command.vy else 1.)
+    return DriveDecision(command.vx * factor, command.vy * factor, command.yaw_rate * factor, command.reason)
 
 
 def front_drive_decision(command, mode, ages, max_age, camera_fault=None):

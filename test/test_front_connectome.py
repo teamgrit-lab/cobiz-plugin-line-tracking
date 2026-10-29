@@ -70,15 +70,15 @@ def test_road_task_uses_model_command_then_stops_on_stale_and_cancellation(monke
             '--front-connectome-url', 'http://127.0.0.1:8092/v1/front-road', '--front-connectome-sha256', '0' * 64)
 
 
-def test_road_only_model_rejects_sidewalk_task(monkeypatch):
+def test_surface_routing_rejects_ambiguous_union_task(monkeypatch):
     from test_apriltag_task_stop_ros import RosHarness, Message, debug
     ros = RosHarness(monkeypatch)
     monkeypatch.setattr(debug, '_segmenter_from_args', lambda _: NS(device=NS(type='cuda'), reset=lambda: None))
     def scenario(node):
         node.on_task_event(Message(json.dumps({'type': 'TASK_REGISTERED', 'action_name': 'LINE_TRACKING',
-            'task_id': 'wrong-surface', 'payload': {'duration_sec': 30, 'selected_mask': 2}})))
+            'task_id': 'wrong-surface', 'payload': {'duration_sec': 30, 'selected_mask': 0}})))
         assert ros.task_state()['type'] == 'TASK_REJECTED'
-        assert ros.task_state()['reason'] == 'front_connectome_requires_road'
+        assert ros.task_state()['reason'] == 'front_connectome_requires_road_or_sidewalk'
         assert node.tasks.active is None
     ros.run(scenario, '--path-mask-class', '1', '--path-planner', 'local',
             '--front-connectome-url', 'http://127.0.0.1:8092/v1/front-road', '--front-connectome-sha256', '0' * 64)

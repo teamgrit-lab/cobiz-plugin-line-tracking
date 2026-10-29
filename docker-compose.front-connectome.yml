@@ -1,4 +1,4 @@
-# Explicit opt-in for the trained FRONT camera package. No automatic activation.
+# Road uses the trained front policy; Sidewalk retains the configured legacy model.
 services:
   front-connectome:
     build:
@@ -26,13 +26,17 @@ services:
   actual-activate:
     depends_on:
       front-connectome:
-        condition: service_healthy
+        # Sidewalk must be able to start while the Road model is warming up.
+        # Road checks /health, identity and each inference response itself.
+        condition: service_started
     environment:
       SWIN_L_MODE: task-drive
+      # Default to Road when Cobiz omits selected_mask; explicit Sidewalk=2
+      # still routes to the legacy model even if the base .env uses union=0.
       SWIN_L_PATH_MASK_CLASS: "1"
       SWIN_L_INFERENCE_PROCESS: "false"
       LINE_TRACKING_PATH_PLANNER: local
-      LINE_TRACKING_MOTION_ENABLED: "false"
+      # Keep the existing motion setting for Sidewalk. Road bypasses it.
       LINE_TRACKING_FRONT_CONNECTOME_URL: http://127.0.0.1:8092/v1/front-road
       LINE_TRACKING_FRONT_CONNECTOME_SHA256: ${CONNECTUM_FRONT_SHA256:?set front_model.pt SHA-256}
       LINE_TRACKING_FRONT_CONNECTOME_TIMEOUT_SEC: ${LINE_TRACKING_FRONT_CONNECTOME_TIMEOUT_SEC:-1.0}

@@ -70,15 +70,15 @@ MPLBACKEND=Agg .cache/connectome-venv/bin/python tools/dangjin_sim_server.py \
 
 ## Jetson으로 옮긴 뒤 연결
 
-Jetson 저장소와 Compose 실행 위치는 `~/dev/danjin-a2/cobiz-plugin-line-tracking/`입니다.
+Jetson 저장소와 Compose 실행 위치는 `~/dev/dangjin-a2/cobiz-plugin-line-tracking/`입니다.
 기존 `models/` 안에 버전별 모델 패키지 폴더를 둡니다. Mac에서 복사하는 예이며,
 이 문서는 명령을 자동 실행하지 않습니다.
 
 ```sh
 ssh dangjin-a2 \
-  'mkdir -p ~/dev/danjin-a2/cobiz-plugin-line-tracking/models/front-road-v2-road-only-20261027'
+  'mkdir -p ~/dev/dangjin-a2/cobiz-plugin-line-tracking/models/front-road-v2-road-only-20261027'
 rsync -av /Volumes/MY_HDD/connectum_models/front-road-v2-road-only-20261027/ \
-  dangjin-a2:~/dev/danjin-a2/cobiz-plugin-line-tracking/models/front-road-v2-road-only-20261027/
+  dangjin-a2:~/dev/dangjin-a2/cobiz-plugin-line-tracking/models/front-road-v2-road-only-20261027/
 ```
 
 Jetson 저장소에도 이 변경의 `tools/`, `Dockerfile.connectome`,
@@ -102,7 +102,9 @@ SWIN_L_BACKEND=pytorch
 SWIN_L_TRT_AUTO_BUILD=false
 ```
 
-`COMPOSE_FILE`로 두 Compose 파일을 함께 읽고, 지정한 모델 폴더를 추론 컨테이너의
+`docker-compose.override.yml`에 기존 장비 설정이 있다면
+`COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:docker-compose.front-connectome.yml`처럼
+전면 설정을 마지막에 지정합니다. `COMPOSE_FILE`로 지정한 Compose 파일들을 함께 읽고, 지정한 모델 폴더를 추론 컨테이너의
 `/front-model`에 읽기 전용으로 연결합니다. 실제 구독 토픽은 `SWIN_L_IMAGE_TOPIC`이
 결정합니다. `actual-activate`의 기본 토픽은 `/a2/front_camera/image_raw`이므로
 360p 입력을 사용하려면 위 값을 명시합니다. 토픽의 `360p`는 해상도이며 360도
@@ -113,10 +115,11 @@ SWIN_L_TRT_AUTO_BUILD=false
 먼저 빌드합니다. `depends_on`은 서비스 시작 순서를 지정합니다.
 
 ```sh
-cd ~/dev/danjin-a2/cobiz-plugin-line-tracking
+cd ~/dev/dangjin-a2/cobiz-plugin-line-tracking
 docker compose config --quiet
 docker compose build actual-activate
-docker compose up -d --build front-connectome
+docker compose build front-connectome
+docker compose up -d --no-build front-connectome
 ```
 
 모델 초기화가 끝난 뒤 단독 추론 서비스의 상태를 확인합니다.
@@ -129,15 +132,41 @@ curl http://127.0.0.1:8092/health
 전체 서비스를 시작합니다.
 
 ```sh
-docker compose up -d --build
+docker compose up -d --no-build actual-activate front-connectome
 ```
 
-Road 모드 `1`, `--path-planner local`, 별도 inference process 및 motion 보정 비활성 상태에서 사용합니다. 로컬 경로 추정은 표시와 기존 장애물 검사에 쓰이며 속도·회전은 새 행동 모델에서 가져옵니다. 잘못된 모드, 응답 해시 불일치, 오래된 카메라 영상, 서비스 오류, 작업 취소는 주행 허용 조건을 만족하지 못합니다. 기존 작업 권한·AprilTag·LiDAR 정지 검사는 유지합니다.
+Cobiz `LINE_TRACKING` 작업의 `payload.selected_mask`로 모델과 제어기를 선택합니다.
+
+| selected_mask | 인식 | 속도·회전 제어 |
+| --- | --- | --- |
+| `1` (Road) | 전면 커넥톰 | 학습된 행동 출력층 |
+| `2` (Sidewalk) | 기존 `SWIN_L_PROFILE` 모델·체크포인트 | 기존 인도 경로 추종·제어기 |
+
+이 구성에서는 혼합 모드 `0`을 거부합니다. 전면 Compose 설정은 기본 모드를 `1`로
+지정하므로 값이 생략되면 Road를 사용합니다. 명시적인 `1` 또는 `2`를 보내면 작업마다 자동으로 전환되므로
+컨테이너 재시작이 필요하지 않습니다. 이전 작업을 종료하고 제어 해제 시간이 지난 뒤
+다음 작업을 시작합니다. 전환 시 영상 큐, 경로, 이전 명령과 모델 이력을 초기화하고
+새 작업에 도착한 영상의 결과만 사용합니다.
+
+`--path-planner local`, 별도 inference process 비활성 상태에서 사용합니다. Sidewalk의
+기존 모델 설정과 해시 검증은 유지하며, `LINE_TRACKING_MOTION_ENABLED`가 켜져 있으면
+기존 움직임 보정을 Sidewalk에 적용합니다. Road의 속도·회전에는 이 보정을 적용하지
+않습니다. Road의 로컬 경로 추정은 표시와 기존 장애물 검사에만 사용합니다.
+
+기존 Sidewalk 모델은 시작 시 한 번 로드하고, 전면 서비스는 Road 작업의 첫 영상에서
+연결합니다. Compose는 전면 컨테이너의 시작만 기다리므로 전면 모델이 초기화 중이어도
+Sidewalk는 시작할 수 있습니다. 전면 모델 응답 오류·해시 불일치 시 해당 Road 작업을
+정지·중단하고 이후 Sidewalk 작업을 계속 받을 수 있습니다. Road를 기존 모델로 자동
+대체하지 않습니다. 오래된 영상, 작업 취소, 기존 작업 권한·AprilTag·LiDAR 검사는 유지합니다.
+
+모델 두 개의 GPU 메모리를 사용할 수 있으므로 실제 Jetson 메모리·처리 속도는 별도
+확인해야 합니다. 이 전환 기능의 ROS 테스트는 모의 센서/모델을 사용하며 실기 주행
+성공을 뜻하지 않습니다.
 
 전면 영상은 480×270으로 변환되어 `http://127.0.0.1:8092/v1/front-road`로 전달됩니다.
 서비스 시작 후 Road 모드의 `LINE_TRACKING` 작업을 수락하면 추론과 추종을 수행합니다.
 이 문서 작성 과정에서는 Jetson 서비스를 시작하거나 실기 주행하지 않았습니다.
-기본 Compose와 기존 R50 모드는 바뀌지 않습니다.
+전면 override를 사용하지 않는 기본 Compose 실행 방식은 유지됩니다.
 
 ### 다른 모델로 교체
 
@@ -157,7 +186,7 @@ shasum -a 256 /Volumes/MY_HDD/connectum_models/새모델폴더/front_model.pt
 프로세스가 자동으로 모델을 다시 읽지는 않으므로 컨테이너를 다시 생성합니다.
 
 ```sh
-docker compose up -d --build --force-recreate front-connectome actual-activate
+docker compose up -d --no-build --force-recreate front-connectome actual-activate
 ```
 
 ### Docker 없이 패키지 추론

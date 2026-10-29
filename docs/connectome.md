@@ -12,7 +12,7 @@ R50을 다시 실행하지 않으며 A2 이동 API 발행자는 기존 line-trac
 | Mode 0 자동 | 처음 선택한 노면이 차도면 커넥톰, 인도면 로컬 | 기존 사다리꼴 |
 
 Mode 0은 한 작업 안에서 노면·백엔드를 자동으로 바꾸지 않는다. 작업 취소·AprilTag·
-LiDAR 정지 및 활성화된 odom/IMU 보정·20Hz 명령 제한은 두 방식에 공통으로 적용된다.
+LiDAR 정지 검사는 두 방식에 공통으로 적용된다.
 `LINE_TRACKING_PATH_PLANNER=local`은 모든 모드에서 종전 로컬 경로를 사용한다.
 아래 Flyvis 마스크 검사·실패 정지 정책은 커넥톰을 사용하는 차도 경로에 해당한다.
 
@@ -93,12 +93,6 @@ LiDAR 정지 및 활성화된 odom/IMU 보정·20Hz 명령 제한은 두 방식�
 SHA-256·회로 크기·추론 프레임 수와 `trained_waypoint_head=false`도 표시한다.
 HTTP 요청은 사용 중인 차도 모드만 지정하며 다른 모드 응답으로 해당 경로를 거부하지 않는다.
 
-## Odom/IMU 명령 세분화
-
-`LINE_TRACKING_MOTION_ENABLED=true`로 촬영 시각부터 현재까지의 이동·회전을 보정하고
-20Hz로 명령을 갱신할 수 있다. 입력은 `/dog_odom`, `/dog_imu_raw`이며, frame 변환이
-없거나 센서가 만료되면 정지한다. 설정·검증은 [motion-tracking.md](motion-tracking.md)를 참고한다.
-
 ## Jetson 지연 최적화
 
 CUDA/PyTorch R50에서는 `SWIN_L_CUDA_GRAPH=true`, CUDA Flyvis에서는
@@ -126,12 +120,11 @@ hazard는 새로 계산하며 Mode 0과 같은 표면의 후보 평가를 공유
 `path_planner.timing`은 Flyvis/표면 계산 시간을 제공한다. 이 수치와 source 나이로
 판정하며 단순 명령 timer 주파수로 인식 성능을 판단하지 않는다.
 
-실행 예시(장비에서 확인한 frame 변환은 별도 설정):
+실행 예시:
 
 ```dotenv
 SWIN_L_CUDA_GRAPH=true
 CONNECTOME_CUDA_GRAPH=true
-LINE_TRACKING_MOTION_ENABLED=true
 SWIN_L_INFERENCE_HZ=2.5
 SWIN_L_TELEMETRY_HZ=5.0
 SWIN_L_INFERENCE_PROCESS=true
@@ -149,7 +142,7 @@ SWIN_L_INFERENCE_PROCESS=true
 
 `SWIN_L_INFERENCE_PROCESS=true`는 R50·HTTP·현재 마스크 재검증을 spawn 자식
 프로세스에서 실행한다. 부모는 최신 프레임 하나만 보내고 응답의 generation/sequence를
-검사한 뒤 기존 task/epoch/source-age 검사를 적용한다. 자식은 ROS/이동 발행자를
+검사한 뒤 기존 task/generation/source-age 검사를 적용한다. 자식은 ROS/이동 발행자를
 만들지 않는다. CUDA graph warmup은 ready 이전에 수행하고 모델의 시간 이력은
 초기화한다. 자식 오류·종료·응답 마감 실패는 추론 오류이며 fallback하지 않는다.
 부모의 센서 수신/20Hz 정지 검사는 계산 응답을 기다리지 않는다.

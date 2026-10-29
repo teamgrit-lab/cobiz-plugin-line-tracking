@@ -36,7 +36,6 @@ services:
       SWIN_L_PATH_MASK_CLASS: "1"
       SWIN_L_INFERENCE_PROCESS: "false"
       LINE_TRACKING_PATH_PLANNER: local
-      # Keep the existing motion setting for Sidewalk. Road bypasses it.
       LINE_TRACKING_FRONT_CONNECTOME_URL: http://127.0.0.1:8092/v1/front-road
       LINE_TRACKING_FRONT_CONNECTOME_SHA256: ${CONNECTUM_FRONT_SHA256:?set front_model.pt SHA-256}
       LINE_TRACKING_FRONT_CONNECTOME_TIMEOUT_SEC: ${LINE_TRACKING_FRONT_CONNECTOME_TIMEOUT_SEC:-1.0}

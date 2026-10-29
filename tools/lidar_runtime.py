@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import replace
 import threading
 
 import cv2
@@ -18,7 +17,6 @@ from swin_l_drive_control import decide_drive
 class LidarRuntime:
     def __init__(
         self, args, obstacle_config, avoidance_config, lookup=None, drive_config=None,
-        motion=None,
     ):
         self.args, self.config, self.avoidance = args, obstacle_config, avoidance_config
         if args.path_frame_id != "base_link":
@@ -34,7 +32,6 @@ class LidarRuntime:
             self.road_controller = RoadObjectAvoidanceController(avoidance_config, obstacle_config, settings)
         self.lookup = lookup
         self.drive_config = drive_config
-        self.motion = motion
         self.base = parse_transform(args.lidar_to_base_transform)
         self.camera = parse_transform(args.base_to_camera_transform)
         self.camera_frame = None
@@ -176,14 +173,6 @@ class LidarRuntime:
         )
         self.camera = camera  # Cache ONLY the fixed sensor extrinsic.
         scan = self.scan
-        if self.motion is not None:
-            from motion_tracking import lift
-            # Both the old scan and old image support are queried in today's
-            # body frame. Keep original source stamps/arrival times for gates.
-            current_from_scan = self.motion.relative(scan.stamp_ns, clock_ns, now, clock_ns)
-            scan = self._compensate_scan(scan, current_from_scan)
-            image_from_current = self.motion.relative(clock_ns, stamp_ns(header), now, clock_ns)
-            camera = camera @ lift(image_from_current)
         allowed, visible = camera_region(
             mask,
             matching[-1],
@@ -209,10 +198,10 @@ class LidarRuntime:
         if not (0 <= now-arrival <= config.max_age_sec and
                 -.05 <= (clock_ns-stamp_ns(header))/1e9 <= config.max_age_sec):
             raise ValueError('road_object_detections_stale')
-        if self.motion is None and abs(scan.stamp_ns-stamp_ns(header))/1e9 > config.max_sync_sec:
+        if abs(scan.stamp_ns-stamp_ns(header))/1e9 > config.max_sync_sec:
             raise ValueError('road_object_lidar_unsynchronized')
         info, camera = self.projection
-        key = (scan.stamp_ns, stamp_ns(header), id(self.object_reference), clock_ns if self.motion else None)
+        key = (scan.stamp_ns, stamp_ns(header), id(self.object_reference))
         if self.object_target_cache is None or self.object_target_cache[0] != key:
             targets = associate_objects(self.object_reference, scan, info, camera, mask, config)
             self.object_target_cache = key, targets
@@ -220,28 +209,6 @@ class LidarRuntime:
             targets = self.object_target_cache[1]
         self.road_controller.set_objects(targets, stamp_ns(header))
         self.metrics['road_objects'] = targets
-
-    def _compensate_scan(self, scan, matrix):
-        from motion_tracking import move_points
-        # Inverse query with conservative four-cell sampling: rotation must
-        # never turn unknown cells into observed free space or erase costs.
-        old = move_points(self.config.centers().reshape(-1, 2), np.linalg.inv(matrix))
-        grid = (old+[self.config.rear_m, self.config.half_width_m])/self.config.resolution_m
-        lo, hi = np.floor(grid).astype(int), np.ceil(grid).astype(int)
-        valid = ((lo >= 0).all(axis=1) & (hi < self.config.shape).all(axis=1))
-        observed = np.zeros(len(old), bool)
-        costs = np.ones(len(old), scan.costs.dtype)
-        corners = [(a, b) for a in (lo[:, 0], hi[:, 0]) for b in (lo[:, 1], hi[:, 1])]
-        observed[valid] = np.all([scan.observed[a[valid], b[valid]] for a, b in corners], axis=0)
-        costs[valid] = np.max([scan.costs[a[valid], b[valid]] for a, b in corners], axis=0)
-        origin = scan.origin_base.copy(); origin[:2] = move_points(origin[None, :2], matrix)[0]
-        up = scan.up_base.copy(); up[:2] = matrix[:2, :2] @ up[:2]
-        xyz = None if scan.obstacle_xyz is None else scan.obstacle_xyz.copy()
-        if xyz is not None:
-            xyz[:, :2] = move_points(xyz[:, :2], matrix)
-        return replace(scan, points=move_points(scan.points, matrix), obstacle_xyz=xyz,
-                       observed=observed.reshape(self.config.shape), costs=costs.reshape(self.config.shape),
-                       origin_base=origin, up_base=up)
 
     def apply(self, nominal, path, mask_class, now, clock_ns, *, preserve_nominal=False):
         with self.lock:
@@ -257,7 +224,7 @@ class LidarRuntime:
                 scan, region = self._context(mask_class, now, clock_ns)
                 if self.controller is self.road_controller:
                     self._road_objects(scan, now, clock_ns)
-                if self.drive_config is not None and self.motion is None and not preserve_nominal:
+                if self.drive_config is not None and not preserve_nominal:
                     nominal = decide_drive(
                         path,
                         camera_age_sec=0.0,
@@ -282,7 +249,7 @@ class LidarRuntime:
             except (ValueError, AttributeError, TypeError, cv2.error) as error:
                 reason = (
                     str(error)
-                    if str(error).startswith(("lidar_", "avoidance_", "motion_", "road_object_"))
+                    if str(error).startswith(("lidar_", "avoidance_", "road_object_"))
                     else "avoidance_processing_error"
                 )
                 result = self.controller.stop(reason)

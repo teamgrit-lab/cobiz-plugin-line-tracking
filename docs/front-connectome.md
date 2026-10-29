@@ -102,9 +102,8 @@ SWIN_L_BACKEND=pytorch
 SWIN_L_TRT_AUTO_BUILD=false
 ```
 
-`docker-compose.override.yml`에 기존 장비 설정이 있다면
-`COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:docker-compose.front-connectome.yml`처럼
-전면 설정을 마지막에 지정합니다. `COMPOSE_FILE`로 지정한 Compose 파일들을 함께 읽고, 지정한 모델 폴더를 추론 컨테이너의
+위 `COMPOSE_FILE`은 기본 파일과 전면 커넥톰 파일을 명시적으로 선택합니다.
+장비별 값은 `.env`에 설정합니다. 지정한 모델 폴더를 추론 컨테이너의
 `/front-model`에 읽기 전용으로 연결합니다. 실제 구독 토픽은 `SWIN_L_IMAGE_TOPIC`이
 결정합니다. `actual-activate`의 기본 토픽은 `/a2/front_camera/image_raw`이므로
 360p 입력을 사용하려면 위 값을 명시합니다. 토픽의 `360p`는 해상도이며 360도
@@ -149,9 +148,9 @@ Cobiz `LINE_TRACKING` 작업의 `payload.selected_mask`로 모델과 제어기�
 새 작업에 도착한 영상의 결과만 사용합니다.
 
 `--path-planner local`, 별도 inference process 비활성 상태에서 사용합니다. Sidewalk의
-기존 모델 설정과 해시 검증은 유지하며, `LINE_TRACKING_MOTION_ENABLED`가 켜져 있으면
-기존 움직임 보정을 Sidewalk에 적용합니다. Road의 속도·회전에는 이 보정을 적용하지
-않습니다. Road의 로컬 경로 추정은 표시와 기존 장애물 검사에만 사용합니다.
+기존 모델 설정과 해시 검증은 유지합니다. Sidewalk는 기존 경로 추종 제어기로,
+Road는 학습한 속도·회전 출력으로 주행합니다. Road의 로컬 경로 추정은 표시와
+기존 장애물 검사에만 사용합니다.
 
 기존 Sidewalk 모델은 시작 시 한 번 로드하고, 전면 서비스는 Road 작업의 첫 영상에서
 연결합니다. Compose는 전면 컨테이너의 시작만 기다리므로 전면 모델이 초기화 중이어도

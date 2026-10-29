@@ -62,7 +62,6 @@ class RosHarness:
         # These scenarios isolate the original camera/task/AprilTag contract.
         # The obstacle suite enables and feeds the additional sensors.
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false")
-        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_MOTION_ENABLED", "false")
         # Legacy lifecycle/hold scenarios select the former policy explicitly;
         # test_path_loss_recovery_ros covers the new default recovery policy.
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "false")

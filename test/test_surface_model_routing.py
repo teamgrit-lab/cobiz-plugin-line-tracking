@@ -186,49 +186,35 @@ def test_late_road_reply_or_failure_cannot_affect_next_sidewalk(monkeypatch, old
     ros.run(scenario, *FRONT_ARGS)
 
 
-def test_motion_remains_active_for_sidewalk_and_does_not_gate_road(monkeypatch):
-    from test_motion_tracking_ros import setup, sensors, IDENTITY
+def test_old_motion_env_does_not_gate_road_or_sidewalk(monkeypatch):
+    from test_tracking_without_odometry_ros import setup
     ros = setup(monkeypatch)
     setup_models(monkeypatch, ros)
 
     def scenario(node):
-        start(ros, 1, 'road-without-odom')
-        ros.now = 2.1
-        image(ros)
-        wait_for_count(ros, 1)
-        assert json.loads(ros.published[SPORT][-1].parameter) == {'x': .12, 'y': 0., 'z': -.04}
-        assert not ros.metrics()['motion_tracking']['enabled']
-        road_stamp = ros.clock_ns()
-        ros.now += .05
-        node.publish_state()
-        published = ros.published['/line_tracking/swin_l/local_path'][-1]
-        assert debug._stamp_ns(published.header) == road_stamp
-        cancel(ros, 'road-without-odom')
-        start(ros, 2, 'sidewalk-needs-odom')
-        ros.now += 2.1
-        image(ros)
-        wait_for_count(ros, 2)
-        assert ros.metrics()['motion_tracking']['enabled']
-        assert ros.metrics()['drive_reason'] == 'motion_waiting_for_odom'
-        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
-        sensors(node, ros, ros.now + .05)
-        image(ros)
-        wait_for_count(ros, 3)
-        sensors(node, ros, ros.now + .05)
-        node.publish_state()
-        assert json.loads(ros.published[SPORT][-1].parameter)['x'] > 0
-        ros.now += .3
-        node.publish_state()
-        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
-        assert ros.metrics()['drive_reason'] == 'motion_odom_stale'
+        for mode, task_id in [(1, 'road-without-odom'), (2, 'sidewalk-without-odom')]:
+            start(ros, mode, task_id)
+            ros.now += 2.1
+            before = ros.metrics()['inference_count'] if ros.published.get('/line_tracking/swin_l/metrics') else 0
+            image(ros)
+            wait_for_count(ros, before + 1)
+            command = json.loads(ros.published[SPORT][-1].parameter)
+            assert command['x'] > 0
+            if mode == 1:
+                assert command == {'x': .12, 'y': 0., 'z': -.04}
+            assert 'motion_tracking' not in ros.metrics()
+            ros.now += .4
+            node.publish_state()
+            assert json.loads(ros.published[SPORT][-1].parameter) == command
+            assert '/dog_odom' not in ros.subscriptions
+            assert '/dog_imu_raw' not in ros.subscriptions
+            cancel(ros, task_id)
 
-    ros.run(scenario, *FRONT_ARGS, '--motion-enabled',
-            '--motion-base-from-child-transform', IDENTITY,
-            '--motion-base-from-imu-transform', IDENTITY)
+    ros.run(scenario, *FRONT_ARGS)
 
 
 def test_sidewalk_model_pin_is_still_required_with_front_routing(monkeypatch):
-    ros = RosHarness(monkeypatch)
+    RosHarness(monkeypatch)
     args = debug.parse_args(['task-drive', *FRONT_ARGS])
     args.model_id = 'unexpected-unpinned-model'
     with pytest.raises(ValueError, match='pinned checkpoint'):

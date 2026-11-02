@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from '../environments/dangjin/vendor/three.module.js';
-import {WalkingCameraSway,applyCameraSway} from '../environments/dangjin/camera-sway.js';
+import {WalkingCameraSway,applyCameraSway,setSurroundView} from '../environments/dangjin/camera-sway.js';
 
 const walking={vx:.4,vy:0,yaw_rate:0},stopped={vx:0,vy:0,yaw_rate:0};
 test('walking reaches both signs of the requested 5 degree amplitude, including 10 Hz capture',()=>{
@@ -56,4 +56,19 @@ test('invalid motion/configuration is rejected instead of producing NaN camera f
     assert.throws(()=>new WalkingCameraSway(config));
   const sway=new WalkingCameraSway();
   assert.throws(()=>sway.advance(-1,walking));assert.throws(()=>sway.advance(.1,{vx:NaN}));
+});
+
+test('360 lenses share a tilted rig with opposite front/rear pitch and side roll',()=>{
+  const camera=new THREE.PerspectiveCamera();camera.lookAt(1,0,0);
+  applyCameraSway(camera,{enabled:true,pitch_deg:5});const rig=camera.quaternion.clone();
+  const directions=[];
+  for(let sector=0;sector<4;sector++){
+    setSurroundView(camera,rig,sector);
+    directions.push(camera.getWorldDirection(new THREE.Vector3()));
+  }
+  assert.ok(Math.abs(directions[0].y-Math.sin(5*Math.PI/180))<1e-9);
+  assert.ok(directions[0].clone().add(directions[2]).length()<1e-9);
+  assert.ok(Math.abs(directions[1].y)<1e-9);
+  assert.ok(directions[1].clone().add(directions[3]).length()<1e-9);
+  assert.ok(directions[1].z<-.99);
 });

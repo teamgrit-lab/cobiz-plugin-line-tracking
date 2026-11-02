@@ -41,7 +41,10 @@ class DriveReadout(nn.Module):
 
 
 class ConnectomeDrivePolicy:
-    def __init__(self,path,perception,device='cpu'):
+    def __init__(self,path,perception,device='cpu',*,max_speed_mps=.8):
+        if not .1 <= max_speed_mps <= 1.:
+            raise ValueError('simulation maximum speed must be 0.1 to 1.0 m/s')
+        self.max_speed_mps=float(max_speed_mps)
         path=Path(path);checkpoint=torch.load(path/'drive-readout.pt',map_location='cpu',weights_only=True)
         if checkpoint.get('schema')!='dangjin.drive_readout.vision.v2':
             raise ValueError('vision-only policy checkpoint required; retrain without goal inputs')
@@ -54,6 +57,7 @@ class ConnectomeDrivePolicy:
             'road_sha256':checkpoint['road_sha256'],'encoder_sha256':perception.details['encoder_sha256'],
             'input':'four damaged Flyvis camera road masks only',
             'outputs':['vx','yaw_rate','learned_stop'],'runtime_planner':False,'runtime_pure_pursuit':False,
+            'max_speed_mps':self.max_speed_mps,
             'emergency_stop_override':False,'fault_flag_input':False,'pose_input':False,
             'map_assistance':False,'goal_input':False,'camera_body_fixed':True,
             'connectome_frozen':True,'simulation_only':True,
@@ -66,7 +70,7 @@ class ConnectomeDrivePolicy:
             action,logits=self.model(torch.as_tensor(pixels[None],device=self.device))
             action=action[0].cpu().numpy();prob=logits.softmax(1)[0].cpu().numpy()
         stopped=bool(prob[1]>prob[0])
-        command=DriveDecision(0. if stopped else float(.8*action[0]),0.,0. if stopped else float(.35*action[1]),
+        command=DriveDecision(0. if stopped else self.max_speed_mps*float(action[0]),0.,0. if stopped else float(.35*action[1]),
             'neural_wait' if stopped else 'neural_drive')
         return command,{'ms':(time.perf_counter()-start)*1000,'stop_probability':float(prob[1]),
             'raw_action':action.tolist(),'override':False}

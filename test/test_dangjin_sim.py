@@ -16,6 +16,7 @@ from local_path import LocalPathConfig
 from dangjin_sim_server import SimulationService, forbidden_path
 from export_dangjin_navigation import raster
 from dangjin_patrol import Patrol,track_camera_path
+from surround_camera import load_profile,profile_sha256
 
 
 class TestEncoder:
@@ -40,7 +41,7 @@ def png(image):return base64.b64encode(cv2.imencode('.png',image)[1]).decode()
 def request():
     mask=np.ones((270,480),np.uint8)
     return json.loads(json.dumps(dict(schema='line_tracking.connectome.v1',stream_id='test',request_id='test:1',stamp_sec=1.,
-        requested_modes=[1],pose={'x':220,'y':184,'heading':0},speed_mps=.5,
+        requested_modes=[1],pose={'x':220,'y':184,'heading':0},speed_mps=.5,camera_profile_sha256=profile_sha256(load_profile()),
         local_config=asdict(LocalPathConfig()),planner_config=asdict(PlannerConfig()),
         image_png=png(np.zeros((270,480,3),np.uint8)))))
 
@@ -194,6 +195,39 @@ def test_vision_only_patrol_never_computes_a_target(monkeypatch):
     p=patrol.points[0]
     state=patrol.update({'x':float(p[0]),'y':float(p[1]),'heading':0.})
     assert 'target_site' not in state and not state['complete']
+
+
+@pytest.mark.parametrize('stopped',[False,True])
+def test_surround_speed_ceiling_only_changes_forward_scale(stopped):
+    import torch
+    from connectome_policy import ConnectomeDrivePolicy
+    actor=ConnectomeDrivePolicy.__new__(ConnectomeDrivePolicy)
+    actor.device='cpu'
+    actor.model=lambda _: (torch.tensor([[1.,.5]]),torch.tensor([[-20.,20.] if stopped else [20.,-20.]]))
+    actor.max_speed_mps=.8
+    old,_=actor.infer(np.ones((4,270,480),np.uint8))
+    actor.max_speed_mps=1.
+    new,_=actor.infer(np.ones((4,270,480),np.uint8))
+    assert new.vx==(0. if stopped else 1.)
+    assert new.yaw_rate==old.yaw_rate and new.vy==old.vy and new.reason==old.reason
+
+
+@pytest.mark.parametrize('stopped',[False,True])
+def test_front_simulation_speed_does_not_modify_deployed_model_config(stopped):
+    import torch
+    from front_connectome import FrontConnectome,FrontSimulationPolicy
+    model=FrontConnectome.__new__(FrontConnectome)
+    model.device='cpu';model.details={}
+    model.config={'max_speed_mps':.8,'max_yaw_rate_radps':.35,'stop_threshold':.5}
+    model.actor=lambda _: (torch.tensor([[1.,-.5]]),torch.tensor([[-20.,20.] if stopped else [20.,-20.]]))
+    masks=np.ones((1,270,480),np.uint8)
+    original,_=model.act(masks[0])
+    policy=FrontSimulationPolicy(model,max_speed_mps=1.)
+    command,_=policy.infer(masks)
+    assert command.vx==(0. if stopped else 1.)
+    assert (command.yaw_rate,command.vy,command.reason)==(original.yaw_rate,original.vy,original.reason)
+    assert model.config['max_speed_mps']==.8
+    assert policy.details['max_speed_mps']==1.
 
 
 def test_navigation_export_uses_same_exclusions_and_radius():

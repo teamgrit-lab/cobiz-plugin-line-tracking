@@ -41,6 +41,8 @@ def main():
         targets.append(cv2.resize(mask,(176,96),interpolation=cv2.INTER_NEAREST))
     revisions={m['layout_revision'] for m in metadata}
     if len(revisions)!=1:raise ValueError('mixed world revisions')
+    camera_profiles={m.get('camera_profile_sha256') for m in metadata}
+    if len(camera_profiles)!=1:raise ValueError('mixed camera input profiles; recollect a complete dataset')
     dataset_sha=digest.hexdigest();cache=a.data/'neural-features.npz'
     encoder=FlyvisFlow(a.bundle,BUNDLE_SHA256,'cpu');extract=CircuitFeatures(encoder)
     if cache.exists() and str(np.load(cache)['dataset_sha256'])==dataset_sha:
@@ -104,7 +106,7 @@ def main():
         'output_cell_types':extract.cell_types,'raw_image_skip_connection':False,'runtime_ground_truth':False,
         'seed':47,'train_views':train_images,'heldout_views':len(valid),'negative_training_views':8,
         'split':'pose_group % 5 == 0 held out; all four directions grouped by pose',
-        'layout_revision':next(iter(revisions)),'dataset_sha256':dataset_sha,
+        'layout_revision':next(iter(revisions)),'camera_profile_sha256':next(iter(camera_profiles)),'dataset_sha256':dataset_sha,
         'selected_epoch':selected,'threshold':threshold,'per_view_heldout':per_view,'activity_ablation':ablation,
         'history':history,'wall_s':time.monotonic()-started,
         'scope':'held-out views in this synthetic scene only; no real-world road-detection validation'}

@@ -32,3 +32,9 @@ export function applyCameraSway(camera,sample){
   if(sample.enabled)camera.rotateX(sample.pitch_deg*Math.PI/180);
   camera.updateMatrixWorld();
 }
+
+// Four lenses share one tilted rig. Side views acquire roll, not another pitch.
+export function setSurroundView(camera,rigQuaternion,sector){
+  if(!Number.isInteger(sector)||sector<0||sector>3)throw Error('Invalid camera sector');
+  camera.quaternion.copy(rigQuaternion);camera.rotateY(sector*Math.PI/2);camera.updateMatrixWorld();
+}

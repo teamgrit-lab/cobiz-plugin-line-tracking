@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { WorldGeometry, barnSilos } from './world-geometry.js';
 import { enrichScene, roadTexture } from './scene-details.js';
 import { RobotSimulation } from './robot-sim.js';
+import { camera360ProfileHash } from './camera360.js';
 
 const $ = (id) => document.getElementById(id);
 const offline = window.DANGJIN_OFFLINE;
@@ -517,13 +518,17 @@ function animate(now){
 }
 async function loadJson(path){const canonical=path.replace('./evidence/../','./');if(offline?.json[canonical])return offline.json[canonical];const response=await fetch(path);if(!response.ok)throw new Error(`${path}: HTTP ${response.status}`);return response.json();}
 try{
-  let october,september;
-  [data,october,september]=await Promise.all([loadJson('./site.json'),loadJson('./evidence/manifest.json'),loadJson('./evidence-september/manifest.json')]);
+  let october,september,cameraProfile;
+  [data,october,september,cameraProfile]=await Promise.all([loadJson('./site.json'),loadJson('./evidence/manifest.json'),loadJson('./evidence-september/manifest.json'),loadJson('./camera360-profile.json')]);
+  const cameraProfileHash=await camera360ProfileHash(cameraProfile);
   // Retain original source directories while sharing the gallery implementation.
   for(const entry of september.frames)entry.image=`../evidence-september/${entry.image}`;
   for(const entry of september.clouds)entry.points=`../evidence-september/${entry.points}`;
   recordings={october,september};manifest=october;world=new WorldGeometry(data);
   buildSite(data);connectUI();resize();camera.position.copy(V(405,-430,460));controls.target.copy(V(65,88,0));controls.update();
-  sim=new RobotSimulation({scene,renderer,camera,controls,model,roofs,vegetation,world,onOpen:()=>{if(walking)setWalking(false);setMode('model');fly=null;tour=false;updateTour();$('selection').hidden=true;outline.visible=false;}});
+  sim=new RobotSimulation({scene,renderer,camera,controls,model,roofs,vegetation,world,cameraProfile,cameraProfileHash,onOpen:()=>{if(walking)setWalking(false);setMode('model');fly=null;tour=false;updateTour();$('selection').hidden=true;outline.visible=false;}});
   $('loading').hidden=true;requestAnimationFrame(animate);
 }catch(error){$('loading').textContent=`환경을 불러오지 못했습니다: ${error.message}. README의 로컬 서버 실행 방법을 확인해 주세요.`;console.error(error);}
+
+// Local browser verification imports this live binding to capture sensor frames.
+export {sim};

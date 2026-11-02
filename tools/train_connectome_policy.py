@@ -40,13 +40,19 @@ def main():
     p.add_argument('--data',type=Path,default=Path('.cache/dangjin-policy-training'))
     p.add_argument('--output',type=Path,default=Path('.cache/dangjin-connectome-policy-vision'))
     p.add_argument('--epochs',type=int,default=120)
+    p.add_argument('--road-model',type=Path,default=Path('.cache/dangjin-connectome-road'))
     a=p.parse_args();start=time.monotonic();rng=np.random.default_rng(731);torch.manual_seed(731)
     torch.set_num_threads(2);cv2.setNumThreads(2)
     metadata=[json.loads(f.read_text()) for f in sorted(a.data.glob('[0-9][0-9][0-9][0-9].json'))]
     if len(metadata)!=768:raise ValueError(f'768 four-view examples required, got {len(metadata)}')
-    route=np.asarray(json.loads(Path('environments/dangjin/world.json').read_text())['perimeter_route'])
+    world=json.loads(Path('environments/dangjin/world.json').read_text())
+    if {m['layout_revision'] for m in metadata}!={world['layout_revision']}:
+        raise ValueError('policy training data must match the current map revision')
+    camera_profiles={m.get('camera_profile_sha256') for m in metadata}
+    if len(camera_profiles)!=1:raise ValueError('mixed camera input profiles; recollect a complete dataset')
+    route=np.asarray(world['perimeter_route'])
     targets=np.asarray([teacher(m,route) for m in metadata])
-    road_path=Path('.cache/dangjin-connectome-road');road_sha=hashlib.sha256((road_path/'road-readout.pt').read_bytes()).hexdigest()
+    road_path=a.road_model;road_sha=hashlib.sha256((road_path/'road-readout.pt').read_bytes()).hexdigest()
     cache=a.data/'inferred-road-masks.npz'
     digest=hashlib.sha256()
     for m in metadata:
@@ -70,7 +76,7 @@ def main():
     torch.set_default_device('cpu');model=DriveReadout().to(device)
     optimizer=torch.optim.AdamW(model.parameters(),lr=.001,weight_decay=.0001)
     scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,a.epochs,eta_min=.00005)
-    a.output.mkdir(exist_ok=True);history=[];best=float('inf')
+    a.output.mkdir(parents=True,exist_ok=True);history=[];best=float('inf')
     # Reuse held-out corruptions exactly across epochs; training draws fresh ones.
     def batch(ids,random,seed_low=1000):
         x=[];y=targets[ids].copy();stop=np.zeros(len(ids),np.int64)
@@ -120,7 +126,7 @@ def main():
         'encoder_frozen':True,'road_readout_frozen':True,'trained_parameters':'convolutional drive readout and stop head',
         'offline_teacher':'pure pursuit of simulation route; never used at runtime',
         'fault_seed_range':[1000,1999],'validation_fault_seed_range':[2000,2999],'selected_epoch':selected,'history':history,
-        'layout_revision':metadata[0]['layout_revision'],'wall_s':time.monotonic()-start,
+        'layout_revision':metadata[0]['layout_revision'],'camera_profile_sha256':next(iter(camera_profiles)),'wall_s':time.monotonic()-start,
         'scope':'synthetic scene imitation learning; needs independent closed-loop tests'}
     (a.output/'training.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print(json.dumps({'saved':str(a.output),'selected':selected}),flush=True)

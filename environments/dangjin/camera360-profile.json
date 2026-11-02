@@ -1,0 +1,37 @@
+{
+  "schema": "connectum.camera360.v1",
+  "id": "video91-front90-v1",
+  "source": {
+    "device": "/dev/video91",
+    "projection": "equirectangular",
+    "width": 2880,
+    "height": 1440,
+    "observed_encoding": "JPEG",
+    "evidence": "V4L2 format and captured frame, 2026-10-30"
+  },
+  "alignment": {
+    "forward_heading_deg": 90,
+    "positive_heading": "left",
+    "status": "user-confirmed yaw; not a full extrinsic calibration"
+  },
+  "views": {
+    "width": 480,
+    "height": 270,
+    "vertical_fov_deg": 90,
+    "order": ["front", "left", "rear", "right"],
+    "interpolation": "bilinear-srgb",
+    "pixel_centers": "half-pixel"
+  },
+  "mount": {
+    "height_m": 1.6,
+    "pitch_deg": 0,
+    "roll_deg": 0,
+    "status": "estimated; user has no measurements yet"
+  },
+  "limitations": [
+    "Projection starts from the stitched camera output, not individual fisheye lenses.",
+    "Lens distortion, stitching parallax, exposure and JPEG quality are not calibrated.",
+    "Robot dimensions and self-occlusion are photo-informed approximations.",
+    "Existing weights were trained before the new robot occlusion and sampling path."
+  ]
+}

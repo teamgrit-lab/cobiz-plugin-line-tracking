@@ -18,9 +18,9 @@ root = Path(__file__).resolve().parent
 def build(bundle: Path, output: Path):
     assets, data = {}, {}
     evidence_roots=[root / 'evidence',root / 'evidence-september']
-    for path in [root / "site.json", *(p for folder in evidence_roots for p in folder.glob('*.json'))]:
+    for path in [root / "site.json", root / "camera360-profile.json", *(p for folder in evidence_roots for p in folder.glob('*.json'))]:
         data["./" + path.relative_to(root).as_posix()] = json.loads(path.read_text())
-    for path in [*(p for folder in evidence_roots for p in folder.glob('camera-*.jpg')), *(root / "references").iterdir()]:
+    for path in [*(p for folder in evidence_roots for p in folder.glob('camera-*.jpg')), *(root / "references").iterdir(), *(root/'assets').glob('*.glb')]:
         mime = mimetypes.guess_type(path.name)[0]
         assets["./" + path.relative_to(root).as_posix()] = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode()
     html = (root / "index.html").read_text()

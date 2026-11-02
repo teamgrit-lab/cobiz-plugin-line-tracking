@@ -136,12 +136,20 @@ class FrontSimulationPerception:
 
 
 class FrontSimulationPolicy:
-    def __init__(self, model):
+    def __init__(self, model, *, max_speed_mps=None):
         self.model = model
+        self.max_speed_mps = float(model.config['max_speed_mps'] if max_speed_mps is None else max_speed_mps)
+        if not .1 <= self.max_speed_mps <= 1.:
+            raise ValueError('simulation maximum speed must be 0.1 to 1.0 m/s')
         self.details = dict(model.details, backend='flyvis-front-drive',
-            emergency_stop_override=False, simulation_only=True)
+            emergency_stop_override=False, simulation_only=True, max_speed_mps=self.max_speed_mps)
 
     def infer(self, masks):
         if np.shape(masks) != (1, 270, 480):
             raise ValueError('exactly one front mask is required')
-        return self.model.act(masks[0])
+        command, metrics = self.model.act(masks[0])
+        # Simulation speed scale only. Keep deployed model config, steering and
+        # the learned stop decision unchanged.
+        command = DriveDecision(command.vx / self.model.config['max_speed_mps'] * self.max_speed_mps,
+                                command.vy, command.yaw_rate, command.reason)
+        return command, metrics

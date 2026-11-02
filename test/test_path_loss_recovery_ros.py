@@ -15,7 +15,6 @@ from local_path import LocalPathEstimate
 def run_recovery(monkeypatch, scenario, *, extra_args=()):
     ros = RosHarness(monkeypatch)
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "true")
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false")
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "false")
     # Exercise the short task safety timeout while running the longer search.

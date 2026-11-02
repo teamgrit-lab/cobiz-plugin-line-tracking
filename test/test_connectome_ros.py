@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
-from test_lidar_obstacles_ros import complete_inference
+from ros_camera_fixture import complete_inference
 from local_path import LocalPathEstimate
 
 
@@ -61,7 +61,7 @@ def test_connectome_path_is_followed_and_failure_never_enters_legacy_recovery(mo
 
 
 def test_cancelled_inflight_planner_reply_cannot_repopulate_path_or_move(monkeypatch):
-    from test_lidar_obstacles_ros import image
+    from ros_camera_fixture import image
     ros = RosHarness(monkeypatch)
     returned = threading.Event()
     class Client:

@@ -25,7 +25,6 @@ def test_task_control_ignores_external_publisher_count(
     monkeypatch, preexisting_control_publishers
 ):
     # This isolated task/Sport contract scenario does not provide sensor streams.
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false")
     monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MAX_RANGE_M", "0")
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "true")
@@ -173,7 +172,7 @@ def test_task_control_ignores_external_publisher_count(
         "rclpy.qos": SimpleNamespace(
             HistoryPolicy=SimpleNamespace(KEEP_LAST=object()),
             ReliabilityPolicy=SimpleNamespace(RELIABLE=reliable, BEST_EFFORT=object()),
-            DurabilityPolicy=SimpleNamespace(VOLATILE=object()),
+            DurabilityPolicy=SimpleNamespace(VOLATILE=object(), TRANSIENT_LOCAL=object()),
             QoSProfile=FakeQoS,
         ),
         "cv_bridge": SimpleNamespace(

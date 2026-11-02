@@ -29,9 +29,8 @@ def test_camera_info_is_paired_to_image_without_changing_source():
     assert camera_info_for_image(NS(width=640, height=360), info) is None
 
 
-def test_detector_uses_same_camera_as_tracking_and_is_independent_of_lidar():
-    env = {"SWIN_L_IMAGE_TOPIC": "/a2/front_camera/res_720p/image_raw",
-           "LINE_TRACKING_AVOIDANCE_ENABLED": "false"}
+def test_detector_uses_same_camera_as_tracking():
+    env = {"SWIN_L_IMAGE_TOPIC": "/a2/front_camera/res_720p/image_raw"}
     relay, detector, tracking = child_commands("task-drive", env)
     assert "input_image_topic:=/a2/front_camera/res_720p/image_raw" in relay[1]
     assert "input_camera_info_topic:=/a2/front_camera/res_720p/camera_info" in relay[1]

@@ -72,14 +72,6 @@ def test_semantic_recovery_cannot_invent_initial_motion(speed):
     assert command==debug.DriveDecision.stop("waiting_for_path")
 
 
-@pytest.mark.parametrize("obstacle_reason", ["obstacle_collision", "obstacle_blocked"])
-def test_semantic_recovery_cannot_bypass_an_obstacle_stop(obstacle_reason):
-    command=decide_drive(None,camera_age_sec=.1,inference_age_sec=.1,
-                         config=DriveConfig(),last_valid_forward_mps=.1,
-                         path_recovery_inferences=1,obstacle_stop_reason=obstacle_reason)
-    assert command==debug.DriveDecision.stop(obstacle_reason)
-
-
 def test_search_recovery_is_enabled_by_default_and_can_be_disabled(monkeypatch):
     monkeypatch.delitem(debug.ENV,"LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED",raising=False)
     monkeypatch.delitem(debug.ENV,"LINE_TRACKING_PATH_RECOVERY_WAIT_SEC",raising=False)

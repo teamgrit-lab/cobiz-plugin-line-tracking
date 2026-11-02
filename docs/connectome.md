@@ -11,8 +11,7 @@ R50을 다시 실행하지 않으며 A2 이동 API 발행자는 기존 line-trac
 | Mode 2 인도 | 기존 로컬 추출·피팅·평활화 | 기존 사다리꼴 |
 | Mode 0 자동 | 처음 선택한 노면이 차도면 커넥톰, 인도면 로컬 | 기존 사다리꼴 |
 
-Mode 0은 한 작업 안에서 노면·백엔드를 자동으로 바꾸지 않는다. 작업 취소·AprilTag·
-LiDAR 정지 검사는 두 방식에 공통으로 적용된다.
+Mode 0은 한 작업 안에서 노면·백엔드를 자동으로 바꾸지 않는다. 작업 취소와 AprilTag 정지 검사는 두 방식에 공통으로 적용된다.
 `LINE_TRACKING_PATH_PLANNER=local`은 모든 모드에서 종전 로컬 경로를 사용한다.
 아래 Flyvis 마스크 검사·실패 정지 정책은 커넥톰을 사용하는 차도 경로에 해당한다.
 
@@ -62,9 +61,8 @@ LiDAR 정지 검사는 두 방식에 공통으로 적용된다.
 - 라벨은 0=배경, 1=차도, 2=인도다. 선택 모드 1·2는 해당 표면만 사용한다.
   통합 모드 0은 시작할 때 가까운 관측 통로를 선택하고 거리가 같으면 인도를 우선한다.
   선택 표면이 사라져도 다른 표면으로 자동 전환하지 않는다. 새 작업은 선택을 초기화한다.
-  이 정책은 LiDAR 회피와 최종 명령 검사에도 적용한다.
-- 기존 `LIDAR_OBSTACLE_ROBOT_HALF_WIDTH_M`(0.30m), `LIDAR_OBSTACLE_MARGIN_M`(0.15m)를
-  공유해 허용 영역을 줄인다. 구멍을 채우거나 떨어진 포장 영역을 연결하지 않는다.
+- `LINE_TRACKING_ROBOT_HALF_WIDTH_M`(0.30m)와 `LINE_TRACKING_PATH_MARGIN_M`(0.15m)로
+  시각 경로의 허용 폭을 정한다. 구멍을 채우거나 떨어진 포장 영역을 연결하지 않는다.
   현재 logits의 Vegetation/Curb는 표면 EMA보다 우선한다.
 - 차도에서는 현재 프레임의 단면들을 공간적으로 연결해 주통로 기준선을 만든다.
   넓은 입구·앞마당의 중앙값은 낮게 가중하고 좁고 관측된 통로는 높게 가중한다.
@@ -76,7 +74,7 @@ LiDAR 정지 검사는 두 방식에 공통으로 적용된다.
   차도로 관측될 수 있지만 이 범위 밖의 경로 후보는 서버와 수신 측 모두 거부한다.
   실제 코너에서는 관측된 곡선 통로를 따라 기준선이 휜다. 이 기능은 현재 영상의
   기하적인 주통로 선택이며, 우사 내부를 명시적으로 식별하는 영구 금지구역 지도는
-  별도의 의미 검출·지도 정보가 필요하다. LiDAR의 의미 마스크·정지 정책은 유지한다.
+  별도의 의미 검출·지도 정보가 필요하다.
   전역 이동을 제거한 상대 광류는 보조 비용이다.
   광류를 거리·장애물 확률·실측 odom으로 해석하지 않는다. 먼 곳에서 경로가 불명확하면
   확인된 가까운 구간까지만 계획하고 미관측 영역으로 연장하지 않는다.
@@ -86,7 +84,7 @@ LiDAR 정지 검사는 두 방식에 공통으로 적용된다.
   보정된 R50 분류 확률이 아니다.
 - 응답 실패·경로 없음·마스크 위반·지연은 정지한다. `LINE_TRACKING_STOP_ON_*`가
   꺼져 있어도 이 검사를 유지하며 직진 복구·회전 탐색으로 전환하지 않는다.
-  기존 작업 취소·AprilTag·LiDAR 정지는 유지한다.
+  기존 작업 취소·AprilTag 정지는 유지한다.
 
 `metrics.path_planner.backend`는 현재 작업의 `local` 또는 `connectome`을 표시한다.
 준비 상태·거부 이유·선택 표면을 공통으로 표시하고, 차도에는 왕복 지연·실제 bundle
@@ -169,7 +167,6 @@ SWIN_L_APRILTAG_CAMERA_INFO_TOPIC=/a2/front_camera/res_360p/camera_info
 SWIN_L_SHARED_CAMERA_IMAGE_TOPIC=/line_tracking/camera/image_raw
 SWIN_L_SHARED_CAMERA_INFO_TOPIC=/line_tracking/camera/camera_info
 SWIN_L_IMAGE_TOPIC=/line_tracking/camera/image_raw
-SWIN_L_CAMERA_INFO_TOPIC=/line_tracking/camera/camera_info
 ```
 
 기본 Compose의 `actual-activate`는 task-drive다. 검사 용도로 만든 로컬 override의
@@ -252,7 +249,7 @@ pretrained 회로 → HTTP → R50 마스크 → 경로 재검사 → Sport 명�
 현장 주행은 이 로컬 검사에 포함하지 않았다.
 
 거리·여유는 기존 ROI 지면 변환 기준이다. 실제 카메라 보정, 근거리 사각의 차체
-안전성, 현장 코너 성공은 이 기능만으로 보장하지 않는다. LiDAR 검사를 유지하며
+안전성, 현장 코너 성공은 이 기능만으로 보장하지 않는다.
 전역 순찰 경로·지도 분기·90도 회전 제어를 새로 구현하지 않는다. 코드 변경·푸시는
 Jetson 배포나 실제 출발을 수행하지 않는다.
 

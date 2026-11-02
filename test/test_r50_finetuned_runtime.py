@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import best_so_far_runtime as runtime
 import swin_l_local_path_debug as debug
+from local_path import selected_path_region
 
 PROFILE = "r50-finetuned-fp16-640x360"
 
@@ -113,6 +114,9 @@ def _fake_hf_loaders(monkeypatch, checkpoint, loading_info=None):
     monkeypatch.setattr(runtime.AutoImageProcessor, "from_pretrained", load_processor)
     monkeypatch.setattr(
         runtime.MaskFormerForInstanceSegmentation, "from_pretrained", load_model
+    )
+    monkeypatch.setattr(
+        runtime.Mask2FormerForUniversalSegmentation, "from_pretrained", load_model
     )
     return calls
 
@@ -350,12 +354,13 @@ def test_building_plane_is_current_frame_and_does_not_change_surface_labels(monk
 
 @pytest.mark.parametrize('accelerator', [False, True])
 @pytest.mark.parametrize('mode', [None, 0, 1, 2])
-def test_crosswalk_policy_excludes_ordinary_roads_and_preserves_hazards(
-    monkeypatch, checkpoint, accelerator, mode,
+@pytest.mark.parametrize('profile', [PROFILE, runtime.R50_PROFILE, runtime.DEFAULT_PROFILE])
+def test_crosswalks_remain_road_and_are_excluded_from_sidewalk_paths(
+    monkeypatch, checkpoint, accelerator, mode, profile,
 ):
     _fake_hf_loaders(monkeypatch, checkpoint)
     segmenter = runtime.BestSoFarSegmenter(runtime.BestSoFarConfig(
-        profile=PROFILE, model_id=str(checkpoint.path), device='cpu'))
+        profile=profile, model_id=str(checkpoint.path), device='cpu'))
     # Exercise both reduction implementations, including the accelerator LUT.
     if accelerator:
         monkeypatch.setattr(segmenter, '_cpu_selected_mask', segmenter._accelerator_selected_mask)
@@ -369,20 +374,28 @@ def test_crosswalk_policy_excludes_ordinary_roads_and_preserves_hazards(
     monkeypatch.setattr(segmenter, '_semantic_scores', lambda *_a, **_kw: scores)
     result = segmenter.segment(np.zeros((64, 192, 3), np.uint8),
                                path_mask_class=mode, detect_road_hazards=True)
-    crossing = 2 if mode == 2 else 1
-    expected = np.repeat(np.array([[crossing, crossing, 1, 1, 2, 0]], np.uint8), 32, axis=1)
+    expected = np.repeat(np.array([[1, 1, 1, 1, 2, 0]], np.uint8), 32, axis=1)
     np.testing.assert_array_equal(result.selected_mask, np.repeat(expected, 64, axis=0))
+    sidewalk_path = selected_path_region(result.selected_mask, 2)
+    assert not sidewalk_path[:, :128].any()
+    assert sidewalk_path[:, 128:160].all()
     assert result.road_hazard_mask[:, -32:].all()
     assert not result.road_hazard_mask[:, :-32].any()
+    settings = segmenter.metadata()['settings']
+    for name in names[:2]:
+        assert name in settings['road_labels']
+        assert name not in settings['sidewalk_labels']
 
 
 @pytest.mark.parametrize('accelerator', [False, True])
-def test_crosswalk_mode_switch_clears_surface_hysteresis_and_cached_lookup(
-    monkeypatch, checkpoint, accelerator,
+@pytest.mark.parametrize('profile', [PROFILE, runtime.R50_PROFILE, runtime.DEFAULT_PROFILE])
+def test_crosswalks_remain_road_across_mode_switches(
+    monkeypatch, checkpoint, accelerator, profile,
 ):
     _fake_hf_loaders(monkeypatch, checkpoint)
     segmenter = runtime.BestSoFarSegmenter(runtime.BestSoFarConfig(
-        profile=PROFILE, model_id=str(checkpoint.path), device='cpu'))
+        profile=profile, model_id=str(checkpoint.path), device='cpu',
+        temporal_hysteresis_margin=0.07))
     if accelerator:
         monkeypatch.setattr(segmenter, '_cpu_selected_mask', segmenter._accelerator_selected_mask)
     scores = torch.zeros((65, 32, 32))
@@ -390,18 +403,17 @@ def test_crosswalk_mode_switch_clears_surface_hysteresis_and_cached_lookup(
     scores[13] = .99
     monkeypatch.setattr(segmenter, '_semantic_scores', lambda *_a, **_kw: scores)
     image = np.zeros((32, 32, 3), np.uint8)
-    for mode, expected in [(1, 1), (2, 2), (0, 1), (2, 2), (1, 1)]:
+    for mode in [1, 2, 0, 2, 1, None, 2]:
         result = segmenter.segment(image, path_mask_class=mode)
-        assert np.all(result.selected_mask == expected)
+        assert np.all(result.selected_mask == 1)
     torch.testing.assert_close(segmenter._previous_scores, scores)
 
 
-def test_mode2_crosswalk_does_not_seed_road_expansion(monkeypatch, checkpoint):
+def test_crosswalk_seeds_road_expansion(monkeypatch, checkpoint):
     _fake_hf_loaders(monkeypatch, checkpoint)
     segmenter = runtime.BestSoFarSegmenter(runtime.BestSoFarConfig(
         profile=PROFILE, model_id=str(checkpoint.path), device='cpu',
         pedestrian_area_road_expansion=1))
-    segmenter._crosswalk_as_sidewalk = True
     scores = torch.zeros((65, 7, 7))
     scores[11] = 1.  # Pedestrian Area.
     scores[8, 3, 3] = 2.  # Crosswalk, surrounded by Pedestrian Area.
@@ -409,8 +421,9 @@ def test_mode2_crosswalk_does_not_seed_road_expansion(monkeypatch, checkpoint):
     cpu, _ = segmenter._cpu_selected_mask(scores)
     accelerator, _ = segmenter._accelerator_selected_mask(scores)
     np.testing.assert_array_equal(cpu, accelerator)
-    assert np.all(cpu[2:5, 2:5] == 2)
+    assert np.all(cpu[2:5, 2:5] == 1)
     assert np.all(cpu[:2, :2] == 1)
+    assert cpu[-1, -1] == 2
 
 
 @pytest.mark.parametrize("profile", [PROFILE, runtime.R50_PROFILE])

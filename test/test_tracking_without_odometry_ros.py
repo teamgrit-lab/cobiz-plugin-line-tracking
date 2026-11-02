@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
-from test_lidar_obstacles_ros import complete_inference
+from ros_camera_fixture import complete_inference
 from local_path import LocalPathEstimate
 
 

@@ -233,7 +233,7 @@ def test_perception_child_uses_waypoint_and_camera_pose_without_contacting_road_
 @pytest.mark.parametrize("surface", [1, 2])
 def test_real_worker_follows_waypoint_branch_without_camera_pose_time_matching(monkeypatch, surface):
     from test_apriltag_task_stop_ros import Message, RosHarness, debug
-    from test_lidar_obstacles_ros import complete_inference
+    from ros_camera_fixture import complete_inference
     monkeypatch.setattr(debug, "ENV", {})
     ros = RosHarness(monkeypatch)
     args = debug.parse_args(["navigation-worker", "--inference-hz", "1000"])
@@ -271,7 +271,7 @@ def test_real_worker_follows_waypoint_branch_without_camera_pose_time_matching(m
 @pytest.mark.parametrize("stop_on_missing", [False, True])
 def test_waypoint_path_gaps_follow_env_stop_setting_in_readiness_and_final_output(monkeypatch, stop_on_missing):
     from test_apriltag_task_stop_ros import Message, RosHarness, debug
-    from test_lidar_obstacles_ros import complete_inference
+    from ros_camera_fixture import complete_inference
     monkeypatch.setattr(debug, "ENV", {})
     ros = RosHarness(monkeypatch)
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_PATH_UNAVAILABLE", str(stop_on_missing).lower())

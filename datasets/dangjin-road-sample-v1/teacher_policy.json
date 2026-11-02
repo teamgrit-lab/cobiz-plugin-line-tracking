@@ -1,0 +1,18 @@
+{
+  "version": "provisional-geometric-teacher-v1",
+  "straight_speed_mps": 0.25,
+  "bend_speed_mps": 0.18,
+  "max_abs_yaw_rate_radps": 0.18,
+  "action_horizon_s": 0.5,
+  "turn_heading_threshold_deg": 5.0,
+  "assumed_robot_half_width_with_margin_m": 0.65,
+  "near_obstacle_hold_distance_m": 1.5,
+  "ground_inlier_tolerance_m": 0.06,
+  "minimum_ground_coverage": 0.6,
+  "obstacle_min_height_m": 0.18,
+  "obstacle_max_height_m": 2.5,
+  "origin": "Design assumptions for this offline pilot; not recorded commands, robot limits, or optimized/expert ground truth.",
+  "steering": "omega = v * 2*y/(x*x+y*y); base x forward, y left; no lateral velocity",
+  "target": "third annotated pixel waypoint intersected with a LiDAR-fitted local ground plane",
+  "not_a_collision_checker": true
+}

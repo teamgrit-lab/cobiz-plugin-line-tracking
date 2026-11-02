@@ -15,7 +15,7 @@ docker compose -f docker-compose.yml -f docker-compose.connectome.yml \
   -f docker-compose.navigation.yml up -d --build actual-activate connectome-planner
 ```
 
-기존 R50/Swin 모델 pin, CameraInfo·TF·센서 토픽과 motion 설정을 그대로 재사용한다.
+기존 R50/Swin 모델 pin, CameraInfo·TF·센서 토픽을 그대로 재사용한다.
 overlay는 `SWIN_L_MODE`만 `navigation-worker`로 변경한다. Connectome을 쓰지 않는
 배포는 중간 `docker-compose.connectome.yml`을 생략한다. 기존 task-drive 인스턴스를
 교체하며 별도 GPU 모델 인스턴스를 추가하지 않는다.
@@ -34,6 +34,14 @@ AprilTag와 자동 정지 스위치 등 기존 설정을 그대로 사용한다.
 제어권을 요청하고 A2 `/line_tracking/task_control`의 GRANTED를 받은 후에만
 `TASK_STARTED`와 기존 Sport 출력을 시작한다. 단독 Task는 SLAM/지도 TF를 요구하지 않는다.
 Navigation 준비·주행 중이거나 다른 소유자가 있으면 제어권을 거절한다.
+
+단독 `LINE_TRACKING` Task는 GRANTED 후, Sport 출력과 추론 시작 전에
+`/grit_slam/localization/status`의 기존 세션에 `STOP(grace_sec=0)`을 요청한다.
+상태 구독은 reliable/transient-local/depth 1이므로 Navigation 완료 후 유지 중인
+세션도 확인한다. STOPPED/ERROR까지 1초마다 재요청하고, 단독 Task 도중 SLAM이
+다시 STARTING/READY를 보고하면 즉시 STOP을 보낸다. 제어권 대기·거절 상태와
+Navigation 소유 구간에서는 STOP을 보내지 않으며, Task 종료 시 START를 보내지 않는다.
+SLAM 상태가 없으면 단독 Task는 기존처럼 SLAM 없이 시작한다.
 
 요청은 `protocol:1`, 매 실행마다 새 `session_id`, 문자열 `task_id`, `stamp_sec`,
 `command:ACQUIRE/HEARTBEAT/RELEASE`를 포함한다. 응답은 같은 identity에
@@ -123,7 +131,7 @@ Navigation 구간의 주행 정지 검사는 단독 LINE_TRACKING과 같은 `.en
 사용한다. 일반적인 waypoint 경로 소실도 같은 정지/유지/복구 정책을 따르고, 확인 중인 갈림길·
 모호한 후보·선택한 갈림길 이탈 등의 제약은 유지한다. 차도의 Connectome 유효성 검사는
 단독 실행과 동일하게 적용한다. AprilTag·duration 기반 별도 task 완료는 Navigation 소유권에
-맞게 비활성화한다. 설정된 LiDAR 회피·motion 검사와 STOP·lease 만료 정지는 유지한다.
+맞게 비활성화한다. STOP 명령이나 lease 만료 시 정지한다.
 
 `metrics.navigation_worker`와 `metrics.navigation_segment`로 실행 방식·현재 구간을 확인한다.
 `metrics.waypoint_guidance`에는 로봇 좌표의 목표, 갈림길 선택 상태와 정지 이유가 표시된다.

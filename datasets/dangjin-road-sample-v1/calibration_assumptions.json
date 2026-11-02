@@ -1,0 +1,63 @@
+{
+  "profile": "livox-a2-front",
+  "source": "tools/lidar_common.py; measured profile documented there",
+  "base_from_lidar": [
+    [
+      0.01298256,
+      -0.856344989,
+      0.516240944,
+      0.373968
+    ],
+    [
+      0.999608476,
+      -0.001682648,
+      -0.027929602,
+      0.002419
+    ],
+    [
+      0.024786027,
+      0.516401421,
+      0.855987865,
+      0.190767
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "camera_from_base": [
+    [
+      0.0,
+      -1.0,
+      0.0,
+      0.0336
+    ],
+    [
+      0.0,
+      0.0,
+      -1.0,
+      0.0525
+    ],
+    [
+      1.0,
+      0.0,
+      0.0,
+      -0.3381
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "verified_for_these_recordings": false,
+  "frame_convention": "base x forward, y left, z up; positive yaw left",
+  "limitations": [
+    "No recorded TF in these files. Mount equivalence to profile is assumed, not established.",
+    "Camera K/D are recorded. LiDAR projection and metric teacher labels depend on the assumed extrinsics.",
+    "No scan deskew or ego-motion compensation. No 360-degree input in this dataset."
+  ]
+}

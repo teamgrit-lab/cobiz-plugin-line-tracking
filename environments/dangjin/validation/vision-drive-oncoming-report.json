@@ -1,0 +1,20 @@
+{
+  "schema": "dangjin.oncoming.validation.v1",
+  "source": "environments/dangjin/validation/vision-drive-oncoming-run.json",
+  "frames": 121,
+  "duration_s": 60,
+  "car_speed_mps": 0.35,
+  "car_size_m": [
+    4.3,
+    1.8
+  ],
+  "passed": true,
+  "minimum_robot_to_car_clearance_m": 0.1966335999580101,
+  "swept_violations": 0,
+  "car_advanced_during_model_wait_frames": 11,
+  "seed": 18809933,
+  "profile": "normal",
+  "policy_sha256": "48dff44f806500b315b211433d0410d0644652c5c072927b110557820561870d",
+  "map_assistance": false,
+  "scope": "One synthetic low-speed oncoming encounter; not all obstacle layouts or real-robot avoidance"
+}

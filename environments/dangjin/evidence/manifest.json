@@ -1,0 +1,490 @@
+{
+  "schema_version": 1,
+  "recorded_date": "2026-10-21",
+  "duration_s": 841.842502614,
+  "message_count": 233638,
+  "topics": {
+    "/livox/lidar": 8400,
+    "/livox/imu": 154703,
+    "/a2/front_camera/res_360p/image_raw": 16835,
+    "/a2/front_camera/res_360p/camera_info": 16837,
+    "/rosout": 36863
+  },
+  "files": [
+    {
+      "file": "a2_record_mapping_20261021_171114_0.mcap",
+      "bytes": 2147944742,
+      "start_ns": "1792570350376325426",
+      "end_ns": "1792570462725306115",
+      "topics": {
+        "/livox/lidar": 1123,
+        "/livox/imu": 22419,
+        "/a2/front_camera/res_360p/image_raw": 2247,
+        "/a2/front_camera/res_360p/camera_info": 2247,
+        "/rosout": 4965
+      }
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_1.mcap",
+      "bytes": 2148580864,
+      "start_ns": "1792570462729325234",
+      "end_ns": "1792570575671924544",
+      "topics": {
+        "/livox/lidar": 1129,
+        "/rosout": 4945,
+        "/a2/front_camera/res_360p/image_raw": 2259,
+        "/a2/front_camera/res_360p/camera_info": 2259,
+        "/livox/imu": 22144
+      }
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_2.mcap",
+      "bytes": 2148913095,
+      "start_ns": "1792570575675611782",
+      "end_ns": "1792570688171484878",
+      "topics": {
+        "/a2/front_camera/res_360p/image_raw": 2249,
+        "/rosout": 4921,
+        "/a2/front_camera/res_360p/camera_info": 2250,
+        "/livox/lidar": 1125,
+        "/livox/imu": 22419
+      }
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_3.mcap",
+      "bytes": 2148343048,
+      "start_ns": "1792570688176556941",
+      "end_ns": "1792570800504388519",
+      "topics": {
+        "/a2/front_camera/res_360p/image_raw": 2246,
+        "/rosout": 4909,
+        "/a2/front_camera/res_360p/camera_info": 2246,
+        "/livox/lidar": 1124,
+        "/livox/imu": 22458
+      }
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_4.mcap",
+      "bytes": 2147740923,
+      "start_ns": "1792570800507647108",
+      "end_ns": "1792570920172130119",
+      "topics": {
+        "/livox/lidar": 1194,
+        "/a2/front_camera/res_360p/image_raw": 2394,
+        "/a2/front_camera/res_360p/camera_info": 2394,
+        "/rosout": 5234,
+        "/livox/imu": 18579
+      }
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_5.mcap",
+      "bytes": 2148192295,
+      "start_ns": "1792570920177508773",
+      "end_ns": "1792571034922660355",
+      "topics": {
+        "/a2/front_camera/res_360p/image_raw": 2295,
+        "/rosout": 5014,
+        "/a2/front_camera/res_360p/camera_info": 2295,
+        "/livox/lidar": 1148,
+        "/livox/imu": 21174
+      }
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_6.mcap",
+      "bytes": 2148166600,
+      "start_ns": "1792571034928302760",
+      "end_ns": "1792571155423554216",
+      "topics": {
+        "/livox/lidar": 1189,
+        "/a2/front_camera/res_360p/image_raw": 2410,
+        "/rosout": 5269,
+        "/a2/front_camera/res_360p/camera_info": 2410,
+        "/livox/imu": 18160
+      }
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_7.mcap",
+      "bytes": 703019117,
+      "start_ns": "1792571155428904904",
+      "end_ns": "1792571192218828040",
+      "topics": {
+        "/livox/lidar": 368,
+        "/a2/front_camera/res_360p/image_raw": 735,
+        "/rosout": 1606,
+        "/a2/front_camera/res_360p/camera_info": 736,
+        "/livox/imu": 7350
+      }
+    }
+  ],
+  "frames": [
+    {
+      "file": "a2_record_mapping_20261021_171114_0.mcap",
+      "image": "camera-00-00.jpg",
+      "timestamp_ns": "1792570361621058015",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 11.245
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_0.mcap",
+      "image": "camera-00-01.jpg",
+      "timestamp_ns": "1792570395321167456",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 44.945
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_0.mcap",
+      "image": "camera-00-02.jpg",
+      "timestamp_ns": "1792570429068838424",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 78.693
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_0.mcap",
+      "image": "camera-00-03.jpg",
+      "timestamp_ns": "1792570451518701488",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 101.142
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_1.mcap",
+      "image": "camera-01-00.jpg",
+      "timestamp_ns": "1792570474071449651",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 123.695
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_1.mcap",
+      "image": "camera-01-01.jpg",
+      "timestamp_ns": "1792570507921607447",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 157.545
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_1.mcap",
+      "image": "camera-01-02.jpg",
+      "timestamp_ns": "1792570541820507636",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 191.444
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_1.mcap",
+      "image": "camera-01-03.jpg",
+      "timestamp_ns": "1792570564419851609",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 214.044
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_2.mcap",
+      "image": "camera-02-00.jpg",
+      "timestamp_ns": "1792570586970661115",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 236.594
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_2.mcap",
+      "image": "camera-02-01.jpg",
+      "timestamp_ns": "1792570620721478882",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 270.345
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_2.mcap",
+      "image": "camera-02-02.jpg",
+      "timestamp_ns": "1792570654423596272",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 304.047
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_2.mcap",
+      "image": "camera-02-03.jpg",
+      "timestamp_ns": "1792570676966364477",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 326.59
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_3.mcap",
+      "image": "camera-03-00.jpg",
+      "timestamp_ns": "1792570699419420031",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 349.043
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_3.mcap",
+      "image": "camera-03-01.jpg",
+      "timestamp_ns": "1792570733120750667",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 382.744
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_3.mcap",
+      "image": "camera-03-02.jpg",
+      "timestamp_ns": "1792570766821485137",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 416.445
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_3.mcap",
+      "image": "camera-03-03.jpg",
+      "timestamp_ns": "1792570789272342562",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 438.896
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_4.mcap",
+      "image": "camera-04-00.jpg",
+      "timestamp_ns": "1792570812522343037",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 462.146
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_4.mcap",
+      "image": "camera-04-01.jpg",
+      "timestamp_ns": "1792570848419430319",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 498.043
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_4.mcap",
+      "image": "camera-04-02.jpg",
+      "timestamp_ns": "1792570884325049083",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 533.949
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_4.mcap",
+      "image": "camera-04-03.jpg",
+      "timestamp_ns": "1792570908225958214",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 557.85
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_5.mcap",
+      "image": "camera-05-00.jpg",
+      "timestamp_ns": "1792570931671844601",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 581.296
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_5.mcap",
+      "image": "camera-05-01.jpg",
+      "timestamp_ns": "1792570966124672370",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 615.748
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_5.mcap",
+      "image": "camera-05-02.jpg",
+      "timestamp_ns": "1792571000522658917",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 650.146
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_5.mcap",
+      "image": "camera-05-03.jpg",
+      "timestamp_ns": "1792571023466830644",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 673.091
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_6.mcap",
+      "image": "camera-06-00.jpg",
+      "timestamp_ns": "1792571047020806439",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 696.644
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_6.mcap",
+      "image": "camera-06-01.jpg",
+      "timestamp_ns": "1792571083171488525",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 732.795
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_6.mcap",
+      "image": "camera-06-02.jpg",
+      "timestamp_ns": "1792571119323515484",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 768.947
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_6.mcap",
+      "image": "camera-06-03.jpg",
+      "timestamp_ns": "1792571143420448599",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 793.044
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_7.mcap",
+      "image": "camera-07-00.jpg",
+      "timestamp_ns": "1792571159120211718",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 808.744
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_7.mcap",
+      "image": "camera-07-01.jpg",
+      "timestamp_ns": "1792571170169675846",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 819.793
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_7.mcap",
+      "image": "camera-07-02.jpg",
+      "timestamp_ns": "1792571181224704792",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 830.848
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_7.mcap",
+      "image": "camera-07-03.jpg",
+      "timestamp_ns": "1792571188570097712",
+      "frame_id": "camera_optical_frame",
+      "width": 640,
+      "height": 360,
+      "elapsed_s": 838.194
+    }
+  ],
+  "clouds": [
+    {
+      "file": "a2_record_mapping_20261021_171114_0.mcap",
+      "points": "lidar-00.json",
+      "timestamp_ns": "1792570406605149680",
+      "frame_id": "livox_frame",
+      "original_points": 6416,
+      "displayed_points": 6000,
+      "elapsed_s": 56.229
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_1.mcap",
+      "points": "lidar-01.json",
+      "timestamp_ns": "1792570519204606301",
+      "frame_id": "livox_frame",
+      "original_points": 6978,
+      "displayed_points": 6000,
+      "elapsed_s": 168.828
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_2.mcap",
+      "points": "lidar-02.json",
+      "timestamp_ns": "1792570632004350002",
+      "frame_id": "livox_frame",
+      "original_points": 9990,
+      "displayed_points": 6000,
+      "elapsed_s": 281.628
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_3.mcap",
+      "points": "lidar-03.json",
+      "timestamp_ns": "1792570744405225573",
+      "frame_id": "livox_frame",
+      "original_points": 8046,
+      "displayed_points": 6000,
+      "elapsed_s": 394.029
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_4.mcap",
+      "points": "lidar-04.json",
+      "timestamp_ns": "1792570860421617707",
+      "frame_id": "livox_frame",
+      "original_points": 6806,
+      "displayed_points": 6000,
+      "elapsed_s": 510.045
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_5.mcap",
+      "points": "lidar-05.json",
+      "timestamp_ns": "1792570977604641035",
+      "frame_id": "livox_frame",
+      "original_points": 7865,
+      "displayed_points": 6000,
+      "elapsed_s": 627.228
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_6.mcap",
+      "points": "lidar-06.json",
+      "timestamp_ns": "1792571102192649627",
+      "frame_id": "livox_frame",
+      "original_points": 2395,
+      "displayed_points": 2395,
+      "elapsed_s": 751.816
+    },
+    {
+      "file": "a2_record_mapping_20261021_171114_7.mcap",
+      "points": "lidar-07.json",
+      "timestamp_ns": "1792571173904446991",
+      "frame_id": "livox_frame",
+      "original_points": 9444,
+      "displayed_points": 6000,
+      "elapsed_s": 823.528
+    }
+  ],
+  "registration": "none",
+  "sampling": "4 camera frames and 1 independent LiDAR scan per file",
+  "limitations": [
+    "No recorded TF, odometry, GPS or global map topics.",
+    "Camera frames and LiDAR scans are independently sampled, not synchronized.",
+    "LiDAR remains in the sensor frame, without motion compensation or site alignment."
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "annotator": "Codex visual review; NOT human-verified",
+  "coordinate_system": "original distorted 1280x720 image pixels; x right, y down",
+  "review_scope": "All 79 images viewed in contact sheets; selected keyframes inspected at native resolution. Coarse centerline proposals, not dense segmentation or surveyed road centers.",
+  "interpolation": "Linear in acquisition time between visually selected keyframes. The full clip was available to the annotator; these are offline proposals, not causal model predictions.",
+  "requires_human_review": true,
+  "episodes": {
+    "straight": {
+      "intent": "follow_visible_road",
+      "confidence": "medium",
+      "reason_ko": "양쪽 경계석 사이의 도로를 따라 저속 전진하며 중앙 방향을 보정합니다.",
+      "centerline_keyframes": [
+        {"index": 0, "pixels": [[650,630],[660,460],[665,400],[650,350]]},
+        {"index": 4, "pixels": [[655,630],[670,460],[675,400],[675,350]]},
+        {"index": 8, "pixels": [[655,630],[675,460],[685,400],[690,350]]},
+        {"index": 12, "pixels": [[650,630],[655,460],[660,400],[650,350]]},
+        {"index": 16, "pixels": [[655,630],[675,460],[690,400],[690,350]]},
+        {"index": 19, "pixels": [[650,630],[650,460],[650,400],[640,350]]},
+        {"index": 20, "pixels": [[640,630],[620,460],[610,400],[605,350]]},
+        {"index": 21, "pixels": [[630,630],[580,460],[565,400],[565,350]]},
+        {"index": 23, "pixels": [[620,630],[565,460],[545,400],[550,350]]}
+      ],
+      "stop_intervals": [],
+      "objects": []
+    },
+    "right_turn": {
+      "intent": "follow_visible_right_bend",
+      "confidence": "medium",
+      "reason_ko": "전방 경계석을 향해 직진하지 않고 오른쪽으로 이어지는 포장 도로의 중앙을 향해 서서히 회전합니다.",
+      "centerline_keyframes": [
+        {"index": 0, "pixels": [[650,630],[670,460],[740,400],[870,370]]},
+        {"index": 4, "pixels": [[650,630],[675,460],[740,400],[850,370]]},
+        {"index": 8, "pixels": [[655,630],[680,460],[735,400],[830,370]]},
+        {"index": 12, "pixels": [[660,630],[680,460],[730,400],[820,370]]},
+        {"index": 16, "pixels": [[660,630],[685,460],[725,400],[820,370]]},
+        {"index": 20, "pixels": [[660,630],[690,460],[720,400],[810,370]]},
+        {"index": 23, "pixels": [[660,630],[690,460],[710,400],[800,370]]}
+      ],
+      "stop_intervals": [],
+      "objects": []
+    },
+    "vehicle": {
+      "intent": "yield_before_junction",
+      "confidence": "low",
+      "reason_ko": "교차로의 차량과 가림 영역을 확인하기 전까지 정지를 제안합니다. 즉시 충돌 위험이나 최소 정지거리의 실측 판정은 아닙니다.",
+      "centerline_keyframes": [
+        {"index": 0, "pixels": [[690,630],[750,460],[780,400],[810,360]]},
+        {"index": 6, "pixels": [[710,630],[780,460],[810,400],[830,360]]},
+        {"index": 12, "pixels": [[730,630],[810,460],[840,400],[850,360]]},
+        {"index": 18, "pixels": [[730,630],[810,460],[830,400],[840,365]]},
+        {"index": 24, "pixels": [[740,630],[820,460],[850,400],[850,365]]},
+        {"index": 30, "pixels": [[730,630],[810,460],[840,400],[850,365]]}
+      ],
+      "stop_intervals": [
+        {"first": 0, "last": 12, "reason": "vehicle_visible_near_forward_junction", "reason_ko": "전방 교차로의 트럭에 양보하는 보수적인 정지 제안. 가까운 충돌 장애물로 단정하지 않음."},
+        {"first": 13, "last": 20, "reason": "hold_during_vehicle_occlusion", "reason_ko": "차량이 적재물 뒤로 가려진 구간. 관측 소실을 통행 가능으로 바꾸지 않고 대기하는 제안."},
+        {"first": 21, "last": 30, "reason": "yield_to_crossing_vehicle", "reason_ko": "교차로를 가로지르는 트럭이 보이는 동안 양보 정지 제안."}
+      ],
+      "objects": [
+        {"class": "truck", "track_id": "truck-A", "same_identity_across_occlusion": "unknown", "visible_first": 0, "visible_last": 12,
+          "bbox_keyframes": [
+            {"index":0,"xyxy":[584,236,700,361]},
+            {"index":3,"xyxy":[608,254,724,367]},
+            {"index":6,"xyxy":[624,264,735,363]},
+            {"index":9,"xyxy":[644,278,770,363]},
+            {"index":12,"xyxy":[628,276,725,344]}
+          ]},
+        {"class": "truck", "track_id": "truck-B", "same_identity_across_occlusion": "unknown", "visible_first": 21, "visible_last": 30,
+          "bbox_keyframes": [
+            {"index":21,"xyxy":[537,284,607,362]},
+            {"index":24,"xyxy":[545,285,663,355]},
+            {"index":27,"xyxy":[556,292,694,362]},
+            {"index":30,"xyxy":[652,309,741,366]}
+          ]}
+      ]
+    }
+  }
+}

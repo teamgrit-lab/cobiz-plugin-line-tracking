@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>당진 주행 샘플 · 영상 / LiDAR / 제안 명령</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"Apple SD Gothic Neo",sans-serif;background:#101820;color:#e6eef4}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0}header{padding:28px 34px 22px;border-bottom:1px solid #34434e;background:#16232d}.eyebrow{color:#67d6c4;font-size:12px;letter-spacing:.14em}h1{font-size:25px;margin:9px 0}p{line-height:1.65;margin:8px 0;color:#b7c8d4}header p{max-width:980px;font-size:14px}.badge{display:inline-block;padding:4px 9px;border-radius:5px;background:#4a3c20;color:#ffe0a0;font-size:12px;margin:0 4px 4px 0}.fact{background:#16473f;color:#98e5d8}.muted{background:#2d3d4a;color:#c1d0dc}.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:16px 34px;background:#17242f;position:sticky;top:0;z-index:2;border-bottom:1px solid #34434e}select,button{font:inherit;border:1px solid #526473;border-radius:6px;color:#edf3f7;background:#243846;padding:9px 13px}button{cursor:pointer}button:hover{background:#365467}button:disabled{opacity:.35;cursor:default}select{max-width:230px}.slider{flex:1;min-width:180px;accent-color:#69dcc8}.counter{font-variant-numeric:tabular-nums;font-size:13px;color:#c6d5df;min-width:68px}main{padding:22px 34px 34px;max-width:1760px;margin:auto}.titlebar{display:flex;align-items:baseline;gap:20px;flex-wrap:wrap;margin-bottom:14px}h2{font-size:18px;margin:0}.meta{font-size:13px;color:#b6c6d2}.visuals{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(310px,1fr);gap:18px}.panel{border:1px solid #344853;border-radius:9px;overflow:hidden;background:#15232d}.panel-title{padding:12px 15px;border-bottom:1px solid #344853;font-size:13px;display:flex;justify-content:space-between;gap:10px}.panel img{display:block;width:100%;height:auto}.camera-box{display:flex;align-items:center;min-height:250px;background:#0b141c}.bev-box{max-height:520px;display:flex;justify-content:center}.bev-box img{object-fit:contain;max-height:520px}.legend{padding:12px 15px;font-size:12px;color:#b7c8d4;line-height:1.65}.cards{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:18px;margin-top:18px}.card{padding:18px}.card h3{font-size:14px;margin:0 0 12px;color:#bdcfda}.value{font-size:28px;font-weight:650;margin-bottom:8px}.estimate{color:#ffe1a0}.numbers{font-family:ui-monospace,monospace;font-size:16px;line-height:1.8}.reason{font-size:13px;line-height:1.65;color:#d2dee7}.details{margin-top:18px;padding:16px 18px}summary{cursor:pointer;font-size:14px}pre{overflow:auto;max-height:430px;font-size:12px;color:#c1d2dc;line-height:1.6}a{color:#8cddff;text-decoration:none}a:hover{text-decoration:underline}.links{display:flex;flex-wrap:wrap;gap:18px;margin-top:18px;font-size:13px}.quality{font-size:13px;line-height:1.9}.warning{color:#f5bd88}video{width:100%;max-height:440px;background:#000;margin-top:15px}.footer{font-size:12px;color:#91a8b8;margin-top:20px}kbd{background:#263b49;padding:2px 5px;border-radius:3px}label{font-size:13px}.toggle{white-space:nowrap;display:flex;align-items:center;gap:6px}@media(max-width:900px){header,.bar,main{padding-left:16px;padding-right:16px}.visuals,.cards{grid-template-columns:1fr}.bev-box{max-height:400px}.bev-box img{max-height:400px}h1{font-size:22px}.bar{position:static}}
+</style>
+<header>
+  <div class="eyebrow">DANGJIN · REAL SENSOR PILOT · V1</div>
+  <h1>영상과 LiDAR로 검토하는 주행 명령 샘플</h1>
+  <p>3개 MCAP의 연속 구간에서 추출한 79개 표본입니다. <strong>기록된 제어 명령은 없으며, 모든 속도·회전·정지는 추정 제안</strong>입니다. 전면 카메라만 사용했고, 사람의 라벨 검수와 이번 기록의 센서 보정 확인은 아직 하지 않았습니다.</p>
+  <span class="badge fact">실제 전면 영상 + LiDAR</span><span class="badge">명령은 추정값</span><span class="badge muted">검토용 · 학습 승인 전</span><span class="badge muted">원본 MCAP 읽기 전용</span>
+</header>
+<div class="bar">
+  <select id="episode" aria-label="구간 선택"><option value="all">전체 구간</option><option value="straight">직선 도로 · 24개</option><option value="right_turn">우회전 진입 · 24개</option><option value="vehicle">교차로 / 차량 · 31개</option></select>
+  <select id="action" aria-label="명령 필터"><option value="all">모든 제안 명령</option><option value="forward">전진</option><option value="turn_left">좌회전 / 좌측 보정</option><option value="turn_right">우회전 / 우측 보정</option><option value="stop">정지</option></select>
+  <button id="previous" aria-label="이전 표본">←</button><input id="frame" class="slider" type="range" min="0" value="0" aria-label="표본 이동"><button id="next" aria-label="다음 표본">→</button>
+  <span id="counter" class="counter"></span><label class="toggle"><input id="raw" type="checkbox"> 원본 영상</label>
+</div>
+<main>
+  <div class="titlebar"><h2 id="sample-id"></h2><span class="meta" id="time"></span><span class="badge" id="gap"></span></div>
+  <div class="visuals">
+    <section class="panel"><div class="panel-title"><span>전면 카메라</span><a id="original" target="_blank">원본 PNG 열기 ↗</a></div><div class="camera-box"><img id="camera" alt="전면 영상과 추정 경로, LiDAR 투영"></div><div class="legend">노랑: 영상에서 제안한 경로 · 흰 원: 계산에 사용한 시선 목표 · 청록: 지면 후보 · 주황: 지면 위 반환점<br>흰 원은 지도 목표점이 아닙니다. 센서 보정은 미확인 가정이며, 표시된 점은 검출 정답이 아닙니다.</div></section>
+    <section class="panel"><div class="panel-title"><span>LiDAR 위에서 보기</span><span class="meta">위: 전방 · 왼쪽: 좌측</span></div><div class="bev-box"><img id="bev" alt="LiDAR 점과 추정 경로의 조감도"></div><div class="legend">점이 없는 영역은 미관측입니다. 국소 지면 추정과 경로 주변의 근거를 표시하며, 완전한 충돌 검사 결과가 아닙니다.</div></section>
+  </div>
+  <div class="cards">
+    <section class="panel card"><h3>기록된 제어 명령</h3><div class="value">없음</div><div class="reason">선택한 MCAP의 토픽에 제어 명령이 없습니다. 실제 명령은 <code>null</code>로 보존했습니다. IMU나 GPS 속도를 명령으로 바꾸지 않았습니다.</div></section>
+    <section class="panel card"><h3><span class="badge">추정</span> 바람직한 동작의 후보</h3><div id="proposed" class="value estimate"></div><div id="numbers" class="numbers"></div><p id="reason" class="reason"></p><div class="meta">속도 정책 가정: 직선 0.25 m/s · 굽은 길 0.18 m/s · 회전율 +좌 / −우<br>신뢰도: 낮음 (정량 검증 전) · 전문가 정답 / 최적 제어 아님</div></section>
+    <section class="panel card"><h3>관측 품질과 사용 범위</h3><div id="quality" class="quality"></div></section>
+  </div>
+  <details class="panel details"><summary>연속 구간 영상 보기</summary><video id="clip" controls preload="none"></video><p class="meta">10 fps 미리보기입니다. 누락 구간은 보간하지 않아 실제 시간과 재생 시간이 다를 수 있습니다. <code>video_index.json</code>의 촬영 시각을 기준으로 사용하세요.</p></details>
+  <details class="panel details"><summary>이 표본의 근거와 라벨 JSON</summary><pre id="json"></pre></details>
+  <div class="links"><a href="README.md">데이터 설명</a><a href="labels.jsonl" download>라벨 JSONL</a><a href="annotations.json">영상 주석 원본</a><a href="quality_report.json">품질 보고서</a><a href="teacher_policy.json">제안 명령 계산 정책</a><a href="sources.json">원본 파일 / 토픽 목록</a></div>
+  <p class="footer">자동 학습 입력으로 승인하지 않은 검토용 샘플입니다. 같은 MCAP의 인접 프레임을 학습·평가에 나누지 마세요. 좌우 화살표 키로 이동할 수 있습니다.</p>
+</main>
+<script src="review_data.js"></script>
+<script>
+const rows=window.ROAD_SAMPLES, el=id=>document.getElementById(id);
+const names={forward:'전진',turn_left:'좌회전 · 좌측 보정',turn_right:'우회전 · 우측 보정',stop:'정지'};
+let filtered=rows, position=0, lastEpisode='';
+function render(){
+ const r=filtered[position]; el('frame').max=Math.max(0,filtered.length-1);el('frame').value=position;
+ el('counter').textContent=filtered.length?`${position+1} / ${filtered.length}`:'표본 없음';
+ el('previous').disabled=position<=0;el('next').disabled=position>=filtered.length-1;
+ document.querySelector('main').hidden=!r;if(!r)return;
+ el('sample-id').textContent=r.id;el('time').textContent=`구간 시작 +${r.camera.elapsed_s.toFixed(2)} s · 원본 1280 × 720 · front`;
+ const prior=rows.find(s=>s.episode===r.episode&&s.camera.index===r.camera.index-1);
+ const delta=prior?Number(BigInt(r.camera.header_time_ns)-BigInt(prior.camera.header_time_ns))/1e9:0;
+ el('gap').hidden=delta<.8;el('gap').textContent=`직전 표본과 ${delta.toFixed(2)}초 간격 · 보간 없음`;
+ el('camera').src=el('raw').checked?r.camera.image:r.review_camera;el('bev').src=r.review_bev;el('original').href=r.camera.image;
+ const c=r.estimated_command;el('proposed').textContent=names[c.action];
+ el('numbers').textContent=`전진 ${c.linear_x_mps.toFixed(2)} m/s   |   회전 ${c.angular_z_radps>=0?'+':''}${c.angular_z_radps.toFixed(3)} rad/s`;
+ el('reason').textContent=r.visual_annotation.reason_ko;
+ const q=r.geometry.corridor, gps=r.gps_velocity;
+ el('quality').replaceChildren();
+ const items=[`영상 ↔ LiDAR 중앙 시각 차이: ${Math.abs(r.lidar.camera_delta_ms).toFixed(1)} ms`,`지면 근거가 있는 경로 구간: ${(100*q.ground_support_fraction).toFixed(0)}%`,`유효 LiDAR 점: ${r.lidar.valid_point_count.toLocaleString()}`,`GPS 시각: ${gps?'불일치 · 사용 제외':'이 구간에 없음'}`,'전면 카메라 1개 · 360도 영상 없음','센서 보정 가정 · 스캔 움직임 보정 없음','사람 검수 미완료 · 학습 승인 안 됨'];
+ for(const text of items){const p=document.createElement('div');p.textContent=text;el('quality').append(p)}
+ if(lastEpisode!==r.episode){el('clip').pause();el('clip').src=`${r.episode}/context.mp4`;lastEpisode=r.episode;}
+ el('json').textContent=JSON.stringify(r,null,2);
+}
+function filter(){filtered=rows.filter(r=>(el('episode').value==='all'||r.episode===el('episode').value)&&(el('action').value==='all'||r.estimated_command.action===el('action').value));position=0;render()}
+el('episode').onchange=filter;el('action').onchange=filter;el('raw').onchange=render;
+el('frame').oninput=()=>{position=Number(el('frame').value);render()};
+el('previous').onclick=()=>{if(position>0){position--;render()}};el('next').onclick=()=>{if(position<filtered.length-1){position++;render()}};
+document.addEventListener('keydown',e=>{if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName))return;if(e.key==='ArrowLeft')el('previous').click();if(e.key==='ArrowRight')el('next').click()});render();
+</script>
+</html>

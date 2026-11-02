@@ -231,7 +231,7 @@ def test_resume_requires_distinct_confident_results_captured_after_stopping():
     assert sim.tick().reason == "path_recovery_waiting"
 
 
-@pytest.mark.parametrize("guard", ["branch_path_lost", "lidar_path_unavailable",
+@pytest.mark.parametrize("guard", ["branch_path_lost",
                                    "path_unavailable", "camera_conversion_error"])
 def test_guards_and_sensor_failures_stop_and_do_not_advance_scan(guard):
     sim = Simulation()

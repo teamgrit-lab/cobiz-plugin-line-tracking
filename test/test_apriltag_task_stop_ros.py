@@ -59,10 +59,6 @@ class FakeQoS:
 
 class RosHarness:
     def __init__(self, monkeypatch):
-        # These scenarios isolate the original camera/task/AprilTag contract.
-        # The obstacle suite enables and feeds the additional sensors.
-        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_AVOIDANCE_ENABLED", "false")
-        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_MOTION_ENABLED", "false")
         # Legacy lifecycle/hold scenarios select the former policy explicitly;
         # test_path_loss_recovery_ros covers the new default recovery policy.
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "false")
@@ -84,6 +80,7 @@ class RosHarness:
         self.errors = []
         self.running = True
         self.reliable, self.volatile, self.keep_last = object(), object(), object()
+        self.transient_local = object()
         harness = self
 
         class FakeNode:
@@ -149,7 +146,8 @@ class RosHarness:
                 ReliabilityPolicy=SimpleNamespace(
                     RELIABLE=self.reliable, BEST_EFFORT=object()
                 ),
-                DurabilityPolicy=SimpleNamespace(VOLATILE=self.volatile),
+                DurabilityPolicy=SimpleNamespace(
+                    VOLATILE=self.volatile, TRANSIENT_LOCAL=self.transient_local),
                 QoSProfile=FakeQoS,
             ),
             "cv_bridge": SimpleNamespace(
@@ -164,7 +162,7 @@ class RosHarness:
                 )
             ),
             "sensor_msgs.msg": SimpleNamespace(
-                Image=Message, PointCloud2=Message, Imu=Message, CameraInfo=Message,
+                Image=Message, CameraInfo=Message,
             ),
             "std_msgs.msg": SimpleNamespace(String=Message),
             "nav_msgs.msg": SimpleNamespace(Path=Message),

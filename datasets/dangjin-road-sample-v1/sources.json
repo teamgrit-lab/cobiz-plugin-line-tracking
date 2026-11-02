@@ -1,0 +1,131 @@
+[
+  {
+    "path": "/Volumes/MY_HDD/무제 폴더/a2_record_default_20260915_153503_1-009.mcap",
+    "file": "a2_record_default_20260915_153503_1-009.mcap",
+    "bytes": 2148866616,
+    "mtime_ns": "1791340273540000000",
+    "bag_start_ns": "1789454140546023550",
+    "bag_end_ns": "1789454176029039286",
+    "topics": {
+      "/livox/lidar": {
+        "type": "sensor_msgs/msg/PointCloud2",
+        "messages": 355
+      },
+      "/a2/front_camera/camera_info": {
+        "type": "sensor_msgs/msg/CameraInfo",
+        "messages": 709
+      },
+      "/ublox_gps_node/fix_velocity": {
+        "type": "geometry_msgs/msg/TwistWithCovarianceStamped",
+        "messages": 284
+      },
+      "/ublox_gps_node/fix": {
+        "type": "sensor_msgs/msg/NavSatFix",
+        "messages": 284
+      },
+      "/livox/imu": {
+        "type": "sensor_msgs/msg/Imu",
+        "messages": 7097
+      },
+      "/navheading": {
+        "type": "sensor_msgs/msg/Imu",
+        "messages": 284
+      },
+      "/a2/front_camera/image_raw": {
+        "type": "sensor_msgs/msg/Image",
+        "messages": 709
+      },
+      "/rosout": {
+        "type": "rcl_interfaces/msg/Log",
+        "messages": 1468
+      }
+    },
+    "command_topics_present": []
+  },
+  {
+    "path": "/Volumes/MY_HDD/무제 폴더/a2_record_default_20260915_153503_7-027.mcap",
+    "file": "a2_record_default_20260915_153503_7-027.mcap",
+    "bytes": 2148352272,
+    "mtime_ns": "1791340124960000000",
+    "bag_start_ns": "1789454354731009770",
+    "bag_end_ns": "1789454390176258584",
+    "topics": {
+      "/livox/lidar": {
+        "type": "sensor_msgs/msg/PointCloud2",
+        "messages": 354
+      },
+      "/a2/front_camera/camera_info": {
+        "type": "sensor_msgs/msg/CameraInfo",
+        "messages": 708
+      },
+      "/ublox_gps_node/fix_velocity": {
+        "type": "geometry_msgs/msg/TwistWithCovarianceStamped",
+        "messages": 283
+      },
+      "/ublox_gps_node/fix": {
+        "type": "sensor_msgs/msg/NavSatFix",
+        "messages": 283
+      },
+      "/livox/imu": {
+        "type": "sensor_msgs/msg/Imu",
+        "messages": 7089
+      },
+      "/navheading": {
+        "type": "sensor_msgs/msg/Imu",
+        "messages": 284
+      },
+      "/a2/front_camera/image_raw": {
+        "type": "sensor_msgs/msg/Image",
+        "messages": 709
+      },
+      "/rosout": {
+        "type": "rcl_interfaces/msg/Log",
+        "messages": 1488
+      }
+    },
+    "command_topics_present": []
+  },
+  {
+    "path": "/Volumes/MY_HDD/무제 폴더/a2_record_default_20260915_153503_32-025.mcap",
+    "file": "a2_record_default_20260915_153503_32-025.mcap",
+    "bytes": 2149625874,
+    "mtime_ns": "1791340646180000000",
+    "bag_start_ns": "1789455371490641755",
+    "bag_end_ns": "1789455423416822434",
+    "topics": {
+      "/livox/lidar": {
+        "type": "sensor_msgs/msg/PointCloud2",
+        "messages": 519
+      },
+      "/a2/front_camera/camera_info": {
+        "type": "sensor_msgs/msg/CameraInfo",
+        "messages": 679
+      },
+      "/ublox_gps_node/fix_velocity": {
+        "type": "geometry_msgs/msg/TwistWithCovarianceStamped",
+        "messages": 0
+      },
+      "/ublox_gps_node/fix": {
+        "type": "sensor_msgs/msg/NavSatFix",
+        "messages": 0
+      },
+      "/livox/imu": {
+        "type": "sensor_msgs/msg/Imu",
+        "messages": 10387
+      },
+      "/navheading": {
+        "type": "sensor_msgs/msg/Imu",
+        "messages": 0
+      },
+      "/a2/front_camera/image_raw": {
+        "type": "sensor_msgs/msg/Image",
+        "messages": 678
+      },
+      "/rosout": {
+        "type": "rcl_interfaces/msg/Log",
+        "messages": 2231
+      }
+    },
+    "command_topics_present": []
+  }
+]

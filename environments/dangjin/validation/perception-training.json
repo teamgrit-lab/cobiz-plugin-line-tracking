@@ -1,0 +1,94 @@
+{
+  "source_model": "nvidia/segformer-b0-finetuned-cityscapes-640-1280",
+  "source_revision": "618918f3e955c8c4364d73cdbd403a40282b98b9",
+  "source_sha256": "ffe3494e1339abf7af09a13c914e72c3d2745e2f315eba1fd2b1dee15b7a73ed",
+  "seed": 31,
+  "train_views": 102,
+  "heldout_views": 26,
+  "split": "index % 5 == 0 held out",
+  "selected_epoch": {
+    "epoch": 10,
+    "loss": 0.008565755310253454,
+    "heldout_road_iou": 0.989726094361856,
+    "precision": 0.9957723509890918,
+    "recall": 0.9939024516278387
+  },
+  "input": "RGB 448x256",
+  "labels": "offline rendered road, including flush manhole lids",
+  "runtime_ground_truth": false,
+  "dataset_sha256": "c90bb2bd0346b628310c13bb0a67bf5b5e9bea729ff77801c7d27d6d98d3e8cb",
+  "history": [
+    {
+      "epoch": 1,
+      "loss": 0.04487458566346994,
+      "heldout_road_iou": 0.9775301661215514,
+      "precision": 0.9932159687584097,
+      "recall": 0.9841009009902832
+    },
+    {
+      "epoch": 2,
+      "loss": 0.01960603459379994,
+      "heldout_road_iou": 0.9830474299558157,
+      "precision": 0.9953512789451372,
+      "recall": 0.9875816709762898
+    },
+    {
+      "epoch": 3,
+      "loss": 0.015267587535513135,
+      "heldout_road_iou": 0.9857475174620934,
+      "precision": 0.9950276283240408,
+      "recall": 0.9906273447140457
+    },
+    {
+      "epoch": 4,
+      "loss": 0.013262893879213013,
+      "heldout_road_iou": 0.9866088047468713,
+      "precision": 0.9949929270427572,
+      "recall": 0.9915316421421204
+    },
+    {
+      "epoch": 5,
+      "loss": 0.011791718210308598,
+      "heldout_road_iou": 0.9874636812901434,
+      "precision": 0.9951357743944593,
+      "recall": 0.9922530131190304
+    },
+    {
+      "epoch": 6,
+      "loss": 0.01098003016354946,
+      "heldout_road_iou": 0.9881918174342105,
+      "precision": 0.9946218925599398,
+      "recall": 0.993500426828386
+    },
+    {
+      "epoch": 7,
+      "loss": 0.010842778075199861,
+      "heldout_road_iou": 0.9884923664318219,
+      "precision": 0.9941461065666941,
+      "recall": 0.9942796728406927
+    },
+    {
+      "epoch": 8,
+      "loss": 0.00952444847028416,
+      "heldout_road_iou": 0.9887706983608144,
+      "precision": 0.996441306992017,
+      "recall": 0.9922747162573041
+    },
+    {
+      "epoch": 9,
+      "loss": 0.008972266563572563,
+      "heldout_road_iou": 0.9892254318116989,
+      "precision": 0.9963893824402215,
+      "recall": 0.9927842232653509
+    },
+    {
+      "epoch": 10,
+      "loss": 0.008565755310253454,
+      "heldout_road_iou": 0.989726094361856,
+      "precision": 0.9957723509890918,
+      "recall": 0.9939024516278387
+    }
+  ],
+  "wall_s": 62.070165167097,
+  "scope": "this synthetic scene; no real-world road-recognition validation"
+}

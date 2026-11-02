@@ -61,7 +61,6 @@ from best_so_far_runtime import (
     R50_PROFILES,
     SWIN_L_ASPECT_FP16_PROFILE,
     BestSoFarConfig,
-    BestSoFarResult,
     BestSoFarSegmenter,
     resolve_profile,
 )
@@ -71,19 +70,13 @@ from cobiz_line_tracking_task import (
     ActiveTask,
     LineTrackingTasks,
     TaskPolicy,
+    requested_selected_mask,
 )
 from connectome_client import ConnectomeClient, ConnectomePathTracker, reference_stop_reason
 from connectome_surface import PlannerConfig
 from navigation_segment import NavigationSegment
 from standalone_control import StandaloneControl
 from evaluate_mapillary_temporal import upscale_mask
-from lidar_common import (
-    CALIBRATION_PROFILES, DEFAULT_IMU_TOPIC, DEFAULT_LIDAR_TOPIC,
-    parse_transform, transform_matrix,
-)
-from lidar_obstacles import ObstacleConfig
-from local_avoidance import AvoidanceConfig
-from lidar_runtime import LidarRuntime
 from local_path import (
     DEFAULT_ROI_POLYGON,
     DEFAULT_ROAD_ROI_POLYGON,
@@ -101,9 +94,10 @@ from local_path import (
     roi_exclusion_mask,
     selected_path_region,
 )
-from motion_tracking import MotionBuffer, MotionConfig, CommandLimiter, follow_path
 from perception_process import PerceptionProcess
 from surface_path_planner import SurfacePathPlanner, uses_connectome
+from fcn360_road import FcnRoadPlanner, mask_topic, read_masks
+from surface_segmenter import FrontRoadInferenceError, SurfaceSegmenter
 from waypoint_guidance import WaypointGuide
 from r50_checkpoint import validate_checkpoint
 from swin_l_drive_control import (
@@ -121,6 +115,19 @@ from unitree_sport_api import (
     populate_move_request,
     populate_stop_move_request,
 )
+
+
+def _segmenter_from_args(args):
+    if getattr(args, 'front_connectome_url', ''):
+        from front_connectome_client import FrontConnectomeSegmenter
+        return SurfaceSegmenter(BestSoFarSegmenter(_runtime_config(args)),
+            lambda: FrontConnectomeSegmenter(args.front_connectome_url,
+                args.front_connectome_sha256, args.front_connectome_timeout_sec))
+    return BestSoFarSegmenter(_runtime_config(args))
+
+
+def uses_front_policy(args, mask_class):
+    return bool(getattr(args, 'front_connectome_url', '') and mask_class == 1)
 
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
 # Published by apriltag_camera_relay, paired with each detector frame.
@@ -259,8 +266,8 @@ def _connectome_client_from_args(args, local_config):
     if args.path_planner != 'connectome':
         return None
     return ConnectomeClient(args.connectome_url, local_config,
-        PlannerConfig(half_width_m=args.obstacle_robot_half_width_m,
-                      margin_m=args.obstacle_margin_m,
+        PlannerConfig(half_width_m=args.robot_half_width_m,
+                      margin_m=args.path_margin_m,
                       road_corridor_smoothing_m=args.road_corridor_smoothing_m,
                       road_building_cost_weight=args.road_building_cost_weight,
                       road_building_distance_m=args.road_building_distance_m), timeout=args.connectome_timeout_sec)
@@ -272,6 +279,8 @@ def _surface_planner_from_args(args, local_config):
 
 
 def _path_smoother(mask_class, args, config, metrics=None):
+    if getattr(args, 'fcn_sha256', '') and mask_class == 1:
+        return LocalPathSmoother(replace(config, branch_preference='center', unrestricted_path_mode=False))
     if uses_connectome(mask_class, args.path_planner == 'connectome', metrics):
         return ConnectomePathTracker(args.connectome_max_age_sec)
     return LocalPathSmoother(path_config_for_mode(config, mask_class))
@@ -315,28 +324,6 @@ def _parse_exclusion_polygon(value: str) -> tuple[float, ...]:
         return tuple(float(item.strip()) for item in value.replace(';', ',').split(','))
     except ValueError as error:
         raise ValueError('SWIN_L_ROAD_ROI_EXCLUSION_POLYGON must be comma-separated floats') from error
-
-
-def _lidar_config_from_args(args):
-    return ObstacleConfig(**{name: getattr(args, "obstacle_" + name)
-                             for name in ObstacleConfig.__dataclass_fields__})
-
-
-def _avoidance_config_from_args(args):
-    return AvoidanceConfig(**{name: getattr(args, "avoidance_" + name)
-                              for name in AvoidanceConfig.__dataclass_fields__})
-
-
-def _motion_config_from_args(args):
-    values = {name: getattr(args, 'motion_'+name)
-              for name in MotionConfig.__dataclass_fields__ if name != 'base_frame'}
-    values['base_frame'] = args.path_frame_id
-    values['max_reference_age_sec'] = min(values['max_reference_age_sec'], args.connectome_max_age_sec)
-    return MotionConfig(**values)
-
-
-def _camera_info_topic(image_topic: str) -> str:
-    return image_topic.rsplit("/", 1)[0] + "/camera_info"
 
 
 def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
@@ -454,7 +441,7 @@ class FramePacket:
     sequence: int
     source_header: Any = None
     generation: int = 0
-    motion_epoch: int | None = None
+    fcn_masks: bool = False
 
 
 def validate_camera_image(message: Any, bridge: Any) -> None:
@@ -682,14 +669,9 @@ def run_mcap(args):
         raise FileNotFoundError(f"MCAP input does not exist: {path}")
     with_path = args.overlay_mode == "local-path"
     local_config = _local_path_config_from_args(args) if with_path else None
-    segmenter = BestSoFarSegmenter(_runtime_config(args))
+    segmenter = _segmenter_from_args(args)
     planner = _surface_planner_from_args(args, local_config) if with_path else None
     smoother = _path_smoother(args.path_mask_class, args, local_config) if with_path else None
-    sensors = LidarRuntime(args, _lidar_config_from_args(args), _avoidance_config_from_args(args),
-                           drive_config=DriveConfig()) if with_path and args.avoidance_enabled else None
-    topics = [args.image_topic]
-    if sensors:
-        topics += [args.lidar_topic, args.lidar_imu_topic, args.camera_info_topic]
     start_ns = 0
     if args.start_offset > 0:
         from mcap.reader import make_reader
@@ -704,16 +686,8 @@ def run_mcap(args):
     previous_mask = None
     times = deque(maxlen=32)
     try:
-        for schema, channel, message, decoded in _iter_mcap_events(path, tuple(topics), start_time_ns=start_ns):
+        for schema, channel, message, decoded in _iter_mcap_events(path, (args.image_topic,), start_time_ns=start_ns):
             now = message.log_time / 1e9
-            if sensors and channel.topic != args.image_topic:
-                if channel.topic == args.lidar_topic:
-                    sensors.on_cloud(decoded, now, message.log_time)
-                elif channel.topic == args.lidar_imu_topic:
-                    sensors.on_imu(decoded, now)
-                elif channel.topic == args.camera_info_topic:
-                    sensors.on_info(decoded)
-                continue
             if channel.topic != args.image_topic:
                 continue
             if schema.name != "sensor_msgs/msg/Image":
@@ -727,8 +701,9 @@ def run_mcap(args):
                 overlay = segmenter.render_overlay(frame, result.selected_mask, frame_index=count, fps=args.output_fps)
             else:
                 if args.unrestricted_path_mode or now >= next_inference:
+                    extra = {'source_stamp': now} if getattr(args, 'front_connectome_url', '') else {}
                     result = segmenter.segment(frame, detect_road_hazards=planner is not None,
-                                               path_mask_class=args.path_mask_class)
+                                               path_mask_class=args.path_mask_class, **extra)
                     previous_mask = result.selected_mask
                     if planner:
                         estimates = planner.plan(frame, previous_mask, result.road_hazard_mask,
@@ -740,19 +715,13 @@ def run_mcap(args):
                     else:
                         estimate = extract_path_estimates(previous_mask, (args.path_mask_class,), local_config)[args.path_mask_class]
                     smoother.update(estimate, now)
-                    if sensors:
-                        sensors.set_reference(previous_mask, decoded.header, frame.shape[:2], now)
                     updates += 1
                     times.append(result.total_seconds)
                     next_inference = now + 1 / args.inference_hz
                 current = smoother.current(now)
-                if sensors:
-                    nominal = decide_drive(current, camera_age_sec=0, inference_age_sec=0, config=DriveConfig())
-                    sensors.apply(nominal, current, args.path_mask_class, now, message.log_time)
                 overlay = render_local_path_overlay(frame, previous_mask, estimate, current, local_config,
                     frame_index=count, inference_count=updates,
                     inference_hz=1 / float(np.mean(times)) if times and np.mean(times) > 0 else 0.,
-                    status_text=sensors.metrics.get("reason") if sensors else None,
                     path_mask_class=args.path_mask_class)
             writer.write(overlay)
             count += 1
@@ -774,10 +743,7 @@ def run_mcap(args):
             "output": str(args.output.expanduser().resolve()), "model": segmenter.metadata(),
             "path_mask_class": args.path_mask_class if with_path else None,
             "local_path": asdict(local_config) if local_config else None,
-            "path_planner": planner.metrics if planner else {"backend": "local"},
-            "lidar_obstacles": {"enabled": sensors is not None, "topic": args.lidar_topic,
-                "imu_topic": args.lidar_imu_topic, "mode": "base_link_local",
-                **(sensors.metrics if sensors else {})}}
+            "path_planner": planner.metrics if planner else {"backend": "local"}}
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2)+"\n")
     print(f"MCAP_COMPLETE frames={count} swin_l_updates={updates} output={args.output}")
@@ -851,6 +817,7 @@ def _path_message(path: SmoothedPath | None, header: Any, frame_id: str, *, stam
 def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
     """Reject task-driven control unless its model and calibration are explicit."""
 
+    # The original model remains active for Sidewalk, including its pin checks.
     if args.profile not in (SWIN_L_ASPECT_FP16_PROFILE, *R50_PROFILES):
         raise ValueError(
             "task-drive mode requires a pinned FP16 deployment profile: "
@@ -934,14 +901,14 @@ def run_ros2(args: argparse.Namespace) -> int:
     local_config = _local_path_config_from_args(args)
     planner = _surface_planner_from_args(args, local_config)
     waypoint_guide = WaypointGuide(local_config, PlannerConfig(
-        half_width_m=args.obstacle_robot_half_width_m, margin_m=args.obstacle_margin_m))
+        half_width_m=args.robot_half_width_m, margin_m=args.path_margin_m))
     # Morphology must not create an all-core OpenCV pool alongside the ROS
     # sensor executor and CUDA worker. Match the existing CPU thread budget.
     cv2.setNumThreads(2)
     segmenter = (PerceptionProcess(_runtime_config(args), {
         'url': planner.client.url, 'local_config': local_config,
         'planner_config': planner.client.config, 'timeout': planner.client.timeout})
-        if args.inference_process else BestSoFarSegmenter(_runtime_config(args)))
+        if args.inference_process else _segmenter_from_args(args))
     if task_mode and segmenter.device.type != "cuda":
         if args.inference_process: segmenter.close()
         raise RuntimeError("task-drive mode requires a CUDA model device")
@@ -949,6 +916,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         mask_class: _path_smoother(mask_class, args, local_config)
         for mask_class in (PATH_MASK_CLASSES if task_mode else (args.path_mask_class,))
     }
+    fcn = FcnRoadPlanner(local_config, args.fcn_height_m) if args.fcn_sha256 else None
     latest = LatestFrameQueue(enabled=not task_mode)
     # SIGTERM can interrupt a ROS callback already reading this state.
     state_lock = threading.RLock()
@@ -973,8 +941,10 @@ def run_ros2(args: argparse.Namespace) -> int:
         "last_image_stamp_ns": None,
         "last_inference_stamp_ns": None,
         "planner_status": _waiting_planner_status(args, args.path_mask_class),
-        "motion_epoch": None,
         "pipeline_timing": {},
+        "fcn_metrics": {},
+        "front_command": None,
+        "front_metrics": {},
     }
     worker_error: list[BaseException] = []
 
@@ -993,36 +963,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "task-drive mode requires live system time, not /clock"
                 )
             self.bridge = CvBridge()
-            self.base_from_lidar = parse_transform(args.lidar_to_base_transform)
-            self.camera_from_base = parse_transform(args.base_to_camera_transform)
-            self.tf_buffer = self.tf_listener = None
-            need_motion_tf = args.motion_enabled and (
-                not args.motion_base_from_child_transform or not args.motion_base_from_imu_transform)
-            if need_motion_tf or (args.avoidance_enabled and args.lidar_calibration_profile == "tf" and (
-                self.base_from_lidar is None or self.camera_from_base is None
-            )):
-                from tf2_ros import Buffer, TransformListener
-
-                self.tf_buffer = Buffer()
-                self.tf_listener = TransformListener(self.tf_buffer, self)
             self.drive_config = _drive_config_from_args(args) if task_mode else None
-            def lookup(target, source, header):
-                from rclpy.time import Time
-                try:
-                    return transform_matrix(self.tf_buffer.lookup_transform(
-                        target, source, Time.from_msg(header.stamp)).transform)
-                except Exception as error:
-                    raise ValueError("lidar_transform_unavailable") from error
-            self.motion = MotionBuffer(_motion_config_from_args(args),
-                parse_transform(args.motion_base_from_child_transform),
-                parse_transform(args.motion_base_from_imu_transform), lookup) if args.motion_enabled else None
-            self.motion_limiter = CommandLimiter(self.motion.config) if self.motion else None
-            self.motion_preview = None
             self.next_telemetry_at = 0.
             self.control_times = deque(maxlen=PERFORMANCE_SAMPLE_WINDOW)
-            self.obstacles = LidarRuntime(args, _lidar_config_from_args(args),
-                _avoidance_config_from_args(args), lookup, self.drive_config or DriveConfig(),
-                motion=self.motion) if args.avoidance_enabled else None
             self.path_search = (
                 PathLossRecovery(self.drive_config, output_hz=args.output_hz)
                 if task_mode else None
@@ -1100,26 +1043,10 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.image_subscription = self.create_subscription(
                 Image, args.image_topic, self.on_image, input_qos
             )
-            if self.motion:
-                from nav_msgs.msg import Odometry
-                from sensor_msgs.msg import Imu
-                sensor_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
-                                        reliability=ReliabilityPolicy.BEST_EFFORT)
-                self.motion_odom_subscription = self.create_subscription(
-                    Odometry, args.motion_odom_topic, self.on_motion_odom, sensor_qos)
-                self.motion_imu_subscription = self.create_subscription(
-                    Imu, args.motion_imu_topic, self.on_motion_imu, sensor_qos)
-            if args.avoidance_enabled:
-                from sensor_msgs.msg import CameraInfo, Imu, PointCloud2
-
-                sensor_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=5,
-                                        reliability=ReliabilityPolicy.BEST_EFFORT)
-                self.lidar_subscription = self.create_subscription(
-                    PointCloud2, args.lidar_topic, self.on_lidar, sensor_qos)
-                self.imu_subscription = self.create_subscription(
-                    Imu, args.lidar_imu_topic, self.on_lidar_imu, sensor_qos)
-                self.camera_info_subscription = self.create_subscription(
-                    CameraInfo, args.camera_info_topic, self.on_camera_info, sensor_qos)
+            self.fcn_subscription = None
+            self.fcn_session_start_ns = None
+            self.fcn_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
+                                      reliability=ReliabilityPolicy.BEST_EFFORT)
             self.path_publisher = self.create_publisher(
                 __import__("nav_msgs.msg", fromlist=["Path"]).Path,
                 args.local_path_topic,
@@ -1163,7 +1090,16 @@ def run_ros2(args: argparse.Namespace) -> int:
                 if task_mode
                 else None
             )
+            self.slam_localization = None
+            self.last_slam_stop_at = None
             if task_mode:
+                self.slam_command_publisher = self.create_publisher(
+                    String, "/grit_slam/localization/command", self.command_qos)
+                self.create_subscription(
+                    String, "/grit_slam/localization/status", self.on_slam_localization,
+                    QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
+                               reliability=ReliabilityPolicy.RELIABLE,
+                               durability=DurabilityPolicy.TRANSIENT_LOCAL))
                 apriltag_qos = QoSProfile(
                     history=HistoryPolicy.KEEP_LAST,
                     depth=1,
@@ -1190,11 +1126,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                             reliability=ReliabilityPolicy.BEST_EFFORT,
                         ),
                     )
-            control_hz = args.avoidance_control_hz if args.avoidance_enabled else args.output_hz
-            if self.motion:
-                control_hz = max(control_hz, self.motion.config.control_hz)
-            self.control_hz = control_hz
-            self.timer = self.create_timer(1.0 / control_hz, self.publish_state)
+            self.control_hz = args.output_hz
+            self.timer = self.create_timer(1.0 / self.control_hz, self.publish_state)
             self.started = time.monotonic()
             self.get_logger().info(
                 "Swin-L local path debug started | image=%s profile=%s "
@@ -1233,6 +1166,47 @@ def run_ros2(args: argparse.Namespace) -> int:
                     String(data=json.dumps(body, separators=(",", ":")))
                 )
 
+        def on_slam_localization(self, message: Any) -> None:
+            try:
+                body = json.loads(message.data)
+            except (TypeError, ValueError):
+                return
+            if not isinstance(body, dict):
+                return
+            with state_lock:
+                if body.get("state") in ("STOPPED", "ERROR"):
+                    self.slam_localization = None
+                    self.last_slam_stop_at = None
+                    return
+                if (body.get("state") not in ("STARTING", "READY")
+                        or not isinstance(body.get("task_id"), str)
+                        or not body["task_id"].strip()
+                        or not isinstance(body.get("map_uuid"), str)
+                        or not body["map_uuid"].strip()):
+                    return
+                self.slam_localization = {
+                    "task_id": body["task_id"], "map_uuid": body["map_uuid"]}
+                try:
+                    self.stop_slam_localization(force=True)
+                except Exception as error:
+                    self.get_logger().error(f"SLAM STOP publication failed: {error}")
+                    self.abort_active_task("slam_stop_publish_error")
+
+        def stop_slam_localization(self, *, force: bool = False) -> None:
+            # STOP must name SLAM's retained Navigation session, not this task.
+            # Navigation-owned segments still need localization for guidance.
+            now = time.monotonic()
+            if (self.tasks is None or self.tasks.active is None
+                    or self.slam_localization is None
+                    or (navigation_mode and not self.standalone.ready(now))):
+                return
+            if (not force and self.last_slam_stop_at is not None
+                    and now - self.last_slam_stop_at < 1.0):
+                return
+            self.slam_command_publisher.publish(String(data=json.dumps({
+                "command": "STOP", **self.slam_localization, "grace_sec": 0})))
+            self.last_slam_stop_at = now
+
         def configure_worker_owner(self, surface):
             configure_flags(surface)
             self.drive_config = _drive_config_from_args(args)
@@ -1258,6 +1232,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     try:
                         self.configure_worker_owner(False)
                         self.tasks.active = replace(self.tasks.active, started_at=time.monotonic())
+                        self.stop_slam_localization(force=True)
                         self.command_publisher = self.create_publisher(
                             Request, args.sport_request_topic, self.command_qos)
                         self.apriltags.begin_task(
@@ -1449,11 +1424,22 @@ def run_ros2(args: argparse.Namespace) -> int:
             # to the worker, which alone owns the segmenter during forward().
             with state_lock:
                 latest.set_enabled(enabled)
+                if fcn is not None:
+                    self.fcn_session_start_ns = self.get_clock().now().nanoseconds if enabled else None
+                    if self.fcn_subscription is not None:
+                        self.destroy_subscription(self.fcn_subscription)
+                        self.fcn_subscription = None
+                    if enabled and self.tasks.active and self.tasks.active.selected_mask == 1:
+                        self.fcn_subscription = self.create_subscription(
+                            Image, mask_topic(args.fcn_sha256), self.on_fcn_masks, self.fcn_qos)
+                    state['fcn_metrics'] = {}
+                state['front_command'] = None
+                state['front_metrics'] = {}
                 # Replace path histories instead of locking an old smoother:
                 # SIGTERM may have interrupted its current() call on this thread.
                 for mask_class in smoothers:
                     smoothers[mask_class] = _path_smoother(mask_class, args, local_config)
-                if planner:
+                if planner or fcn:
                     state['planner_status'] = _waiting_planner_status(args,
                         active_path_mask_class(self.tasks.active if self.tasks else None, args.path_mask_class))
                 for key in (
@@ -1469,23 +1455,18 @@ def run_ros2(args: argparse.Namespace) -> int:
                 }
                 state["path_recovery_inferences"] = {key: 0 for key in smoothers}
                 state["semantic_path_missing"] = {key: False for key in smoothers}
-                state['motion_epoch'] = None
                 state['waypoint_guidance'] = {}
                 for key in (
                     "performance_inference_seconds", "performance_processing_seconds",
                     "performance_completion_times",
                 ):
                     state[key].clear()
-            if self.obstacles is not None:
-                self.obstacles.reset_reference()
             self.last_valid_yaw_rate = None
             self.last_valid_forward_mps = None
             self.path_unavailable_inferences = 0
             self.path_recovery_inferences = 0
             if self.path_search is not None:
                 self.path_search.reset()
-            if self.motion_limiter:
-                self.motion_limiter.reset()
 
         def release_task_control(self, reason: str) -> None:
             self.set_task_inference(False)
@@ -1559,6 +1540,19 @@ def run_ros2(args: argparse.Namespace) -> int:
             inference_age_sec = _effective_source_age_sec(
                 last_inference_at, last_inference_stamp_ns, now, clock_now_ns
             )
+            if fcn is not None and mask_class == 1:
+                reason = self.fcn_stop_reason(path, camera_age_sec, inference_age_sec)
+                if reason:
+                    return None, DriveDecision.stop(reason)
+            if uses_front_policy(args, mask_class):
+                from front_connectome_client import front_drive_decision, limit_front_command
+                with state_lock:
+                    learned = state['front_command']
+                decision = front_drive_decision(learned, mask_class,
+                    (camera_age_sec, inference_age_sec), args.connectome_max_age_sec, camera_fault_reason)
+                decision = limit_front_command(decision, self.drive_config.max_forward_mps,
+                                               self.drive_config.max_yaw_rps)
+                return path, decision
             connectome_path = uses_connectome(mask_class, planner is not None, planner_status)
             if connectome_path:
                 # This gate also overrides optional legacy path-loss recovery:
@@ -1567,12 +1561,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                     (camera_age_sec, inference_age_sec), args.connectome_max_age_sec)
                 if reason:
                     self.last_valid_forward_mps = self.last_valid_yaw_rate = None
-                    if self.motion:
-                        self.motion.metrics.update(ready=False, reason=reason)
-                    return None, DriveDecision.stop(reason)
-            if self.motion:
-                path, reason = self.motion_path(mask_class, now, clock_now_ns)
-                if reason:
                     return None, DriveDecision.stop(reason)
             decision = decide_drive(
                 path,
@@ -1584,17 +1572,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path_unavailable_inferences=self.path_unavailable_inferences,
                 path_recovery_inferences=self.path_recovery_inferences if recovering else None,
             )
-            if self.motion:
-                decision = follow_path(path, decision, self.drive_config)
-            if self.obstacles is not None:
-                surface_class = (planner_status.get('union_surface', mask_class)
-                                 if planner and mask_class == 0 else mask_class)
-                decision = self.obstacles.apply(decision, path, surface_class, now, clock_now_ns)
             if camera_fault_reason is not None and decision.reason not in (
                 "camera_stale", "inference_stale"
             ):
                 decision = DriveDecision.stop(camera_fault_reason)
-            if self.tasks.active is not None and self.obstacles is None and not connectome_path:
+            if (self.tasks.active is not None and not connectome_path
+                    and not (fcn is not None and mask_class == 1)):
                 sensor_reason = None
                 # Searching requires live observations even when normal driving's
                 # optional stale-sensor stops are disabled.
@@ -1619,7 +1602,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if decision.reason in (
                 "camera_stale", "inference_stale",
                 "camera_timestamp_invalid", "camera_conversion_error",
-            ) or decision.reason.startswith(("branch_", "lidar_", "avoidance_", "obstacle_")):
+            ) or decision.reason.startswith("branch_"):
                 self.last_valid_yaw_rate = None
                 self.last_valid_forward_mps = None
             elif self.tasks.active is not None and decision.reason in (
@@ -1643,6 +1626,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.on_shared_task_event(event, now)
                 return
             rejection_reason = None
+            if args.front_connectome_url or fcn is not None:
+                try:
+                    if requested_selected_mask(event, args.path_mask_class) not in (1, 2):
+                        rejection_reason = ('fcn_requires_road_or_sidewalk' if fcn else 'front_connectome_requires_road_or_sidewalk')
+                except ValueError:
+                    rejection_reason = 'invalid_selected_mask'
             if self.command_publisher is not None and self.tasks.active is None:
                 rejection_reason = "control_release_pending"
             previous_task = self.tasks.active
@@ -1658,6 +1647,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.apriltag_window_resolved_at = None
                 try:
                     assert Request is not None
+                    self.stop_slam_localization(force=True)
                     self.command_publisher = self.create_publisher(
                         Request, args.sport_request_topic, self.command_qos
                     )
@@ -1704,6 +1694,8 @@ def run_ros2(args: argparse.Namespace) -> int:
         def publish_drive(self, decision: DriveDecision) -> DriveDecision:
             if self.command_publisher is None:
                 return decision
+            active = self.tasks.active if self.tasks is not None else None
+            front_road = uses_front_policy(args, active_path_mask_class(active, args.path_mask_class))
             if task_mode and not rclpy.ok():
                 # A callback interrupted by SIGTERM can resume after its stop.
                 decision = DriveDecision.stop("shutdown")
@@ -1722,6 +1714,32 @@ def run_ros2(args: argparse.Namespace) -> int:
                 reason = reason or _waypoint_stop_reason(guidance)
                 if reason:
                     decision = DriveDecision.stop(reason)
+            if (fcn is not None and active is not None and active.selected_mask == 1
+                    and (decision.vx or decision.vy or decision.yaw_rate)):
+                now = time.monotonic()
+                clock_ns = self.get_clock().now().nanoseconds
+                with state_lock:
+                    ages = [_effective_source_age_sec(state[a], state[s], now, clock_ns)
+                            for a, s in (('last_image_at', 'last_image_stamp_ns'),
+                                         ('last_inference_at', 'last_inference_stamp_ns'))]
+                    reason = self.fcn_stop_reason(smoothers[1].current(now), *ages)
+                if reason:
+                    decision = DriveDecision.stop(reason)
+            if front_road and (decision.vx or decision.vy or decision.yaw_rate):
+                from front_connectome_client import front_drive_decision, limit_front_command
+                now = time.monotonic(); clock_ns = self.get_clock().now().nanoseconds
+                with state_lock:
+                    active = self.tasks.active if self.tasks is not None else None
+                    mask_class = active_path_mask_class(active, args.path_mask_class)
+                    ages = [_effective_source_age_sec(state[received], state[stamp], now, clock_ns)
+                        for received, stamp in [('last_image_at', 'last_image_stamp_ns'),
+                                                ('last_inference_at', 'last_inference_stamp_ns')]]
+                    guard = front_drive_decision(state['front_command'], mask_class, ages,
+                        args.connectome_max_age_sec, state['camera_fault_reason'])
+                if guard.reason != 'tracking':
+                    decision = guard
+                decision = limit_front_command(decision, self.drive_config.max_forward_mps,
+                                               self.drive_config.max_yaw_rps)
             if planner and (decision.vx or decision.vy or decision.yaw_rate):
                 now = time.monotonic()
                 clock_ns = self.get_clock().now().nanoseconds
@@ -1738,46 +1756,52 @@ def run_ros2(args: argparse.Namespace) -> int:
                             current, state['planner_status'].get('ready'), ages, args.connectome_max_age_sec)
                 if reason:
                     decision = DriveDecision.stop(reason)
-            if self.motion:
-                now = time.monotonic()
-                if decision.vx or decision.vy or decision.yaw_rate:
-                    active = self.tasks.active if self.tasks else None
-                    mask_class = active_path_mask_class(active, args.path_mask_class)
-                    _, reason = self.motion_path(mask_class, now, self.get_clock().now().nanoseconds)
-                    if reason:
-                        decision = DriveDecision.stop(reason)
-                decision = self.motion_limiter.limit(decision, now)
-            if self.obstacles is not None:
-                active = self.tasks.active if self.tasks is not None else None
-                surface_class = active_path_mask_class(active, args.path_mask_class)
-                if planner and surface_class == 0:
-                    surface_class = state['planner_status'].get('union_surface', 0)
-                decision = self.obstacles.guard(decision, surface_class,
-                    time.monotonic(), self.get_clock().now().nanoseconds)
             assert Request is not None
             move = drive_to_sport_move(vx=decision.vx, vy=decision.vy, yaw_rate=decision.yaw_rate)
             if navigation_mode and not standalone_ready:
                 packet = self.navigation.velocity(move, stamp=self.get_clock().now().nanoseconds / 1e9)
                 if packet is not None:
                     self.command_publisher.publish(String(data=json.dumps(packet)))
-                if self.motion_limiter:
-                    self.motion_limiter.record(decision, time.monotonic())
                 return decision
             message = populate_move_request(
                 Request(),
                 move,
             )
             self.command_publisher.publish(message)
-            if self.motion_limiter:
-                self.motion_limiter.record(decision, time.monotonic())
             self.path_search.record_command(decision, now=time.monotonic())
             return decision
 
+        def fcn_stop_reason(self, path, camera_age, inference_age):
+            if state['camera_fault_reason']:
+                return state['camera_fault_reason']
+            if any(age is None or not 0 <= age <= args.fcn_max_age_sec for age in (camera_age, inference_age)):
+                return "fcn_masks_stale"
+            if path is None or not state['fcn_metrics'].get('front_path_valid'):
+                return "fcn_front_path_unavailable"
+            return path.stop_reason
+
+        def on_fcn_masks(self, message):
+            with state_lock:
+                if not latest.enabled or self.tasks.active is None or self.tasks.active.selected_mask != 1:
+                    return
+                stamp = _stamp_ns(message.header)
+                if self.fcn_session_start_ns is None or stamp < self.fcn_session_start_ns:
+                    return  # A queued DDS sample from before this task.
+                if not _live_source_stamp(stamp, self.get_clock().now().nanoseconds, args.fcn_max_age_sec):
+                    return
+                if state['last_image_stamp_ns'] is not None and stamp <= state['last_image_stamp_ns']:
+                    return
+                self.accept_image(message, stamp, is_fcn=True)
+
         def on_image(self, message: Any) -> None:
+            if fcn is not None and self.tasks.active and self.tasks.active.selected_mask == 1:
+                return
             if task_mode and not latest.enabled:
                 return
             try:
                 source_stamp_ns = _stamp_ns(message.header) if task_mode else None
+                if fcn is not None and self.fcn_session_start_ns is not None and source_stamp_ns < self.fcn_session_start_ns:
+                    return
                 if task_mode and self.drive_config.stop_on_camera_timestamp_invalid and (
                     not _live_source_stamp(
                         source_stamp_ns,
@@ -1798,49 +1822,31 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.publish_drive(DriveDecision.stop("camera_timestamp_invalid"))
                     return
                 validate_camera_image(message, self.bridge)
-                with state_lock:
-                    accepted = latest.put(
-                        FramePacket(
-                            image_message=message,
-                            sequence=int(state["sequence"]),
-                            source_header=message.header,
-                            motion_epoch=self.motion.epoch if self.motion else None,
-                        )
-                    )
-                    if accepted:
-                        arrival = time.monotonic()
-                        if state['last_image_at'] is not None:
-                            gap = arrival-state['last_image_at']
-                            state['camera_gap_max_sec'] = max(state['camera_gap_max_sec'], gap)
-                            state['camera_gaps_over_sec'] += int(gap > 1.)
-                        state['camera_received'] += 1
-                        state["sequence"] += 1
-                        state["last_image_at"] = arrival
-                        if task_mode:
-                            state["last_image_stamp_ns"] = source_stamp_ns
+                self.accept_image(message, source_stamp_ns)
             except Exception as error:  # noqa: BLE001 - safe debug boundary.
                 self.camera_conversion_failed(error)
 
-        def on_lidar(self, message):
-            self.obstacles.on_cloud(message, time.monotonic(), self.get_clock().now().nanoseconds)
-
-        def on_motion_odom(self, message):
-            self.motion.on_odom(message, time.monotonic(), self.get_clock().now().nanoseconds)
-
-        def on_motion_imu(self, message):
-            self.motion.on_imu(message, time.monotonic(), self.get_clock().now().nanoseconds)
-
-        def motion_path(self, mask_class, now, clock_ns):
+        def accept_image(self, message, source_stamp_ns, *, is_fcn=False):
             with state_lock:
-                path = smoothers[mask_class].current(now)
-                header, epoch = state['header'], state['motion_epoch']
-            return self.motion.path(path, _stamp_ns(header) if header else 0, epoch, now, clock_ns)
-
-        def on_lidar_imu(self, message):
-            self.obstacles.on_imu(message, time.monotonic())
-
-        def on_camera_info(self, message):
-            self.obstacles.on_info(message)
+                accepted = latest.put(
+                    FramePacket(
+                        image_message=message,
+                        sequence=int(state["sequence"]),
+                        source_header=message.header,
+                        fcn_masks=is_fcn,
+                    )
+                )
+                if accepted:
+                    arrival = time.monotonic()
+                    if state['last_image_at'] is not None:
+                        gap = arrival-state['last_image_at']
+                        state['camera_gap_max_sec'] = max(state['camera_gap_max_sec'], gap)
+                        state['camera_gaps_over_sec'] += int(gap > 1.)
+                    state['camera_received'] += 1
+                    state["sequence"] += 1
+                    state["last_image_at"] = arrival
+                    if task_mode:
+                        state["last_image_stamp_ns"] = source_stamp_ns
 
         def camera_conversion_failed(
             self, error: Exception, *, packet: FramePacket | None = None
@@ -1889,6 +1895,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.request_task_control()
             if navigation_mode and self.navigation.expired(now):
                 self.stop_navigation_segment("navigation_lease_expired", error=True)
+            self.stop_slam_localization()
             tag_status = None
             if self.apriltags is not None:
                 tag_status = (
@@ -1971,28 +1978,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                     drive_decision = self.publish_drive(drive_decision)
             else:
                 path = smoothers[mask_class].current(now)
-                if self.motion:
-                    clock_ns = self.get_clock().now().nanoseconds
-                    path, reason = self.motion_path(mask_class, now, clock_ns)
-                    preview_config = DriveConfig(max_forward_mps=_env_float('LINE_TRACKING_MAX_FORWARD_MPS', .5))
-                    nominal = decide_drive(path, camera_age_sec=0., inference_age_sec=0., config=preview_config)
-                    preview = (DriveDecision.stop(reason) if reason else follow_path(path, nominal, preview_config))
-                    if self.obstacles is not None:
-                        surface = state['planner_status'].get('union_surface', mask_class) if mask_class == 0 else mask_class
-                        preview = self.obstacles.apply(preview, path, surface, now, clock_ns)
-                    preview = self.motion_limiter.limit(preview, now)
-                    if self.obstacles is not None:
-                        preview = self.obstacles.guard(preview, surface, now, clock_ns)
-                    self.motion_limiter.record(preview, now)
-                    self.motion_preview = asdict(preview)
-                elif self.obstacles is not None:
-                    preview = decide_drive(path, camera_age_sec=0., inference_age_sec=0., config=DriveConfig())
-                    self.obstacles.apply(preview, path, mask_class, now, self.get_clock().now().nanoseconds)
             # Real callbacks keep refreshing liveness after completion. Retain
             # the terminal display independently until control is released.
             if self.terminal_apriltag_status is not None:
                 tag_status = self.terminal_apriltag_status
-            # Motion and final publication gates above always run at control
+            # Command publication gates above always run at control
             # cadence. Debug serialization/ROS Pose construction must not
             # starve either sensor callbacks or the inference worker's GIL.
             self.control_times.append(time.monotonic())
@@ -2022,21 +2012,16 @@ def run_ros2(args: argparse.Namespace) -> int:
                     'observed_hz': float(1/np.mean(periods)) if len(periods) and np.mean(periods) > 0 else None,
                     'gap_max_sec': float(np.max(periods)) if len(periods) else None,
                     'telemetry_hz': args.telemetry_hz or self.control_hz},
-                "motion_tracking": {"enabled": bool(self.motion), "control_hz": self.control_hz,
-                    **(self.motion.snapshot(now, self.get_clock().now().nanoseconds) if self.motion else {}),
-                    "source_stamp_sec": _stamp_ns(header)/1e9 if header is not None else None,
-                    "command": asdict(self.motion_limiter.last) if self.motion_limiter else None,
-                    "preview_command": self.motion_preview},
                 "path_planner": planner_status,
-                "lidar_obstacles": {"enabled": args.avoidance_enabled,
-                    "topic": args.lidar_topic, "expected_hz": 10,
-                    "control_hz": args.avoidance_control_hz,
-                    **(self.obstacles.metrics if self.obstacles else {})},
                 "profile": args.profile,
-                "camera_topic": args.image_topic,
+                "fcn360": dict(state['fcn_metrics']) if fcn and mask_class == 1 else None,
+                "inference_backend": ('fcn512-360' if fcn and mask_class == 1 else 'front-connectome' if uses_front_policy(args, mask_class) else 'legacy'),
+                "front_connectome": (dict(state['front_metrics'], command=state['front_command'])
+                    if uses_front_policy(args, mask_class) else None),
+                "camera_topic": mask_topic(args.fcn_sha256) if fcn and mask_class == 1 else args.image_topic,
                 "path_mask_class": mask_class,
-                "path_roi_polygon": list(path_config_for_mode(local_config, mask_class).roi_polygon),
-                "path_roi_exclusion_polygon": list(path_config_for_mode(local_config, mask_class).roi_exclusion_polygon),
+                "path_roi_polygon": [] if fcn and mask_class == 1 else list(path_config_for_mode(local_config, mask_class).roi_polygon),
+                "path_roi_exclusion_polygon": [] if fcn and mask_class == 1 else list(path_config_for_mode(local_config, mask_class).roi_exclusion_polygon),
                 "path_surface": PATH_MASK_CLASSES[mask_class],
                 "path_tracked": path is not None and path.stop_reason is None,
                 "branch_selection": path.branch_status if path else {
@@ -2046,7 +2031,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_confidence": float(path.confidence) if path else 0.0,
                 "path_age_sec": float(path.age_sec) if path else None,
                 "path_duration_sec": local_config.path_duration_sec,
-                "unrestricted_path_mode": args.unrestricted_path_mode,
+                "unrestricted_path_mode": False if fcn and mask_class == 1 else args.unrestricted_path_mode,
                 "inference_target_hz": args.inference_hz,
                 "inference_enabled": latest.enabled,
                 "near_distance_m": local_config.near_distance_m,
@@ -2146,10 +2131,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.metrics_publisher.publish(String(data=json.dumps(metrics)))
             if header is None:
                 return
-            # Compensated coordinates belong to the CURRENT body pose. Keep
-            # the camera source stamp separately in metrics, never relabel it.
-            path_message = _path_message(path, header, args.path_frame_id,
-                stamp=self.get_clock().now().to_msg() if self.motion else None)
+            path_message = _path_message(path, header, args.path_frame_id)
             self.path_publisher.publish(path_message)
 
     rclpy.init(args=[])
@@ -2187,13 +2169,18 @@ def run_ros2(args: argparse.Namespace) -> int:
                         continue
                 if task_mode and packet.generation != previous_generation:
                     segmenter.reset()
+                    if fcn is not None:
+                        fcn.reset()
                     previous_generation = packet.generation
                 inference_started_at = time.monotonic()
                 # Limit start-to-start frequency, including conversion failures.
                 # Slow inference must not incur an extra fixed-period sleep.
                 next_allowed = inference_started_at + inference_period
                 try:
-                    frame_rgb = camera_image_rgb(packet.image_message, node.bridge)
+                    if packet.fcn_masks:
+                        masks = read_masks(packet.image_message)
+                    else:
+                        frame_rgb = camera_image_rgb(packet.image_message, node.bridge)
                 except Exception as error:  # noqa: BLE001 - retain camera fault handling.
                     node.camera_conversion_failed(error, packet=packet)
                     continue
@@ -2210,9 +2197,17 @@ def run_ros2(args: argparse.Namespace) -> int:
                     target_xy = guidance_packet['target_xy'] if guidance_packet else None
                     guidance_kwargs = guidance_packet or {}
                 kwargs = {"color_order": "rgb", "path_mask_class": requested_mode}
+                if uses_front_policy(args, requested_mode):
+                    kwargs['source_stamp'] = _stamp_ns(packet.source_header) / 1e9
                 if planner or guided:
                     kwargs['detect_road_hazards'] = True
-                if args.inference_process:
+                if packet.fcn_masks:
+                    estimate, fcn_metrics = fcn.plan(masks, stamp=_stamp_ns(packet.source_header)/1e9,
+                                                     max_gap=args.fcn_max_age_sec)
+                    fcn_metrics['front_path_valid'] = estimate is not None
+                    estimates = {key: estimate if key == 1 else None for key in smoothers}
+                    segmentation_finished_at = time.monotonic()
+                elif args.inference_process:
                     response = segmenter.infer(frame_rgb, _stamp_ns(packet.source_header)/1e9,
                                                packet.generation, packet.sequence, mode=requested_mode, **guidance_kwargs)
                     result = response['result']
@@ -2220,7 +2215,20 @@ def run_ros2(args: argparse.Namespace) -> int:
                     estimates = response['estimates']
                     planner.metrics = response['planner']
                 else:
-                    result = segmenter.segment(frame_rgb, **kwargs)
+                    try:
+                        result = segmenter.segment(frame_rgb, **kwargs)
+                    except FrontRoadInferenceError as error:
+                        node.get_logger().warning(f'front Road inference failed: {error}')
+                        with state_lock:
+                            # A failed request from a cancelled task must not
+                            # abort a newer Sidewalk (or Road) task.
+                            if latest.is_current(packet):
+                                if task_mode:
+                                    node.abort_active_task('front_connectome_unavailable')
+                                else:
+                                    state['front_command'] = None
+                                    state['front_metrics'] = {}
+                        continue
                     segmentation_finished_at = time.monotonic()
                 with state_lock:
                     if not latest.is_current(packet):
@@ -2228,8 +2236,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 # The path becomes usable when this result is available. Using
                 # the camera-arrival timestamp here can expire a path before it
                 # is ever published when inference or rate limiting is slow.
-                if args.inference_process:
-                    pass  # Same client/mask validation ran with R50 in the child.
+                if packet.fcn_masks or args.inference_process:
+                    pass  # The FCN geometry or the child process already supplied the path.
                 elif planner:
                     estimates = planner.plan(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR),
                         result.selected_mask, getattr(result, 'road_hazard_mask', np.zeros_like(result.selected_mask)),
@@ -2253,6 +2261,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                         continue
                     if planner:
                         state['planner_status'] = dict(planner.metrics)
+                    if packet.fcn_masks:
+                        state['fcn_metrics'] = fcn_metrics
+                        state['planner_status'] = {'backend': 'fcn360-local', 'ready': estimate is not None,
+                                                   'reason': 'tracking' if estimate is not None else 'fcn_front_path_unavailable'}
+                    state['front_command'] = result.front_command if uses_front_policy(args, requested_mode) else None
+                    state['front_metrics'] = result.front_metrics if uses_front_policy(args, requested_mode) else {}
                     state['waypoint_guidance'] = (
                         {'ready': False, 'reason': guidance_reason} if guidance_reason else
                         dict(planner.metrics.get('waypoint_guidance', {})) if planner else
@@ -2265,9 +2279,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                         if estimates[mask_class] is None:
                             smoother.reset(preserve_branch=True)
                         smoother.update(estimates[mask_class], path_updated_at)
-                    if node.obstacles is not None:
-                        node.obstacles.set_reference(result.selected_mask, packet.source_header,
-                            (packet.image_message.height, packet.image_message.width), path_updated_at)
                     inference_finished_at = time.monotonic()
                     if task_mode:
                         if packet.sequence >= state["camera_fault_min_sequence"]:
@@ -2292,12 +2303,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                                 recovery_counts[mask_class] += 1
                             counts[mask_class] = 0 if available else counts[mask_class] + 1
                     state["header"] = packet.source_header
-                    state['motion_epoch'] = packet.motion_epoch
                     state['pipeline_timing'] = {
                         'segmentation_ms': (segmentation_finished_at-inference_started_at)*1000,
                         'planner_ms': (path_updated_at-segmentation_finished_at)*1000,
                         'source_age_at_completion_sec': ((node.get_clock().now().nanoseconds-
-                            _stamp_ns(packet.source_header))/1e9 if planner else None),
+                            _stamp_ns(packet.source_header))/1e9 if planner or packet.fcn_masks else None),
                         'cuda_graph': args.cuda_graph,
                         'inference_process': args.inference_process,
                     }
@@ -2306,7 +2316,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     state["last_inference_at"] = inference_finished_at
                     if completed_before >= PERFORMANCE_WARMUP_FRAMES:
                         state["performance_inference_seconds"].append(
-                            result.inference_seconds
+                            segmentation_finished_at - inference_started_at if packet.fcn_masks else result.inference_seconds
                         )
                         state["performance_processing_seconds"].append(
                             inference_finished_at - inference_started_at
@@ -2354,6 +2364,13 @@ def run_ros2(args: argparse.Namespace) -> int:
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument('--fcn-sha256', default=_env('LINE_TRACKING_FCN_SHA256', ''))
+    parser.add_argument('--fcn-height-m', type=float, default=_env_float('LINE_TRACKING_FCN_HEIGHT_M', 1.6))
+    parser.add_argument('--fcn-max-age-sec', type=float, default=_env_float('LINE_TRACKING_FCN_MAX_AGE_SEC', 1.0))
+    parser.add_argument('--front-connectome-url', default=_env('LINE_TRACKING_FRONT_CONNECTOME_URL', ''))
+    parser.add_argument('--front-connectome-sha256', default=_env('LINE_TRACKING_FRONT_CONNECTOME_SHA256', ''))
+    parser.add_argument('--front-connectome-timeout-sec', type=float,
+        default=_env_float('LINE_TRACKING_FRONT_CONNECTOME_TIMEOUT_SEC', 1.))
     parser.add_argument('--path-planner', choices=('local', 'connectome'),
                         default=_env('LINE_TRACKING_PATH_PLANNER', 'local'))
     parser.add_argument('--connectome-url', default=_env('LINE_TRACKING_CONNECTOME_URL', 'http://127.0.0.1:8091/v1/plan'))
@@ -2365,33 +2382,9 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=_env_float('LINE_TRACKING_ROAD_BUILDING_COST_WEIGHT', 2.))
     parser.add_argument('--road-building-distance-m', type=float,
         default=_env_float('LINE_TRACKING_ROAD_BUILDING_DISTANCE_M', 2.))
-    parser.add_argument('--motion-enabled', action=argparse.BooleanOptionalAction,
-                        default=_env_bool('LINE_TRACKING_MOTION_ENABLED', False))
-    parser.add_argument('--motion-odom-topic', default=_env('LINE_TRACKING_MOTION_ODOM_TOPIC', '/dog_odom'))
-    parser.add_argument('--motion-imu-topic', default=_env('LINE_TRACKING_MOTION_IMU_TOPIC', '/dog_imu_raw'))
-    for name in ('child', 'imu'):
-        parser.add_argument('--motion-base-from-'+name+'-transform',
-                            default=_env('LINE_TRACKING_MOTION_BASE_FROM_'+name.upper()+'_TRANSFORM', ''))
-    for name, value in asdict(MotionConfig()).items():
-        if name != 'base_frame':
-            parser.add_argument('--motion-'+name.replace('_', '-'), type=type(value),
-                                default=type(value)(_env('LINE_TRACKING_MOTION_'+name.upper(), str(value))))
     parser.add_argument("--path-frame-id", default=_env("SWIN_L_PATH_FRAME_ID", "base_link"))
-    parser.add_argument("--avoidance-enabled", action=argparse.BooleanOptionalAction,
-                        default=_env_bool("LINE_TRACKING_AVOIDANCE_ENABLED", True))
-    parser.add_argument("--lidar-topic", default=_env("SWIN_L_LIDAR_TOPIC", DEFAULT_LIDAR_TOPIC))
-    parser.add_argument("--lidar-imu-topic", default=_env("SWIN_L_LIDAR_IMU_TOPIC", DEFAULT_IMU_TOPIC))
-    parser.add_argument("--camera-info-topic", default=_env("SWIN_L_CAMERA_INFO_TOPIC", ""))
-    parser.add_argument("--lidar-frame-id", default=_env("SWIN_L_LIDAR_FRAME_ID", "livox_frame"))
-    parser.add_argument("--lidar-calibration-profile", choices=CALIBRATION_PROFILES,
-                        default=_env("SWIN_L_LIDAR_CALIBRATION_PROFILE", "livox-a2-front"))
-    parser.add_argument("--lidar-to-base-transform", default=_env("SWIN_L_LIDAR_TO_BASE_TRANSFORM", ""))
-    parser.add_argument("--base-to-camera-transform", default=_env("SWIN_L_BASE_TO_CAMERA_TRANSFORM", ""))
-    for cls, prefix, env_prefix in ((ObstacleConfig, "obstacle_", "LIDAR_OBSTACLE_"),
-                                   (AvoidanceConfig, "avoidance_", "LINE_TRACKING_AVOIDANCE_")):
-        for name, value in asdict(cls()).items():
-            parser.add_argument("--" + (prefix + name).replace("_", "-"), dest=prefix + name,
-                type=type(value), default=type(value)(_env(env_prefix + name.upper(), str(value))))
+    parser.add_argument("--robot-half-width-m", type=float, default=_env_float("LINE_TRACKING_ROBOT_HALF_WIDTH_M", .30))
+    parser.add_argument("--path-margin-m", type=float, default=_env_float("LINE_TRACKING_PATH_MARGIN_M", .15))
     parser.add_argument(
         "--profile",
         choices=PROFILE_NAMES,
@@ -2726,34 +2719,29 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument("--segment-status-topic", default="/line_tracking/segment_status")
             live.add_argument("--segment-velocity-topic", default="/line_tracking/command")
     args = parser.parse_args(argv)
+    if args.fcn_sha256:
+        if (len(args.fcn_sha256) != 64 or any(c not in '0123456789abcdef' for c in args.fcn_sha256)
+                or not 0 < args.fcn_height_m < 5 or not math.isfinite(args.fcn_max_age_sec) or args.fcn_max_age_sec <= 0):
+            parser.error('FCN requires a lowercase SHA256, camera height (0..5 m) and positive maximum age')
+        if (args.mode != 'task-drive' or args.path_mask_class not in (1, 2) or args.path_planner != 'local'
+                or args.inference_process or args.front_connectome_url):
+            parser.error('FCN requires task-drive, Road or Sidewalk, local planner, and exclusive Road backend')
+    if args.front_connectome_url:
+        if args.path_mask_class not in (1, 2) or args.path_planner != 'local' or args.inference_process or args.mode == 'navigation-worker':
+            parser.error('front/sidewalk routing requires explicit mask 1 or 2, local planner and no inference process/navigation worker')
+        if not math.isfinite(args.front_connectome_timeout_sec) or args.front_connectome_timeout_sec <= 0:
+            parser.error('positive front connectome timeout required')
     if not math.isfinite(args.telemetry_hz) or not 0 <= args.telemetry_hz <= 50:
         parser.error('telemetry rate must be finite and 0..50 Hz')
     if args.inference_process and (args.path_planner != 'connectome' or args.mode == 'mcap'):
         parser.error('inference process requires live ros2/task-drive with connectome')
-    try:
-        _motion_config_from_args(args).validate()
-        parse_transform(args.motion_base_from_child_transform)
-        parse_transform(args.motion_base_from_imu_transform)
-        if args.motion_enabled and (args.path_planner != 'connectome' or args.mode == 'mcap'):
-            raise ValueError('motion tracking requires live ros2/task-drive with the connectome validated path planner')
-    except ValueError as error:
-        parser.error(str(error))
     if not all(math.isfinite(x) and x > 0 for x in (args.connectome_timeout_sec, args.connectome_max_age_sec)):
         parser.error('connectome timeout and max age must be finite and positive')
     try:
-        PlannerConfig(road_corridor_smoothing_m=args.road_corridor_smoothing_m,
+        PlannerConfig(half_width_m=args.robot_half_width_m, margin_m=args.path_margin_m,
+                      road_corridor_smoothing_m=args.road_corridor_smoothing_m,
                       road_building_cost_weight=args.road_building_cost_weight,
                       road_building_distance_m=args.road_building_distance_m).validate()
-    except ValueError as error:
-        parser.error(str(error))
-    args.camera_info_topic = args.camera_info_topic or _camera_info_topic(args.image_topic)
-    try:
-        _lidar_config_from_args(args).validate()
-        _avoidance_config_from_args(args).validate()
-        if args.lidar_calibration_profile not in CALIBRATION_PROFILES:
-            raise ValueError("invalid lidar calibration profile")
-        parse_transform(args.lidar_to_base_transform)
-        parse_transform(args.base_to_camera_transform)
     except ValueError as error:
         parser.error(str(error))
     if args.mode != "mcap" or args.overlay_mode == "local-path":

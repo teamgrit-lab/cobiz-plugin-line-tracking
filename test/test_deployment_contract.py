@@ -128,28 +128,15 @@ def test_active_deployment_has_no_manual_arm_or_external_clearance_contract():
         assert forbidden not in active
 
 
-def test_livox_obstacle_inputs_and_limits_reach_both_live_services():
+def test_tracking_services_only_configure_visual_path_geometry():
     import yaml
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("actual-activate", "debugging-swin-l"):
         env = services[name]["environment"]
-        assert env["LINE_TRACKING_AVOIDANCE_ENABLED"].endswith(":-true}")
-        assert env["SWIN_L_LIDAR_TOPIC"].endswith(":-/livox/lidar}")
-        assert env["SWIN_L_LIDAR_IMU_TOPIC"].endswith(":-/livox/imu}")
-        assert env["SWIN_L_LIDAR_TO_BASE_TRANSFORM"].endswith(":-}")
-        assert env["SWIN_L_BASE_TO_CAMERA_TRANSFORM"].endswith(":-}")
-        assert env["LIDAR_OBSTACLE_HEIGHT_REFERENCE"].endswith(":-base_link}")
-        assert env["LIDAR_OBSTACLE_MIN_HEIGHT_M"].endswith(":--0.2}")
-        assert env["LIDAR_OBSTACLE_MAX_HEIGHT_M"].endswith(":-0.2}")
-        assert env["LIDAR_OBSTACLE_HORIZONTAL_RANGE_M"].endswith(":-1.5}")
-        assert env["LIDAR_OBSTACLE_FOV_DEG"].endswith(":-190.0}")
-        assert env['LINE_TRACKING_MOTION_ENABLED'].endswith(':-false}')
-        assert env['LINE_TRACKING_MOTION_ODOM_TOPIC'].endswith(':-/dog_odom}')
-        assert env['LINE_TRACKING_MOTION_IMU_TOPIC'].endswith(':-/dog_imu_raw}')
-        assert env['LINE_TRACKING_MOTION_BASE_FROM_CHILD_TRANSFORM'].endswith(':-}')
-        assert not any(("ODOM" in key and not key.startswith('LINE_TRACKING_MOTION_'))
+        assert not any("LIDAR" in key or "AVOIDANCE" in key or "ROAD_OBJECT" in key for key in env)
+        assert not any(key.startswith("LINE_TRACKING_MOTION_") or "ODOM" in key
                        or "CORRIDOR_MEMORY" in key for key in env)
-    assert "ros-humble-tf2-ros" in (ROOT / "Dockerfile.swin-l-debug").read_text()
+        assert "LINE_TRACKING_ROBOT_HALF_WIDTH_M" in env and "LINE_TRACKING_PATH_MARGIN_M" in env
 
 
 def test_automatic_stop_switches_are_forwarded_and_default_disabled():

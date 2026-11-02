@@ -1,0 +1,26 @@
+{
+  "schema": "dangjin.camera_sway.smoke.v1",
+  "scope": "Short actual v2 model browser test; not a full lap or real robot validation",
+  "frames": 139,
+  "simulation_seconds": 13.799999999999965,
+  "distance_m": 8.469487259306568,
+  "pitch_range_deg": [
+    -4.990133603121851,
+    4.999999711112574
+  ],
+  "frequency_hz": 1.7,
+  "amplitude_deg": 5,
+  "errors": 0,
+  "violation_frames": 0,
+  "model_sha256": "43cddf61ba3781b7d241f274d9a6259b1409c0541d650dd3d31aa91b35cf6f88",
+  "seed": 3839634870,
+  "tests": {
+    "javascript_passed": 19,
+    "python_passed": 21
+  },
+  "source_sha256": {
+    "environments/dangjin/camera-sway.js": "b4bdcb4b7e76f3a11e2c1245786efa4669bd4274bc78c40b5f27172b3f515360",
+    "environments/dangjin/robot-sim.js": "c3895d1061935413002e34188d5dec618e7756644196291851afa94ec566631e",
+    "tools/validate_front_drive.mjs": "2c3fb31fee47ca6af6f9a0847d527f0cef65ae09b8179a30625eda28ecebaac7"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "passed": true,
+  "scope": "First selected camera and LiDAR message from each of the three source MCAPs; not all source messages.",
+  "checks": [
+    {
+      "id": "straight-0000",
+      "modality": "camera",
+      "source_message_sha256_matches": true,
+      "extracted_values_exactly_match": true
+    },
+    {
+      "id": "straight-0000",
+      "modality": "lidar",
+      "source_message_sha256_matches": true,
+      "extracted_values_exactly_match": true
+    },
+    {
+      "id": "right_turn-0000",
+      "modality": "camera",
+      "source_message_sha256_matches": true,
+      "extracted_values_exactly_match": true
+    },
+    {
+      "id": "right_turn-0000",
+      "modality": "lidar",
+      "source_message_sha256_matches": true,
+      "extracted_values_exactly_match": true
+    },
+    {
+      "id": "vehicle-0000",
+      "modality": "camera",
+      "source_message_sha256_matches": true,
+      "extracted_values_exactly_match": true
+    },
+    {
+      "id": "vehicle-0000",
+      "modality": "lidar",
+      "source_message_sha256_matches": true,
+      "extracted_values_exactly_match": true
+    }
+  ]
+}

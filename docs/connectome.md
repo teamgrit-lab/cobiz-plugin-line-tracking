@@ -11,8 +11,7 @@ R50을 다시 실행하지 않으며 A2 이동 API 발행자는 기존 line-trac
 | Mode 2 인도 | 기존 로컬 추출·피팅·평활화 | 기존 사다리꼴 |
 | Mode 0 자동 | 처음 선택한 노면이 차도면 커넥톰, 인도면 로컬 | 기존 사다리꼴 |
 
-Mode 0은 한 작업 안에서 노면·백엔드를 자동으로 바꾸지 않는다. 작업 취소·AprilTag·
-LiDAR 정지 및 활성화된 odom/IMU 보정·20Hz 명령 제한은 두 방식에 공통으로 적용된다.
+Mode 0은 한 작업 안에서 노면·백엔드를 자동으로 바꾸지 않는다. 작업 취소와 AprilTag 정지 검사는 두 방식에 공통으로 적용된다.
 `LINE_TRACKING_PATH_PLANNER=local`은 모든 모드에서 종전 로컬 경로를 사용한다.
 아래 Flyvis 마스크 검사·실패 정지 정책은 커넥톰을 사용하는 차도 경로에 해당한다.
 
@@ -62,9 +61,8 @@ LiDAR 정지 및 활성화된 odom/IMU 보정·20Hz 명령 제한은 두 방식�
 - 라벨은 0=배경, 1=차도, 2=인도다. 선택 모드 1·2는 해당 표면만 사용한다.
   통합 모드 0은 시작할 때 가까운 관측 통로를 선택하고 거리가 같으면 인도를 우선한다.
   선택 표면이 사라져도 다른 표면으로 자동 전환하지 않는다. 새 작업은 선택을 초기화한다.
-  이 정책은 LiDAR 회피와 최종 명령 검사에도 적용한다.
-- 기존 `LIDAR_OBSTACLE_ROBOT_HALF_WIDTH_M`(0.30m), `LIDAR_OBSTACLE_MARGIN_M`(0.15m)를
-  공유해 허용 영역을 줄인다. 구멍을 채우거나 떨어진 포장 영역을 연결하지 않는다.
+- `LINE_TRACKING_ROBOT_HALF_WIDTH_M`(0.30m)와 `LINE_TRACKING_PATH_MARGIN_M`(0.15m)로
+  시각 경로의 허용 폭을 정한다. 구멍을 채우거나 떨어진 포장 영역을 연결하지 않는다.
   현재 logits의 Vegetation/Curb는 표면 EMA보다 우선한다.
 - 차도에서는 현재 프레임의 단면들을 공간적으로 연결해 주통로 기준선을 만든다.
   넓은 입구·앞마당의 중앙값은 낮게 가중하고 좁고 관측된 통로는 높게 가중한다.
@@ -76,7 +74,7 @@ LiDAR 정지 및 활성화된 odom/IMU 보정·20Hz 명령 제한은 두 방식�
   차도로 관측될 수 있지만 이 범위 밖의 경로 후보는 서버와 수신 측 모두 거부한다.
   실제 코너에서는 관측된 곡선 통로를 따라 기준선이 휜다. 이 기능은 현재 영상의
   기하적인 주통로 선택이며, 우사 내부를 명시적으로 식별하는 영구 금지구역 지도는
-  별도의 의미 검출·지도 정보가 필요하다. LiDAR의 의미 마스크·정지 정책은 유지한다.
+  별도의 의미 검출·지도 정보가 필요하다.
   전역 이동을 제거한 상대 광류는 보조 비용이다.
   광류를 거리·장애물 확률·실측 odom으로 해석하지 않는다. 먼 곳에서 경로가 불명확하면
   확인된 가까운 구간까지만 계획하고 미관측 영역으로 연장하지 않는다.
@@ -86,18 +84,12 @@ LiDAR 정지 및 활성화된 odom/IMU 보정·20Hz 명령 제한은 두 방식�
   보정된 R50 분류 확률이 아니다.
 - 응답 실패·경로 없음·마스크 위반·지연은 정지한다. `LINE_TRACKING_STOP_ON_*`가
   꺼져 있어도 이 검사를 유지하며 직진 복구·회전 탐색으로 전환하지 않는다.
-  기존 작업 취소·AprilTag·LiDAR 정지는 유지한다.
+  기존 작업 취소·AprilTag 정지는 유지한다.
 
 `metrics.path_planner.backend`는 현재 작업의 `local` 또는 `connectome`을 표시한다.
 준비 상태·거부 이유·선택 표면을 공통으로 표시하고, 차도에는 왕복 지연·실제 bundle
 SHA-256·회로 크기·추론 프레임 수와 `trained_waypoint_head=false`도 표시한다.
 HTTP 요청은 사용 중인 차도 모드만 지정하며 다른 모드 응답으로 해당 경로를 거부하지 않는다.
-
-## Odom/IMU 명령 세분화
-
-`LINE_TRACKING_MOTION_ENABLED=true`로 촬영 시각부터 현재까지의 이동·회전을 보정하고
-20Hz로 명령을 갱신할 수 있다. 입력은 `/dog_odom`, `/dog_imu_raw`이며, frame 변환이
-없거나 센서가 만료되면 정지한다. 설정·검증은 [motion-tracking.md](motion-tracking.md)를 참고한다.
 
 ## Jetson 지연 최적화
 
@@ -126,12 +118,11 @@ hazard는 새로 계산하며 Mode 0과 같은 표면의 후보 평가를 공유
 `path_planner.timing`은 Flyvis/표면 계산 시간을 제공한다. 이 수치와 source 나이로
 판정하며 단순 명령 timer 주파수로 인식 성능을 판단하지 않는다.
 
-실행 예시(장비에서 확인한 frame 변환은 별도 설정):
+실행 예시:
 
 ```dotenv
 SWIN_L_CUDA_GRAPH=true
 CONNECTOME_CUDA_GRAPH=true
-LINE_TRACKING_MOTION_ENABLED=true
 SWIN_L_INFERENCE_HZ=2.5
 SWIN_L_TELEMETRY_HZ=5.0
 SWIN_L_INFERENCE_PROCESS=true
@@ -149,7 +140,7 @@ SWIN_L_INFERENCE_PROCESS=true
 
 `SWIN_L_INFERENCE_PROCESS=true`는 R50·HTTP·현재 마스크 재검증을 spawn 자식
 프로세스에서 실행한다. 부모는 최신 프레임 하나만 보내고 응답의 generation/sequence를
-검사한 뒤 기존 task/epoch/source-age 검사를 적용한다. 자식은 ROS/이동 발행자를
+검사한 뒤 기존 task/generation/source-age 검사를 적용한다. 자식은 ROS/이동 발행자를
 만들지 않는다. CUDA graph warmup은 ready 이전에 수행하고 모델의 시간 이력은
 초기화한다. 자식 오류·종료·응답 마감 실패는 추론 오류이며 fallback하지 않는다.
 부모의 센서 수신/20Hz 정지 검사는 계산 응답을 기다리지 않는다.
@@ -176,7 +167,6 @@ SWIN_L_APRILTAG_CAMERA_INFO_TOPIC=/a2/front_camera/res_360p/camera_info
 SWIN_L_SHARED_CAMERA_IMAGE_TOPIC=/line_tracking/camera/image_raw
 SWIN_L_SHARED_CAMERA_INFO_TOPIC=/line_tracking/camera/camera_info
 SWIN_L_IMAGE_TOPIC=/line_tracking/camera/image_raw
-SWIN_L_CAMERA_INFO_TOPIC=/line_tracking/camera/camera_info
 ```
 
 기본 Compose의 `actual-activate`는 task-drive다. 검사 용도로 만든 로컬 override의
@@ -259,9 +249,25 @@ pretrained 회로 → HTTP → R50 마스크 → 경로 재검사 → Sport 명�
 현장 주행은 이 로컬 검사에 포함하지 않았다.
 
 거리·여유는 기존 ROI 지면 변환 기준이다. 실제 카메라 보정, 근거리 사각의 차체
-안전성, 현장 코너 성공은 이 기능만으로 보장하지 않는다. LiDAR 검사를 유지하며
+안전성, 현장 코너 성공은 이 기능만으로 보장하지 않는다.
 전역 순찰 경로·지도 분기·90도 회전 제어를 새로 구현하지 않는다. 코드 변경·푸시는
 Jetson 배포나 실제 출발을 수행하지 않는다.
 
 참고: [Flyvis 공식 구현](https://github.com/TuragaLab/flyvis),
 [Network API](https://turagalab.github.io/flyvis/reference/network/).
+
+## 당진 우사 브라우저 순환 시험
+
+[별도 로컬 시뮬레이터](../environments/dangjin/README.md)는 360° 합성 카메라의
+서로 90° 간격인 네 RGB 투영을 실제 Flyvis 시각 회로에 넣고, 34개 출력 세포형의
+신경 활동에서 새로 학습한 readout으로 차도를 검출한다. 원래 optical-flow 사전학습
+회로를 고정했으며, 생물학적 회로가 원래 차도 분류기로 학습되었다고 가정하지 않는다.
+readout에 RGB 우회 입력이나 지도·pose를 주지 않는다. 현재 기본 `--control neural`은
+손상된 네 방향 검출 마스크만 학습된 행동 CNN에 넣어 속도·회전·정지를
+직접 출력한다. 지도 목표점·pose는 행동 입력에서 제외하며, 지도는 완주 평가에만 사용한다.
+Pure Pursuit와 비상 정지 검사는 실행하지 않으며, footprint·금지 구역·도로
+이탈은 평가 기록에만 남긴다. Flyvis 회로와 차도 출력층은 고정하고 행동 출력층을 새로
+학습한다. `--control baseline`은 기존 광류·표면 경로 검사와 Pure Pursuit를 재현한다.
+정답 마스크는 오프라인 인식기 학습에만 쓰며 주행 API는 RGB만 받는다.
+시뮬레이션 위치와 운동학 모델을 사용하는 별도 실행 경로이며, 실제 로봇의 Sport 제어
+소유권·ROS 실행 설정에는 영향을 주지 않는다.

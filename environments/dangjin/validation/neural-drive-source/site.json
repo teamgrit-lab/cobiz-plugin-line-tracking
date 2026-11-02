@@ -1,0 +1,498 @@
+{
+  "name": "당진 우사",
+  "units": "metres",
+  "coordinate_system": "Site-plan x/y; local origin at the southwest corner of barn 3. Not georeferenced. Renderer uses (x,z,-y).",
+  "barns": [
+    {
+      "id": "barn-1",
+      "name": "축사 1동",
+      "x": 0,
+      "y": 132,
+      "length": 134.3,
+      "width": 55.5
+    },
+    {
+      "id": "barn-2",
+      "name": "축사 2동",
+      "x": 0,
+      "y": 66,
+      "length": 134.3,
+      "width": 55.5
+    },
+    {
+      "id": "barn-3",
+      "name": "축사 3동",
+      "x": 0,
+      "y": 0,
+      "length": 134.3,
+      "width": 55.5
+    },
+    {
+      "id": "barn-4",
+      "name": "축사 4동",
+      "x": 157,
+      "y": 66,
+      "length": 134.3,
+      "width": 55.5
+    },
+    {
+      "id": "barn-5",
+      "name": "축사 5동",
+      "x": 157,
+      "y": 0,
+      "length": 134.3,
+      "width": 55.5
+    }
+  ],
+  "assumptions": {
+    "eave_height": 6.5,
+    "ridge_height": 12.5,
+    "wall_height": 2.1,
+    "aisle_width": 8,
+    "access_road_width": 8,
+    "outer_road_width": 8,
+    "central_road_width": 12
+  },
+  "facilities": [
+    {
+      "id": "compost",
+      "name": "퇴비사",
+      "x": 174,
+      "y": 133,
+      "length": 55,
+      "width": 18,
+      "height": 5
+    },
+    {
+      "id": "milking",
+      "name": "착유장",
+      "x": 109.8,
+      "y": -41,
+      "length": 49,
+      "width": 18,
+      "height": 4.5,
+      "source": "사용자 최종 도식: 3동 앞 입구가 위, 중앙도로 쪽 뒤끝이 아래인 시점. 뒤끝 옆으로 착유장 → 도로 → 실습장, 실습장 아래 창고. 간격·치수는 근사."
+    },
+    {
+      "id": "practice",
+      "name": "실습 목장",
+      "x": 108.55,
+      "y": -105,
+      "length": 51.5,
+      "width": 22,
+      "height": 4.5,
+      "source": "사용자 최종 도식: 3동 앞 입구가 위, 중앙도로 쪽 뒤끝이 아래인 시점. 뒤끝 옆으로 착유장 → 도로 → 실습장, 실습장 아래 창고. 간격·치수는 근사."
+    },
+    {
+      "id": "storage",
+      "name": "창고",
+      "x": 158.8,
+      "y": -100,
+      "length": 33,
+      "width": 12,
+      "height": 4,
+      "source": "사용자 최종 도식: 3동 앞 입구가 위, 중앙도로 쪽 뒤끝이 아래인 시점. 뒤끝 옆으로 착유장 → 도로 → 실습장, 실습장 아래 창고. 간격·치수는 근사."
+    },
+    {
+      "id": "pump",
+      "name": "소화펌프실",
+      "x": -32,
+      "y": 56,
+      "length": 17,
+      "width": 22,
+      "height": 4
+    },
+    {
+      "id": "office",
+      "name": "관리동 (추정)",
+      "x": -280,
+      "y": 240,
+      "length": 18,
+      "width": 18,
+      "height": 4.5
+    }
+  ],
+  "access_road": [
+    [
+      -265,
+      235
+    ],
+    [
+      -218,
+      226
+    ],
+    [
+      -208,
+      210
+    ],
+    [
+      -193,
+      188
+    ],
+    [
+      -166,
+      160
+    ],
+    [
+      -140,
+      134
+    ],
+    [
+      -110,
+      112
+    ],
+    [
+      -84,
+      94
+    ],
+    [
+      -67,
+      67
+    ],
+    [
+      -52,
+      39
+    ],
+    [
+      -29,
+      16
+    ],
+    [
+      -9,
+      2
+    ],
+    [
+      -5,
+      -7
+    ]
+  ],
+  "outer_road": [
+    [
+      -5,
+      -7
+    ],
+    [
+      -6,
+      28
+    ],
+    [
+      -6,
+      94
+    ],
+    [
+      -6,
+      160
+    ],
+    [
+      -6,
+      194
+    ],
+    [
+      110,
+      194
+    ],
+    [
+      146,
+      194
+    ]
+  ],
+  "south_east_road": [
+    [
+      -5,
+      -7
+    ],
+    [
+      -5,
+      -40
+    ],
+    [
+      35,
+      -63
+    ],
+    [
+      85,
+      -67
+    ],
+    [
+      134.3,
+      -67
+    ],
+    [
+      190,
+      -67
+    ],
+    [
+      230,
+      -50
+    ],
+    [
+      270,
+      -28
+    ],
+    [
+      297,
+      -7
+    ],
+    [
+      297,
+      94
+    ],
+    [
+      297,
+      125
+    ]
+  ],
+  "central_road": [
+    [
+      145.65,
+      5
+    ],
+    [
+      145.65,
+      194
+    ]
+  ],
+  "compost_outer_road": [
+    [
+      146,
+      194
+    ],
+    [
+      159,
+      181
+    ],
+    [
+      164,
+      165
+    ],
+    [
+      180,
+      158
+    ],
+    [
+      204,
+      158
+    ],
+    [
+      224,
+      158
+    ],
+    [
+      236,
+      156
+    ],
+    [
+      242,
+      146
+    ],
+    [
+      257,
+      137
+    ],
+    [
+      278,
+      133
+    ],
+    [
+      292,
+      130
+    ],
+    [
+      297,
+      125
+    ]
+  ],
+  "no_go_zones": [
+    {
+      "id": "central-road",
+      "name": "중앙도로 · 통행 금지",
+      "x": 134.3,
+      "y": 5,
+      "length": 22.7,
+      "width": 173,
+      "source": "사용자 지정: 중앙 통로 통행 금지, 남북 외곽 순환을 위해 양 끝 단축 (y=5~178 m는 근사)"
+    }
+  ],
+  "simulation": {
+    "camera_height_m": 1.6,
+    "robot_radius_m": 0.65,
+    "max_speed_mps": 0.8,
+    "fixed_step_s": 0.5,
+    "start": {
+      "x": 216.0,
+      "y": 184.2,
+      "heading": -0.22
+    },
+    "perception": "four RGB views -> frozen Flyvis visual activity -> trained road readout; separate pretrained Flyvis optical-flow ranking",
+    "physics": "planar kinematic body with swept footprint collision; no leg/contact dynamics",
+    "guidance": "ordered map waypoints orient the virtual view; current RGB road mask constrains paths"
+  },
+  "observed_features": [
+    {
+      "id": "curbs",
+      "name": "연석과 배수 경계",
+      "evidence": "evidence-september/camera-08-01.jpg",
+      "detail": "장면에서 연속 연석과 식생 경계를 확인. 높이 0.18 m와 폭 0.25 m는 시뮬레이션 가정."
+    },
+    {
+      "id": "fence",
+      "name": "수목 가장자리 철망 울타리",
+      "evidence": "evidence-september/camera-12-01.jpg",
+      "detail": "축사 측면 도로의 수목 쪽 울타리 확인. 모델 위치와 높이는 근사."
+    },
+    {
+      "id": "manholes",
+      "name": "도로 맨홀과 콘크리트 이음매",
+      "evidence": "evidence-september/camera-03-01.jpg",
+      "detail": "포장면 맨홀·이음매·흙 얼룩을 참고. 배치 수량과 위치는 추정."
+    },
+    {
+      "id": "equipment",
+      "name": "주차된 작업 장비",
+      "evidence": "evidence-september/camera-17-02.jpg",
+      "detail": "굴삭기·차량은 촬영 당시 관측. 시험용 장애물로 제공하며 고정 시설로 간주하지 않음."
+    },
+    {
+      "id": "gate",
+      "name": "녹색 방역 게이트 형태",
+      "evidence": "evidence-september/camera-25-02.jpg",
+      "detail": "녹색 프레임 통과 구조물의 형태를 참고. 기능 명칭과 위치·치수는 추정."
+    }
+  ],
+  "source_notes": [
+    {
+      "label": "건물 배치·길이",
+      "basis": "도면",
+      "detail": "축사 길이 134.30 m와 폭 약 55.5 m. 66 m 중심 간격은 제공된 site-frame 그림을 따름. 도면 사진과 개략 그림 사이의 차이는 측량 정합하지 않음."
+    },
+    {
+      "label": "외관·도로 재질",
+      "basis": "영상 참고",
+      "detail": "8개 MCAP에서 추출한 32개 장면: 밝은 박공지붕, 붉은 처마, 개방형 철골, 콘크리트 하부 벽, 사일로, 연석, 가로등, 주변 수목을 확인. 개수·정확한 위치·높이는 추정."
+    },
+    {
+      "label": "진입로·부속 건물",
+      "basis": "개략 배치",
+      "detail": "제공된 그림의 관리동·진입로 위치는 약 ±10 m. 부속 건물은 그림을 읽어 배치한 근사 위치."
+    },
+    {
+      "label": "4동 뒤편·퇴비사 외곽길",
+      "basis": "사용자 확인 + 도면",
+      "detail": "사용자 수정: 4동과 퇴비사 사이의 직선 연결로는 존재하지 않아 삭제. 퇴비사를 4동 쪽으로 20 m 이동하고 북·동측 외곽 굽은 길을 건물에 가깝게 조정. 정확한 치수·좌표는 근사."
+    },
+    {
+      "label": "중앙도로 통행 제한",
+      "basis": "사용자 지정",
+      "detail": "중앙 x=134.3~157 m 통로의 y=5~178 m를 금지. 남북 양 끝을 줄여 바깥 순환로를 연결. 금지 범위 끝점은 사용자 의도를 반영한 근사이며 마스크·경로·이동 검사에 동일 적용."
+    },
+    {
+      "label": "추가 9월 기록",
+      "basis": "26개 MCAP 관측",
+      "detail": "78개 카메라 장면과 26개 LiDAR 스캔, GPS 63개 표본을 추가. 연석·철망 울타리·맨홀·흙이 묻은 포장·작업 장비·녹색 통과 구조물을 확인. 정확한 위치와 치수는 측량 정합하지 않음."
+    },
+    {
+      "label": "GPS·고도",
+      "basis": "원본 GPS 표본",
+      "detail": "일반 GPS fix(status=0), 공분산 포함. ENU 궤적을 별도 자료로 제공하며 도면과 미정합. 고도 차이를 지면 경사로 그대로 사용하지 않음."
+    },
+    {
+      "label": "지형·식생·건물 높이",
+      "basis": "추정",
+      "detail": "주변 완만한 구릉과 수목은 시각적 맥락용. 등고선 수치나 표고를 복원하지 않음. 처마 6.5 m / 용마루 12.5 m는 추정이며 도면 FH 값을 건물 높이로 사용하지 않음."
+    },
+    {
+      "label": "LiDAR",
+      "basis": "실측 스캔",
+      "detail": "총 34개 파일의 독립 스캔을 센서 좌표계 그대로 표시. SLAM·센서 외부 보정·도면 정합은 수행하지 않음. 9월 GPS는 별도 확인 가능. 카메라와 점군은 동기화된 쌍이 아님."
+    },
+    {
+      "label": "3동 뒤편 시설 배치",
+      "basis": "사용자 최종 정정",
+      "detail": "3동 앞 입구(x=0)를 위, 중앙도로 쪽 뒤끝(x=134.3)을 아래에 놓고 보는 사용자 도식 기준: 실습장 → 도로 → 착유장 → 3동 뒤끝. 창고는 이 시점에서 실습장 아래. 시설은 3동 뒤끝에 맞춰 남쪽에 배치하며, 시설 사이 도로(y≈−67)는 외곽 순환로에 연결. 3·5동 바로 아래 기존 가로길은 중앙에서 단절. 간격·곡선 치수는 근사."
+    }
+  ],
+  "static_obstacles": [
+    {
+      "id": "gate-post-0",
+      "name": "통과 구조물 기둥 (추정)",
+      "x": 65.875,
+      "y": -14.525,
+      "length": 0.25,
+      "width": 0.25
+    },
+    {
+      "id": "gate-post-1",
+      "name": "통과 구조물 기둥 (추정)",
+      "x": 65.875,
+      "y": -5.725,
+      "length": 0.25,
+      "width": 0.25
+    },
+    {
+      "id": "gate-post-2",
+      "name": "통과 구조물 기둥 (추정)",
+      "x": 73.875,
+      "y": -14.525,
+      "length": 0.25,
+      "width": 0.25
+    },
+    {
+      "id": "gate-post-3",
+      "name": "통과 구조물 기둥 (추정)",
+      "x": 73.875,
+      "y": -5.725,
+      "length": 0.25,
+      "width": 0.25
+    }
+  ],
+  "layout_revision": "2026-10-27-barn3-central-side-rear-facilities",
+  "south_barn_west_dead_end": [
+    [
+      -5,
+      -7
+    ],
+    [
+      67,
+      -10
+    ],
+    [
+      127,
+      -13
+    ]
+  ],
+  "facility_road_note": "3동 앞 입구(x=0)를 위, 중앙도로 쪽 뒤끝(x=134.3)을 아래에 놓고 보는 사용자 도식 기준: 실습장 → 도로 → 착유장 → 3동 뒤끝. 창고는 이 시점에서 실습장 아래. 시설은 3동 뒤끝에 맞춰 남쪽에 배치하며, 시설 사이 도로(y≈−67)는 외곽 순환로에 연결. 3·5동 바로 아래 기존 가로길은 중앙에서 단절. 간격·곡선 치수는 근사.",
+  "south_barn_east_dead_end": [
+    [
+      164,
+      -13
+    ],
+    [
+      224,
+      -13
+    ],
+    [
+      297,
+      -7
+    ]
+  ],
+  "facility_layout_frame": {
+    "anchor": "barn-3 rear at central-road side",
+    "front_entrance": [
+      0,
+      27.75
+    ],
+    "rear_entrance": [
+      134.3,
+      27.75
+    ],
+    "diagram_left_site_vector": [
+      0,
+      -1
+    ],
+    "diagram_down_site_vector": [
+      1,
+      0
+    ],
+    "facility_lane_y": -67
+  }
+}

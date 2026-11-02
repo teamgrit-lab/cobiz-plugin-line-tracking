@@ -1,0 +1,43 @@
+{
+  "schema": "dangjin.camera_sway.smoke.v1",
+  "scope": "Short actual v2 model browser test; not a full lap or real robot validation",
+  "frames": 269,
+  "simulation_seconds": 26.80000000000013,
+  "distance_m": 14.74476375302085,
+  "pitch_range_deg": [
+    -9.999999999999998,
+    9.999999999999998
+  ],
+  "maximum_pitch_replay_error_deg": 3.552713678800501e-15,
+  "maximum_pose_integration_error_m": 0,
+  "stopped_settling_frames": 14,
+  "violation_frames": 0,
+  "errors": 0,
+  "model_sha256": "43cddf61ba3781b7d241f274d9a6259b1409c0541d650dd3d31aa91b35cf6f88",
+  "seed": 1936290885,
+  "camera_sway": {
+    "schema": "dangjin.camera_sway.v1",
+    "enabled": true,
+    "amplitude_deg": 10,
+    "frequency_hz": 1.7,
+    "axis": "pitch",
+    "pitch_deg": 0,
+    "elapsed_s": 0,
+    "walking_s": 0
+  },
+  "disabled_comparison": {
+    "frames": 143,
+    "all_pitch_zero": true,
+    "same_dropout_seed": true,
+    "errors": 0
+  },
+  "tests": {
+    "javascript_passed": 19,
+    "python_passed": 21
+  },
+  "source_sha256": {
+    "environments/dangjin/camera-sway.js": "3e5152beafd7472cc77295eb06747f07d8aa25660c5522907d8ac0417d763d6b",
+    "environments/dangjin/robot-sim.js": "f15e41232edb79c12f9cffe4e36bd3e29c163ad9ecca67602f1122e3f2b54f07",
+    "tools/validate_front_drive.mjs": "2c3fb31fee47ca6af6f9a0847d527f0cef65ae09b8179a30625eda28ecebaac7"
+  }
+}

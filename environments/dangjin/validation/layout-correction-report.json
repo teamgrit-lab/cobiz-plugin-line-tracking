@@ -1,0 +1,50 @@
+{
+  "layout_revision": "2026-10-27-user-road-correction",
+  "removed_roads": [
+    "barn4-rear"
+  ],
+  "compost_y": 133,
+  "compost_to_barn4_m": 11.5,
+  "minimum_compost_to_road_edge_m": 2.84395409682935,
+  "no_go_y_range": [
+    5,
+    178
+  ],
+  "no_go_length_m": 173,
+  "perimeter_length_m": 978.4359079273124,
+  "perimeter_samples": 4895,
+  "perimeter_closed": true,
+  "minimum_center_clearance_m": 3.1035019109550777,
+  "robot_radius_m": 0.65,
+  "collision_sample_count": 0,
+  "validation_scope": "whole-lap geometric swept footprint validation; not a complete Flyvis-driven autonomous lap",
+  "flyvis_local_trial": {
+    "request_count": 647,
+    "distance_m": 64.59995896259447,
+    "center_rms_m": 0.23925904432759054,
+    "blocked_poses": 0,
+    "errors": 0,
+    "backend": "flyvis",
+    "latest_pose": {
+      "x": 241.153353328978,
+      "y": 147.45456034837804,
+      "heading": -0.8868310758601783
+    },
+    "scope": "local compost-road trial, not a complete autonomous lap"
+  },
+  "corrected_no_go_trial": {
+    "distance_m": 0,
+    "steps": 1,
+    "last_command": {
+      "vx": 0.0,
+      "vy": 0.0,
+      "yaw_rate": 0.0,
+      "reason": "no_go_zone"
+    },
+    "pose": {
+      "x": 145.65,
+      "y": -1,
+      "heading": 1.5707963267948966
+    }
+  }
+}

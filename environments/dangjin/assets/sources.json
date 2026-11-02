@@ -1,0 +1,11 @@
+{
+  "ToyCar.glb": {
+    "url": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/ToyCar",
+    "license": "CC0-1.0",
+    "authors": [
+      "Guido Odendahl",
+      "Eric Chadwick"
+    ],
+    "sha256": "01a60862de55cd4b9f3acfab0b0def86451800f9c42467fcd61052c16cb9838c"
+  }
+}

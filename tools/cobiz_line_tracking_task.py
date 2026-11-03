@@ -17,6 +17,7 @@ PATH_RECOVERY_REASONS = frozenset((
     "path_recovery_waiting", "path_recovery_scan_left", "path_recovery_hold_left",
     "path_recovery_scan_right", "path_recovery_hold_right", "path_recovery_return",
     "path_recovery_confirming",
+    "fcn_side_recovery",
 ))
 TASK_STOP_CHECKS = (
     "startup_hold",

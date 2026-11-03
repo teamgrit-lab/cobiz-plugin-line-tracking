@@ -43,7 +43,7 @@
         <label class="sim-check"><input type="checkbox" id="sim-follow" checked>로봇 따라가기</label>
         <label class="sim-check"><input type="checkbox" id="sim-obstacle">마주 오는 승용차 · 0.35 m/s</label>
         <button id="sim-nudge" class="sim-secondary">옆으로 0.6 m 이동</button><button id="sim-export" class="sim-secondary">주행 기록 저장 ↓</button>
-        <p class="sim-note">최대 <span id="sim-max-speed">1.0</span> m/s · 곡선 구간 감속<br>카메라 차도 인식 → 속도·조향<br>주행 모델은 영상만 입력 · 지도 목표점 없음<br>전면·360° 모두 별도 회피 제어 없음<br>다리·접촉 물리는 모사하지 않습니다.</p>
+        <p class="sim-note">최대 <span id="sim-max-speed">10.0</span> m/s · 곡선 구간 감속<br>카메라 차도 인식 → 속도·조향<br>주행 모델은 영상만 입력 · 지도 목표점 없음<br>전면·360° 모두 별도 회피 제어 없음<br>다리·접촉 물리는 모사하지 않습니다.</p>
       <details class="sim-note"><summary>주행 제어 흐름</summary><p id="sim-control-flow">연결한 서버의 영상 인식·제어 구성을 표시합니다.</p><p>FCN 모드에서 지도는 완주·이탈 평가에만 사용합니다.</p></details><details class="sim-note"><summary>인식 모델 개발</summary><button id="sim-collect" class="sim-secondary">학습 표본 수집</button><button id="sim-policy-collect" class="sim-secondary">주행 정책 학습 영상 수집</button></details></div>
       <div class="sidebar-bottom"><span class="tiny-dot"></span><span>1 unit = 1 metre<br><small>높이·지형·부속 시설은 추정 포함</small></span></div>
     </aside>

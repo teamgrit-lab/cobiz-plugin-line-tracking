@@ -235,6 +235,7 @@ def test_held_or_slow_turn_remains_permitted_motion_until_task_duration_ends(rea
     "path_recovery_waiting", "path_recovery_scan_left", "path_recovery_hold_left",
     "path_recovery_scan_right", "path_recovery_hold_right", "path_recovery_return",
     "path_recovery_confirming",
+    "fcn_side_recovery",
 ])
 def test_search_can_finish_before_unsafe_timeout_but_honors_task_deadline(reason):
     tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=50, max_duration_sec=50))

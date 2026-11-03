@@ -96,7 +96,7 @@ from local_path import (
 )
 from perception_process import PerceptionProcess
 from surface_path_planner import SurfacePathPlanner, uses_connectome
-from fcn360_road import FcnRoadPlanner, mask_topic, read_masks
+from fcn360_road import FcnRoadPlanner, mask_topic, read_masks, side_recovery_yaw
 from surface_segmenter import FrontRoadInferenceError, SurfaceSegmenter
 from waypoint_guidance import WaypointGuide
 from r50_checkpoint import validate_checkpoint
@@ -1515,6 +1515,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 last_inference_stamp_ns = state["last_inference_stamp_ns"]
                 path = smoothers[mask_class].current(now)
                 fcn_speed_fraction = state['fcn_metrics'].get('speed_fraction', 0.)
+                fcn_metrics = dict(state['fcn_metrics'])
                 self.path_recovery_inferences = state["path_recovery_inferences"][mask_class]
                 recovering = (self.drive_config.path_loss_recovery_enabled and (
                     state["semantic_path_missing"][mask_class]
@@ -1545,6 +1546,11 @@ def run_ros2(args: argparse.Namespace) -> int:
                 reason = self.fcn_stop_reason(path, camera_age_sec, inference_age_sec)
                 if reason:
                     return None, DriveDecision.stop(reason)
+                if path is None or not fcn_metrics.get('front_path_valid'):
+                    yaw = side_recovery_yaw(fcn_metrics, self.drive_config.max_yaw_rps,
+                                            age_sec=max(camera_age_sec, inference_age_sec))
+                    return None, (DriveDecision(0., 0., yaw, 'fcn_side_recovery') if yaw
+                                  else DriveDecision.stop('fcn_front_path_unavailable'))
             if uses_front_policy(args, mask_class):
                 from front_connectome_client import front_drive_decision, limit_front_command
                 with state_lock:
@@ -1725,9 +1731,17 @@ def run_ros2(args: argparse.Namespace) -> int:
                     ages = [_effective_source_age_sec(state[a], state[s], now, clock_ns)
                             for a, s in (('last_image_at', 'last_image_stamp_ns'),
                                          ('last_inference_at', 'last_inference_stamp_ns'))]
-                    reason = self.fcn_stop_reason(smoothers[1].current(now), *ages)
+                    current = smoothers[1].current(now)
+                    reason = self.fcn_stop_reason(current, *ages)
+                    metrics = dict(state['fcn_metrics'])
                 if reason:
                     decision = DriveDecision.stop(reason)
+                elif current is None or not metrics.get('front_path_valid'):
+                    yaw = side_recovery_yaw(metrics, self.drive_config.max_yaw_rps, age_sec=max(ages))
+                    decision = (DriveDecision(0., 0., yaw, 'fcn_side_recovery') if yaw
+                                else DriveDecision.stop('fcn_front_path_unavailable'))
+                elif decision.reason == 'fcn_side_recovery':
+                    decision = DriveDecision.stop('fcn_path_recovered')
             if front_road and (decision.vx or decision.vy or decision.yaw_rate):
                 from front_connectome_client import front_drive_decision, limit_front_command
                 now = time.monotonic(); clock_ns = self.get_clock().now().nanoseconds
@@ -1780,6 +1794,12 @@ def run_ros2(args: argparse.Namespace) -> int:
             if any(age is None or not 0 <= age <= args.fcn_max_age_sec for age in (camera_age, inference_age)):
                 return "fcn_masks_stale"
             if path is None or not state['fcn_metrics'].get('front_path_valid'):
+                if side_recovery_yaw(state['fcn_metrics'], self.drive_config.max_yaw_rps,
+                                     age_sec=max(camera_age, inference_age)):
+                    return None
+                status = state['fcn_metrics'].get('path_status')
+                if status in ('turn_confirmation', 'reobserve'):
+                    return 'fcn_' + status
                 return "fcn_front_path_unavailable"
             return path.stop_reason
 
@@ -2267,7 +2287,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     if packet.fcn_masks:
                         state['fcn_metrics'] = fcn_metrics
                         state['planner_status'] = {'backend': 'fcn360-local', 'ready': estimate is not None,
-                                                   'reason': 'tracking' if estimate is not None else 'fcn_front_path_unavailable'}
+                                                   'reason': fcn_metrics['path_status']}
                     state['front_command'] = result.front_command if uses_front_policy(args, requested_mode) else None
                     state['front_metrics'] = result.front_metrics if uses_front_policy(args, requested_mode) else {}
                     state['waypoint_guidance'] = (

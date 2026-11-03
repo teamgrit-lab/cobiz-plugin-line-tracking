@@ -138,9 +138,9 @@ class FrontSimulationPerception:
 class FrontSimulationPolicy:
     def __init__(self, model, *, max_speed_mps=None):
         self.model = model
-        self.max_speed_mps = float(model.config['max_speed_mps'] if max_speed_mps is None else max_speed_mps)
-        if not .1 <= self.max_speed_mps <= 1.:
-            raise ValueError('simulation maximum speed must be 0.1 to 1.0 m/s')
+        self.max_speed_mps = float(10. if max_speed_mps is None else max_speed_mps)
+        if not .1 <= self.max_speed_mps <= 10.:
+            raise ValueError('simulation maximum speed must be 0.1 to 10.0 m/s')
         self.details = dict(model.details, backend='flyvis-front-drive',
             emergency_stop_override=False, simulation_only=True, max_speed_mps=self.max_speed_mps)
 

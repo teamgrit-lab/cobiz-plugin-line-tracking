@@ -102,7 +102,7 @@ def forbidden_path(points, zones, radius):
 
 
 class SimulationService:
-    def __init__(self, encoder, site, perception, world,policy=None,training_root=None,*,max_speed_mps=1.):
+    def __init__(self, encoder, site, perception, world,policy=None,training_root=None,*,max_speed_mps=10.):
         self.service=PlannerService(encoder) if encoder is not None else None
         self.fcn=perception.details.get('backend') in ('fcn512-360','fcn1024-360')
         self.fcn_input_width=int(perception.details.get('input_width',512)) if self.fcn else None
@@ -116,8 +116,7 @@ class SimulationService:
         self.faults=None;self.fault_origin=0.
         self.policy=policy
         self.max_speed_mps=float(getattr(policy,'max_speed_mps',max_speed_mps))
-        learned_surround=policy is not None and policy.details.get('backend')=='flyvis-drive-readout'
-        if not .1 <= self.max_speed_mps <= (2. if self.road_controller or learned_surround else 1.):
+        if not .1 <= self.max_speed_mps <= 10.:
             raise ValueError('simulation maximum speed outside backend limits')
         self.camera_profile=load_profile()
         self.camera_profile_sha256=profile_sha256(self.camera_profile)
@@ -370,15 +369,12 @@ def main():
     p.add_argument('--road-device',choices=['cpu','mps','cuda'],default='mps')
     p.add_argument('--control',choices=['neural','baseline','road-controller'],default='neural')
     p.add_argument('--fcn-model',type=Path,help='fine-tuned FCN360 folder with ONNX and complete.json')
-    p.add_argument('--max-speed',type=float,help='simulation maximum m/s (shared Road controller default 2.0, learned actor default 1.0)')
+    p.add_argument('--max-speed',type=float,default=10.,help='simulation maximum m/s (default 10.0, range 0.1 to 10.0)')
     p.add_argument('--policy-model',type=Path,default=ROOT/'.cache/dangjin-connectome-policy-vision')
     p.add_argument('--front-model',type=Path,help='trained single-front-camera model package')
     p.add_argument('--training-root',type=Path,help='separate directory for newly rendered training data')
     p.add_argument('--alias-port',type=int);a=p.parse_args()
-    learned_surround=a.control=='neural' and a.front_model is None
-    limit=2. if a.fcn_model or a.control=='road-controller' or learned_surround else 1.
-    if a.max_speed is None:a.max_speed=2. if a.fcn_model or a.control=='road-controller' else 1.
-    if not .1 <= a.max_speed <= limit:p.error(f'--max-speed must be 0.1 to {limit} m/s')
+    if not .1 <= a.max_speed <= 10.:p.error('--max-speed must be 0.1 to 10.0 m/s')
     if a.fcn_model and (a.front_model or a.control=='baseline' or a.road_model):p.error('select a single Road backend')
     if a.control=='road-controller' and (a.front_model or a.road_backend!='connectome'):
         p.error('road-controller requires a 360-degree Connectome detector')

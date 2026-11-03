@@ -8,9 +8,10 @@ import cv2
 import numpy as np
 
 from fcn360_road import (BINARY_NONROAD, FRONT_ROBOT_COLUMNS, FRONT_ROBOT_ROWS, FRONT_ROBOT_REVISION,
-                         FcnRoadPlanner, ROAD, apply_front_robot_prior, classify_view, model_shapes)
+                         FcnRoadPlanner, PLANNER_REVISION, ROAD, apply_front_robot_prior, classify_view, model_shapes,
+                         side_recovery_yaw)
 from local_path import LocalPathConfig, LocalPathSmoother
-from swin_l_drive_control import DriveConfig, decide_drive
+from swin_l_drive_control import DriveConfig, DriveDecision, decide_drive
 
 
 class FcnPerception:
@@ -60,7 +61,7 @@ class FcnDrive:
         self.smoother = LocalPathSmoother(config)
         self.drive = DriveConfig(max_forward_mps=1., stop_on_path_unavailable=True)
         self.max_speed_mps = max_speed
-        self.details = dict(backend="fcn360-path-controller", planner_revision="native-fcn-grid-v4",
+        self.details = dict(backend="fcn360-path-controller", planner_revision=PLANNER_REVISION,
                             fixed_front_robot_revision=FRONT_ROBOT_REVISION, map_assistance=False,
                             pose_input=False, goal_input=False, max_speed_mps=max_speed)
 
@@ -77,6 +78,16 @@ class FcnDrive:
         else:
             path = self.smoother.update(estimate, stamp)
         decision = decide_drive(path, camera_age_sec=0., inference_age_sec=0., config=self.drive)
+        if estimate is None:
+            yaw = side_recovery_yaw(metrics, self.drive.max_yaw_rps)
+            if yaw:
+                decision = DriveDecision(0., 0., yaw, 'road_side_recovery')
+            else:
+                reason = {"turn_confirmation": "turn_confirmation", "reobserve": "road_reobserve"}.get(metrics["path_status"])
+                if reason:
+                    decision = replace(decision, reason=reason)
+        elif decision.vx > 0 and metrics["path_status"] in ("turn_confirmation", "reobserve"):
+            decision = replace(decision, reason="tracking_turn_confirmation")
         # Apply the requested simulation speed to the controller's normalized
         # forward output. The physical robot's hard limit stays in DriveConfig.
         decision = replace(decision, vx=decision.vx * speed * metrics["speed_fraction"])

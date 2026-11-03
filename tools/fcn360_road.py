@@ -19,6 +19,37 @@ FRAME_ID = "fcn360_camera"
 FRONT_ROBOT_COLUMNS = (7, 9)  # 0-based, end-exclusive, in the reference 8x16 grid
 FRONT_ROBOT_ROWS = (5, 8)
 FRONT_ROBOT_REVISION = "front-two-columns-bottom-three-v3"
+PLANNER_REVISION = "native-fcn-grid-v6-side-recovery"
+TURN_ENTER_SLOPE = .40
+TURN_EXIT_SLOPE = .25
+TURN_CONFIRM_FRAMES = 3
+BEARING_SWITCH_COST_M = .12
+SIDE_RECOVERY_MIN_ROAD = .25
+SIDE_RECOVERY_MIN_DIFFERENCE = .10
+SIDE_RECOVERY_CONFIRM_FRAMES = 2
+SIDE_RECOVERY_YAW_RPS = .18
+SIDE_RECOVERY_MAX_SECONDS = 10.
+
+
+def side_recovery_yaw(metrics, max_yaw_rate=SIDE_RECOVERY_YAW_RPS, *, age_sec=0.):
+    """Only a current, bounded recovery decision may request a pure rotation."""
+    if metrics.get('recovery_status') != 'rotating':
+        return 0.
+    remaining = metrics.get('recovery_remaining_sec', 0.)
+    yaw = metrics.get('recovery_yaw_rate', 0.)
+    if (not all(np.isfinite(v) for v in (remaining, yaw, max_yaw_rate, age_sec))
+            or age_sec < 0 or remaining <= age_sec or max_yaw_rate <= 0):
+        return 0.
+    return float(np.clip(yaw, -min(max_yaw_rate, SIDE_RECOVERY_YAW_RPS),
+                         min(max_yaw_rate, SIDE_RECOVERY_YAW_RPS)))
+
+
+def connected_side_road(mask):
+    """Largest connected pavement component in the same near-side angular ROI."""
+    scale = mask.shape[0] // 8
+    roi = np.ascontiguousarray(mask[5*scale:8*scale, 2*scale:14*scale] == ROAD, dtype=np.uint8)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(roi, connectivity=4)
+    return float(stats[1:, cv2.CC_STAT_AREA].max()/roi.size) if count > 1 else 0.
 
 
 def model_shapes(input_width):
@@ -195,7 +226,63 @@ class FcnRoadPlanner:
         self.direction = 0
         self.confirmations = 0
         self.turn = 0
+        self.pending_turn = 0
         self.turn_frames = 0
+        self.previous_slope = None
+        self.reset_side_recovery()
+
+    def reset_side_recovery(self):
+        self.recovery_side = 0
+        self.recovery_frames = 0
+        self.recovery_started_at = None
+
+    def no_path(self, masks, metrics, stamp):
+        """Select a side from fresh camera evidence, never invent a forward path."""
+        left, right = (connected_side_road(masks[v]) for v in (1, 3))
+        metrics.update(recovery_left_road_fraction=left, recovery_right_road_fraction=right,
+                       recovery_direction=None, recovery_confirmation_frames=0,
+                       recovery_status='insufficient_side_road', recovery_yaw_rate=0.,
+                       recovery_elapsed_sec=0., recovery_remaining_sec=0.)
+        if stamp is None or not np.isfinite(stamp):
+            self.recovery_side = self.recovery_frames = 0
+            metrics['recovery_status'] = 'no_timestamp'
+            return None, metrics
+        if self.recovery_started_at is not None:
+            elapsed = max(0., stamp-self.recovery_started_at)
+            metrics.update(recovery_elapsed_sec=elapsed,
+                           recovery_remaining_sec=max(0., SIDE_RECOVERY_MAX_SECONDS-elapsed))
+            if elapsed >= SIDE_RECOVERY_MAX_SECONDS:
+                self.recovery_side = self.recovery_frames = 0
+                metrics['recovery_status'] = 'timeout'
+                return None, metrics
+        if max(left, right) < SIDE_RECOVERY_MIN_ROAD or abs(left-right) < SIDE_RECOVERY_MIN_DIFFERENCE:
+            self.recovery_side = self.recovery_frames = 0
+            if max(left, right) >= SIDE_RECOVERY_MIN_ROAD:
+                metrics['recovery_status'] = 'ambiguous_sides'
+            return None, metrics
+        side = 1 if left > right else -1
+        if self.recovery_started_at is None:
+            self.recovery_started_at = stamp
+            metrics['recovery_remaining_sec'] = SIDE_RECOVERY_MAX_SECONDS
+        self.recovery_frames = self.recovery_frames+1 if side == self.recovery_side else 1
+        self.recovery_side = side
+        metrics.update(recovery_direction='left' if side > 0 else 'right',
+                       recovery_confirmation_frames=self.recovery_frames, recovery_status='confirming')
+        if self.recovery_frames >= SIDE_RECOVERY_CONFIRM_FRAMES:
+            metrics.update(recovery_status='rotating', recovery_yaw_rate=side*SIDE_RECOVERY_YAW_RPS,
+                           maneuver='recover_left' if side > 0 else 'recover_right')
+        return None, metrics
+
+    def clear_heading(self):
+        self.turn = self.pending_turn = self.turn_frames = 0
+        self.previous_slope = None
+
+    def turn_direction(self, slope):
+        """Small centring changes are not new turns; retain a turn in the dead band."""
+        for previous in (self.pending_turn, self.turn):
+            if previous * slope >= TURN_EXIT_SLOPE - 1e-6:
+                return previous
+        return int(np.sign(slope)) if abs(slope) >= TURN_ENTER_SLOPE - 1e-6 else 0
 
     def side_feedback(self, left, right):
         status, target = "unknown", 0.
@@ -262,10 +349,17 @@ class FcnRoadPlanner:
         metrics = dict(left_edge_m=left, right_edge_m=right, center_status=status,
                        correction_left_m=bias, rear_offset_left_m=rear_offset(masks[2], self.height),
                        rear_center_road_fraction=float(np.mean(back == ROAD)), maneuver="stop",
-                       speed_fraction=0., observed_horizon_m=0.)
+                       speed_fraction=0., observed_horizon_m=0.,
+                       path_status="no_forward_samples", candidate_path_valid=False,
+                       candidate_horizon_m=0., candidate_slope=None, selected_slope=None,
+                       path_source=None, turn_confirmation_frames=0,
+                       turn_confirmation_target=TURN_CONFIRM_FRAMES,
+                       recovery_status='inactive', recovery_yaw_rate=0.,
+                       planner_revision=PLANNER_REVISION)
 
         if len(self.x) < 2:
-            self.turn = self.turn_frames = 0
+            self.clear_heading()
+            self.reset_side_recovery()
             return None, metrics
         observed = observed_classes(masks)
         lo, hi = self.corridor_bounds(observed)
@@ -285,14 +379,16 @@ class FcnRoadPlanner:
         side_support = [float((masks[v, 5*scale:8*scale, 6*scale:10*scale] == ROAD).mean()) for v in (1, 3)]
         metrics.update(left_road_support=side_support[0], right_road_support=side_support[1])
         if max(side_support) < .25:
-            self.turn = self.turn_frames = 0
-            return None, metrics
+            self.clear_heading()
+            metrics["path_status"] = "insufficient_side_road"
+            return self.no_path(masks, metrics, stamp)
         for sign, support in zip((1, -1), side_support):
             if support < .25:
                 eligible &= sign * self.slopes <= -.20 + 1e-6
         if not eligible.any():
-            self.turn = self.turn_frames = 0
-            return None, metrics
+            self.clear_heading()
+            metrics["path_status"] = "no_connected_corridor"
+            return self.no_path(masks, metrics, stamp)
 
         # Pick a supported bearing close to the centre of the forward corridor.
         # Prefer longer evidence, but avoid chasing a distant opening across
@@ -303,21 +399,61 @@ class FcnRoadPlanner:
         cost = (np.where(prefix, error, 0.).sum(axis=0) / np.maximum(counts, 1)
                 + .7 * np.abs(self.slopes) + .75 * (self.x[-1] - lengths))
         best = int(np.argmin(np.where(eligible, cost, np.inf)))
+        previous_index = None
+        if self.previous_slope is not None:
+            previous_index = int(np.argmin(abs(self.slopes-self.previous_slope)))
+            # Both bearings are checked against this frame, not a cached mask.
+            # Switch for a material gain in current corridor evidence.
+            if eligible[previous_index] and cost[previous_index] <= cost[best] + BEARING_SWITCH_COST_M:
+                best = previous_index
         slope = self.slopes[best]
-        direction = int(np.sign(slope)) if abs(slope) >= .20-1e-6 else 0
+        direction = self.turn_direction(slope)
+        metrics.update(candidate_path_valid=True, candidate_horizon_m=float(lengths[best]),
+                       observed_horizon_m=float(lengths[best]), candidate_slope=float(slope),
+                       path_status="tracking", path_source="current_candidate")
         # A hole on the visible approach is not evidence that the road
         # turns away. Wait for a new observation before committing to a turn.
         uncertain_approach = (observed[0, 4*scale:, 3*scale:13*scale] == 0).any()
-        if direction and direction != self.turn and uncertain_approach:
-            self.turn_frames = 0
-            metrics["maneuver"] = "reobserve"
-            return None, metrics
-        self.turn_frames = self.turn_frames + 1 if direction == self.turn else 1
-        self.turn = direction
-        if direction and self.turn_frames < 3:
-            metrics["maneuver"] = "confirm_left" if direction > 0 else "confirm_right"
-            return None, metrics
+        uncertain_change = uncertain_approach and abs(slope) >= .20-1e-6 and (
+            previous_index is None or not eligible[previous_index] or best != previous_index)
+        waiting = None
+        if (direction and direction != self.turn) or uncertain_change:
+            self.turn_frames = self.turn_frames + 1 if direction == self.pending_turn else 1
+            self.pending_turn = direction
+            if uncertain_approach:
+                self.turn_frames = 0
+                waiting = "reobserve"
+            elif self.turn_frames < TURN_CONFIRM_FRAMES:
+                waiting = "confirm_left" if direction > 0 else "confirm_right"
+            metrics["turn_confirmation_frames"] = self.turn_frames
+            if waiting:
+                metrics.update(maneuver=waiting, path_status="reobserve" if uncertain_approach else "turn_confirmation")
+                # Continue a previously accepted bearing only if the current
+                # connected corridor still clears its footprint. Rebuild the
+                # points in the current camera frame; never replay old points.
+                continuing = eligible & (abs(self.slopes) < TURN_ENTER_SLOPE - 1e-6 if self.turn == 0
+                                         else self.turn*self.slopes >= TURN_EXIT_SLOPE - 1e-6)
+                if previous_index is not None and continuing[previous_index]:
+                    best = previous_index
+                    metrics["path_source"] = "revalidated_previous_bearing"
+                elif continuing.any() and not uncertain_approach:
+                    best = int(np.argmin(np.where(continuing, cost, np.inf)))
+                    metrics["path_source"] = "current_continuation"
+                else:
+                    self.previous_slope = None
+                    metrics["path_source"] = None
+                    return self.no_path(masks, metrics, stamp)
+                direction = self.turn
+            else:
+                self.turn = direction
+                self.pending_turn = 0
+                self.turn_frames = 0
+        else:
+            self.turn = direction
+            self.pending_turn = self.turn_frames = 0
 
+        slope = self.slopes[best]
+        self.previous_slope = float(slope)
         count = counts[best]
         forward = self.x[:count]
         # A small continuous correction avoids quantising centring steering to
@@ -327,9 +463,11 @@ class FcnRoadPlanner:
                           lo[:count,best]+.65, hi[:count,best]-.65)
         points = np.column_stack((forward, lateral)).astype(np.float32)
         horizon = float(forward[-1])
-        maneuver = {0:"straight", 1:"turn_left", -1:"turn_right"}[direction]
-        fraction = .45 if direction or horizon < 5.0 else .7 if horizon < 6.5 else 1.
-        metrics.update(maneuver=maneuver, observed_horizon_m=horizon, speed_fraction=fraction)
+        maneuver = waiting or {0:"straight", 1:"turn_left", -1:"turn_right"}[direction]
+        fraction = .45 if waiting or direction or abs(slope) >= .20-1e-6 or horizon < 5.0 else .7 if horizon < 6.5 else 1.
+        metrics.update(maneuver=maneuver, observed_horizon_m=horizon, speed_fraction=fraction,
+                       selected_slope=float(slope))
+        self.reset_side_recovery()
         return LocalPathEstimate(points_xy=points, raw_points_xy=points.copy(), confidence=float(count/len(self.x)),
                                  valid_ratio=float(count/len(self.x)), mean_sidewalk_width_m=float(
                                      np.mean(hi[:count,best]-lo[:count,best])), surface_constrained=True), metrics

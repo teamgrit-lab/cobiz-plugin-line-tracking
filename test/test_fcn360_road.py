@@ -40,7 +40,9 @@ def test_sides_confirm_then_correct_towards_more_space_rear_never_steers():
     corrected, metrics = planner.plan(grids)
     assert metrics['center_status'] == 'right_of_center'
     assert metrics['correction_left_m'] > 0
-    assert np.all(corrected.points_xy[:, 1] > first.points_xy[:, 1])
+    # Bearing hysteresis may keep already-saturated near points unchanged.
+    assert np.all(corrected.points_xy[:, 1] >= first.points_xy[:, 1] - 1e-6)
+    assert corrected.points_xy[:, 1].mean() > first.points_xy[:, 1].mean()
     grids[3] = 3  # compost yard: no observable boundary
     unknown, metrics = planner.plan(grids)
     assert metrics['center_status'] == 'unknown' and metrics['correction_left_m'] == 0
@@ -128,7 +130,13 @@ def test_only_robot_gap_can_join_front_road_and_history_expires():
     assert path is not None and metrics['correction_left_m'] > 0
     assert planner.plan(grids, stamp=4.)[1]['correction_left_m'] == 0
     grids[0, 4, 7:9] = 1  # outside the smaller rig: do not bridge unseen ground
-    assert planner.plan(grids)[0] is None
+    truncated, _ = planner.plan(grids)
+    # Keep only the currently observed prefix; a distant unknown patch must
+    # not discard a valid near path or get bridged by the history.
+    from fcn360_road import BLIND, ground_sample, observed_classes, ROAD
+    assert truncated is not None and truncated.points_xy[-1, 0] < path.points_xy[-1, 0]
+    visible = truncated.points_xy[truncated.points_xy[:, 0] >= 3.2]
+    assert np.isin(ground_sample(observed_classes(grids)[0], visible[:, 0], visible[:, 1], 1.6), (ROAD, BLIND)).all()
     grids[0, 4:, 6:10] = 11
     assert planner.plan(grids)[0] is None
     grids = lane()
@@ -189,7 +197,7 @@ def test_arm_is_unobserved_independent_of_fcn_class_and_needs_visible_shoulders(
 
 
 @pytest.mark.parametrize('open_side,expected_sign', [('left',1), ('right',-1)])
-def test_only_forward_connected_side_can_turn_after_three_fresh_frames(open_side, expected_sign):
+def test_side_recovery_can_rotate_before_forward_turn_confirmation(open_side, expected_sign):
     from dangjin_fcn import FcnDrive
 
     masks = np.full((4, 8, 16), 13, np.uint8)
@@ -201,10 +209,15 @@ def test_only_forward_connected_side_can_turn_after_three_fresh_frames(open_side
         masks[0, 4:, :7] = 11
         masks[1, 4:] = 11
     drive = FcnDrive(1.6, 2.)
-    for t in [1., 1.1]:
+    for index,t in enumerate([1., 1.1]):
         cmd, info, _ = drive.command(masks,t,2.)
-        assert (cmd.vx,cmd.yaw_rate) == (0.,0.)
-        assert info['maneuver'] == 'confirm_' + open_side
+        assert cmd.vx == cmd.vy == 0.
+        if index == 0:
+            assert cmd.yaw_rate == 0. and info['maneuver'] == 'confirm_' + open_side
+        else:
+            assert cmd.yaw_rate == expected_sign*.18
+            assert info['maneuver'] == 'recover_' + open_side
+            assert not info['front_path_valid']
     cmd, info, _ = drive.command(masks,1.2,2.)
     assert 0 < cmd.vx < 2 and np.sign(cmd.yaw_rate) == expected_sign
     assert info['maneuver'] == 'turn_' + open_side
@@ -243,6 +256,14 @@ def test_road_ros_worker_applies_turn_speed_and_stops_on_following_loss(monkeypa
                 assert ros.metrics()['fcn360']['maneuver'] == 'turn_right'
                 assert 0 < command['x'] <= node.drive_config.max_forward_mps * .45
                 assert command['y'] == 0 and command['z'] < 0
+            elif count == 2:
+                assert command == {'x':0.,'y':0.,'z':-.18}
+                assert ros.metrics()['drive_reason'] == 'fcn_side_recovery'
+                assert not ros.metrics()['fcn360']['front_path_valid']
             else:
                 assert command == ZERO
+                if count < 3:
+                    assert ros.metrics()['drive_reason'] == 'fcn_turn_confirmation'
+                    assert ros.metrics()['fcn360']['candidate_path_valid']
+                    assert not ros.metrics()['fcn360']['front_path_valid']
     ros.run(scenario, *ARGS)

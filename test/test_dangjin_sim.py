@@ -210,14 +210,15 @@ def test_surround_speed_ceiling_only_changes_forward_scale(stopped):
     new,_=actor.infer(np.ones((4,270,480),np.uint8))
     assert new.vx==(0. if stopped else 1.)
     assert new.yaw_rate==old.yaw_rate and new.vy==old.vy and new.reason==old.reason
-    actor.max_speed_mps=2.
+    actor.max_speed_mps=10.
     fast,_=actor.infer(np.ones((4,270,480),np.uint8))
-    assert fast.vx==(0. if stopped else 2.)
+    assert fast.vx==(0. if stopped else 10.)
     assert fast.yaw_rate==old.yaw_rate and fast.reason==old.reason
 
 
 @pytest.mark.parametrize('stopped',[False,True])
-def test_front_simulation_speed_does_not_modify_deployed_model_config(stopped):
+@pytest.mark.parametrize('max_speed',[1.,10.])
+def test_front_simulation_speed_does_not_modify_deployed_model_config(stopped,max_speed):
     import torch
     from front_connectome import FrontConnectome,FrontSimulationPolicy
     model=FrontConnectome.__new__(FrontConnectome)
@@ -226,12 +227,23 @@ def test_front_simulation_speed_does_not_modify_deployed_model_config(stopped):
     model.actor=lambda _: (torch.tensor([[1.,-.5]]),torch.tensor([[-20.,20.] if stopped else [20.,-20.]]))
     masks=np.ones((1,270,480),np.uint8)
     original,_=model.act(masks[0])
-    policy=FrontSimulationPolicy(model,max_speed_mps=1.)
+    policy=FrontSimulationPolicy(model,max_speed_mps=max_speed)
     command,_=policy.infer(masks)
-    assert command.vx==(0. if stopped else 1.)
+    assert command.vx==(0. if stopped else max_speed)
     assert (command.yaw_rate,command.vy,command.reason)==(original.yaw_rate,original.vy,original.reason)
     assert model.config['max_speed_mps']==.8
-    assert policy.details['max_speed_mps']==1.
+    assert policy.details['max_speed_mps']==max_speed
+
+
+def test_fcn_simulation_scales_to_ten_and_still_stops_on_complete_loss():
+    from dangjin_fcn import FcnDrive
+    drive = FcnDrive(1.6, 10.)
+    command, _, _ = drive.command(np.full((4,16,32),3,np.uint8), 1., 10.)
+    assert command.vx == 10. and command.vy == 0.
+    assert command.yaw_rate == pytest.approx(0., abs=1e-9)
+    assert drive.drive.max_forward_mps == 1.  # normalized controller; physical cap unchanged
+    stopped, _, _ = drive.command(np.zeros((4,16,32),np.uint8), 1.1, 10.)
+    assert stopped.vx == stopped.vy == stopped.yaw_rate == 0.
 
 
 def test_navigation_export_uses_same_exclusions_and_radius():
@@ -339,7 +351,7 @@ def test_connectome_binary_detector_uses_same_road_controller_without_map_or_act
     result = sim.step(req)
     assert 'target_site' not in result['mission']
     assert result['perception_metrics']['circuit_ms'] == .75
-    assert result['policy']['planner_revision'] == 'native-fcn-grid-v4'
+    assert result['policy']['planner_revision'] == 'native-fcn-grid-v6-side-recovery'
     assert result['command']['vx'] == 2. and result['paths']['1']['points_xy']
     native[:] = 0
     req['stamp_sec'] += .1

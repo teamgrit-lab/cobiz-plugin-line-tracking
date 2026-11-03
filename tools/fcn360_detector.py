@@ -8,12 +8,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from fcn360_road import FRAME_ID, ROAD, classify_panorama, mask_topic
+from fcn360_road import (BLIND, DEFAULT_INPUT_WIDTH, EGO, FRAME_ID, ROAD,
+                         classify_panorama, mask_topic, model_shapes, observed_classes)
 
 
 class TrtFcn:
     """One fixed-size FP32 TensorRT 10 context shared by the four sequential views."""
-    def __init__(self, model_path, sha, cache):
+    def __init__(self, model_path, sha, cache, input_width=DEFAULT_INPUT_WIDTH):
         import tensorrt as trt
         import torch
 
@@ -23,11 +24,15 @@ class TrtFcn:
         self.torch = torch
         self.logger = trt.Logger(trt.Logger.WARNING)
         self.runtime = trt.Runtime(self.logger)
+        self.input_width = input_width
+        input_shape, output_shape = model_shapes(input_width)
+        expected = {"input_0": input_shape, "output_0": output_shape}
         gpu = torch.cuda.get_device_properties(0)
-        identity = f"{sha}-{trt.__version__}-{gpu.name}-{gpu.major}.{gpu.minor}-{torch.version.cuda}"
+        identity = f"native-fcn-v2-fp32-no-tf32-w{input_width}-{sha}-{trt.__version__}-{gpu.name}-{gpu.major}.{gpu.minor}-{torch.version.cuda}"
         cache.mkdir(parents=True, exist_ok=True)
         path = cache / (hashlib.sha256(identity.encode()).hexdigest() + ".plan")
         self.engine = self.runtime.deserialize_cuda_engine(path.read_bytes()) if path.is_file() else None
+        plan = None
         if self.engine is None:
             print("Building FCN TensorRT engine for this Jetson", flush=True)
             builder = trt.Builder(self.logger)
@@ -44,23 +49,25 @@ class TrtFcn:
             self.engine = self.runtime.deserialize_cuda_engine(plan)
             if self.engine is None:
                 raise RuntimeError("Could not deserialize new FCN engine")
-            with tempfile.NamedTemporaryFile(dir=cache, delete=False) as fp:
-                fp.write(bytes(plan))
-            Path(fp.name).replace(path)
-        expected = {"input_0": (1, 3, 256, 512), "output_0": (1, 21, 8, 16)}
         if self.engine.num_io_tensors != 2 or any(
             tuple(self.engine.get_tensor_shape(name)) != shape or self.engine.get_tensor_dtype(name) != trt.float32
             for name, shape in expected.items()
         ):
             raise ValueError("FCN engine does not match the camera/model contract")
+        if plan is not None:
+            with tempfile.NamedTemporaryFile(dir=cache, delete=False) as fp:
+                fp.write(bytes(plan))
+            Path(fp.name).replace(path)
         self.context = self.engine.create_execution_context()
-        self.input = torch.empty(expected["input_0"], device="cuda")
-        self.output = torch.empty(expected["output_0"], device="cuda")
+        self.input = torch.empty(expected["input_0"], device="cuda", dtype=torch.float32)
+        self.output = torch.empty(expected["output_0"], device="cuda", dtype=torch.float32)
         for name, tensor in (("input_0", self.input), ("output_0", self.output)):
             if not self.context.set_tensor_address(name, tensor.data_ptr()):
                 raise RuntimeError(f"Cannot bind FCN tensor {name}")
 
     def __call__(self, image):
+        if image.shape != tuple(self.input.shape) or image.dtype != np.float32:
+            raise ValueError("FCN input does not match the configured engine")
         self.input.copy_(self.torch.from_numpy(image))
         if not self.context.execute_async_v3(self.torch.cuda.current_stream().cuda_stream):
             raise RuntimeError("TensorRT FCN inference failed")
@@ -114,10 +121,15 @@ class Camera:
 
 def overlay(views, masks):
     panels = []
-    for name, view, grid in zip(("FRONT 90", "LEFT 180", "REAR 270", "RIGHT 0"), views, masks):
-        panel = view.copy()
-        road = cv2.resize(grid, (512, 256), interpolation=cv2.INTER_NEAREST) == ROAD
+    for name, view, grid, semantic in zip(("FRONT 90", "LEFT 180", "REAR 270", "RIGHT 0"), views,
+                                         observed_classes(masks), masks):
+        panel = cv2.resize(view, (512, 256), interpolation=cv2.INTER_AREA)
+        labels = cv2.resize(grid, (512, 256), interpolation=cv2.INTER_NEAREST)
+        panel[(labels == BLIND) | (labels == 0)] //= 2
+        road = labels == ROAD
         panel[road] = .55 * panel[road] + np.array([15, 215, 95]) * .45
+        ego = cv2.resize(semantic, (512, 256), interpolation=cv2.INTER_NEAREST) == EGO
+        panel[ego] = .5 * panel[ego] + np.array([200, 70, 230]) * .5
         cv2.putText(panel, name, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, .6, (255, 255, 255), 2)
         panels.append(panel)
     return np.vstack((np.hstack(panels[:2]), np.hstack(panels[2:])))
@@ -132,9 +144,12 @@ def main():
     parser.add_argument("--device", default="/dev/video91")
     parser.add_argument("--model", type=Path, default=Path("/fcn-model/fcn_resnet18.onnx"))
     parser.add_argument("--cache", type=Path, default=Path("/fcn-engine-cache"))
+    parser.add_argument("--input-width", type=int, choices=(512, 1024),
+                        default=int(os.environ.get("LINE_TRACKING_FCN_INPUT_WIDTH", DEFAULT_INPUT_WIDTH)))
     args = parser.parse_args()
     sha = os.environ["LINE_TRACKING_FCN_SHA256"]
-    infer = TrtFcn(args.model, sha, args.cache)
+    infer = TrtFcn(args.model, sha, args.cache, args.input_width)
+    print(f"FCN {args.input_width}x{args.input_width//2} · native {args.input_width//32}x{args.input_width//64} grid · {sha}", flush=True)
     rclpy.init()
     node = rclpy.create_node("fcn360_road_detector")
     masks_pub = node.create_publisher(Image, mask_topic(sha), qos_profile_sensor_data)
@@ -153,10 +168,11 @@ def main():
         if capture is None:
             return
         image, stamp = capture
-        masks, views = classify_panorama(image, infer)
+        masks, views = classify_panorama(image, infer, args.input_width)
         msg = Image()
         msg.header.frame_id, msg.header.stamp = FRAME_ID, stamp
-        msg.height, msg.width, msg.step, msg.encoding = 32, 16, 16, "mono8"
+        rows, columns = masks.shape[1:]
+        msg.height, msg.width, msg.step, msg.encoding = 4 * rows, columns, columns, "mono8"
         msg.data = masks.tobytes()
         masks_pub.publish(msg)
         if preview_pub.get_subscription_count():

@@ -31,6 +31,7 @@ from surround_camera import load_profile,profile_sha256
 from dangjin_sensor_faults import SensorFaults,fault_config
 
 ROOT = Path(__file__).resolve().parents[1]
+FCN_MAX_BODY = 12 * 1024 * 1024  # bounded 2048x1024 lossless four-view RGB atlas
 def encode_png(image):
     return base64.b64encode(cv2.imencode('.png',image,[cv2.IMWRITE_PNG_COMPRESSION,1])[1]).decode()
 
@@ -41,26 +42,30 @@ def runtime_details(details):
     return {key:value for key,value in details.items() if key not in ('training','source')}
 
 
-def decode_surround(request,profile=None):
-    """Lossless 2x2 atlas: front/left on top, back/right below (480x270 each).
+def decode_surround(request,profile=None, *, width=480, height=270):
+    """Lossless 2x2 atlas: front/left on top, back/right below.
 
     Keep the four-image transport for saved clients and training collectors.
-    The atlas fits the existing bounded PNG decoder without relaxing its limits.
+    Each request uses its backend's exact dimensions and bounded PNG decoder.
     """
     if profile is not None and request.get('camera_profile_sha256') != profile_sha256(profile):
         raise ValueError('360 camera input profile mismatch; reload client and server')
     if 'views_atlas_png' in request:
         if 'views_png' in request or 'image_png' in request:
             raise ValueError('send one surround atlas, not duplicate camera images')
-        atlas=decode_image(request['views_atlas_png'],cv2.IMREAD_COLOR)
-        if atlas.shape!=(540,960,3):raise ValueError('960x540 surround atlas required')
-        return [np.ascontiguousarray(atlas[y:y+270,x:x+480])
-                for y,x in ((0,0),(0,480),(270,0),(270,480))]
+        try:
+            atlas=decode_image(request['views_atlas_png'],cv2.IMREAD_COLOR,
+                               max_width=2*width,max_height=2*height)
+        except ValueError as error:
+            raise ValueError(f'{2*width}x{2*height} bounded surround atlas required') from error
+        if atlas.shape!=(2*height,2*width,3):raise ValueError(f'{2*width}x{2*height} surround atlas required')
+        return [np.ascontiguousarray(atlas[y:y+height,x:x+width])
+                for y,x in ((0,0),(0,width),(height,0),(height,width))]
     views=request.get('views_png')
     if not isinstance(views,list) or len(views)!=4 or views[0]!=request.get('image_png'):
         raise ValueError('four ordered camera views required; view 0 must match tracking RGB')
-    frames=[decode_image(v,cv2.IMREAD_COLOR) for v in views]
-    if any(f.shape!=(270,480,3) for f in frames):raise ValueError('480x270 camera views required')
+    frames=[decode_image(v,cv2.IMREAD_COLOR,max_width=width,max_height=height) for v in views]
+    if any(f.shape!=(height,width,3) for f in frames):raise ValueError(f'{width}x{height} camera views required')
     return frames
 
 
@@ -98,14 +103,22 @@ def forbidden_path(points, zones, radius):
 
 class SimulationService:
     def __init__(self, encoder, site, perception, world,policy=None,training_root=None,*,max_speed_mps=1.):
-        self.service=PlannerService(encoder);self.site=site;self.lock=threading.Lock();self.perception=perception
+        self.service=PlannerService(encoder) if encoder is not None else None
+        self.fcn=perception.details.get('backend') in ('fcn512-360','fcn1024-360')
+        self.fcn_input_width=int(perception.details.get('input_width',512)) if self.fcn else None
+        if self.fcn and self.fcn_input_width not in (512,1024):
+            raise ValueError('Unsupported FCN model input width')
+        self.road_controller=policy is not None and policy.details.get('backend')=='fcn360-path-controller'
+        self.model_details=perception.details.copy() if self.fcn else encoder.details
+        self.site=site;self.lock=threading.Lock();self.perception=perception
         self.world=world;self.trace=[];self.session=None;self.started=time.monotonic();self.errors=0
         self.patrol=None;self.mission_id=None;self.mission=None
         self.faults=None;self.fault_origin=0.
         self.policy=policy
         self.max_speed_mps=float(getattr(policy,'max_speed_mps',max_speed_mps))
-        if not .1 <= self.max_speed_mps <= 1.:
-            raise ValueError('simulation maximum speed must be 0.1 to 1.0 m/s')
+        learned_surround=policy is not None and policy.details.get('backend')=='flyvis-drive-readout'
+        if not .1 <= self.max_speed_mps <= (2. if self.road_controller or learned_surround else 1.):
+            raise ValueError('simulation maximum speed outside backend limits')
         self.camera_profile=load_profile()
         self.camera_profile_sha256=profile_sha256(self.camera_profile)
         self.training_root=Path(training_root) if training_root else ROOT/'.cache'
@@ -130,6 +143,7 @@ class SimulationService:
         stamp=request.get('stamp_sec')
         if type(stamp) not in (int,float) or not math.isfinite(stamp):raise ValueError('finite simulation timestamp required')
         if mission_id!=self.mission_id:
+            if self.road_controller:self.policy.reset()
             self.mission_id=mission_id;self.trace=[];self.started=time.monotonic();self.errors=0
             self.patrol=Patrol(self.world['perimeter_route'],strict=self.policy is None,guidance=self.policy is None) if request.get('scenario')=='patrol' else None
             self.faults=SensorFaults(config_fault);self.fault_origin=stamp
@@ -138,6 +152,34 @@ class SimulationService:
         if self.perception.details.get('views')==1 and any(k in request for k in ('views_png','views_atlas_png')):
             raise ValueError('front-camera mode must not send surround views')
         surround_preview=None
+        if self.road_controller:
+            from dangjin_fcn import apply_class_faults, binary_road_grid
+            from fcn360_road import ROAD, EGO, BLIND, observed_classes
+            if yaw != 0:raise ValueError('Road controller requires body-fixed surround views')
+            if self.fcn:
+                frames = decode_surround(request,self.camera_profile,width=self.fcn_input_width,height=self.fcn_input_width//2)
+                classes, ms = self.perception.predict_classes(frames)
+                detector_metrics = {'ms':ms}
+            else:
+                frames = decode_surround(request,self.camera_profile)
+                native, detector_metrics = self.perception.predict_views(frames)
+                classes = binary_road_grid(native)
+            raw = float((classes[0] == ROAD).mean())
+            classes, faults = apply_class_faults(classes,self.faults,stamp-self.fault_origin)
+            observed = observed_classes(classes)
+            road = (observed == ROAD).astype(np.uint8)
+            metrics = dict(detector_metrics,views=4,raw_road_fraction=raw,road_fraction=float(road[0].mean()),
+                           applied_view_road_fractions=road.mean(axis=(1,2)).tolist())
+            command, action, points = self.policy.command(classes,stamp,speed)
+            if preview:
+                display = np.where((observed == BLIND) | (observed == 0), 255, road).astype(np.uint8)
+                masks = [cv2.resize(m,(480,270),interpolation=cv2.INTER_NEAREST) for m in display]
+                ego_masks = ([cv2.resize((m == EGO).astype(np.uint8),(480,270),interpolation=cv2.INTER_NEAREST)
+                              for m in classes] if self.fcn else None)
+                surround_preview = panorama_mask(masks,forward_heading_deg=self.camera_profile['alignment']['forward_heading_deg'],
+                                                 unobserved_value=BLIND,ego_masks=ego_masks)
+            return self.camera_reply(request,command,action,metrics,faults,
+                                     surround_preview,road[0],points)
         if hasattr(self.perception,'predict_views'):
             camera_frames=decode_surround(request,self.camera_profile);frame=camera_frames[0]
             masks,metrics=self.perception.predict_views(camera_frames)
@@ -197,36 +239,39 @@ class SimulationService:
 
     def neural_step(self,request,masks,metrics,faults,surround_preview):
         """Camera-only learned actor shared by front and surround simulation."""
-        pose=request['pose']
         command,action=self.policy.infer(masks)
+        return self.camera_reply(request,command,action,metrics,faults,surround_preview,masks[0])
+
+    def camera_reply(self,request,command,action,metrics,faults,surround_preview,front_mask,points=None):
+        pose=request['pose']
         action['model_command']=asdict(command)
         # Episode termination is separate from a safety intervention. The
         # evaluated lap is over; do not begin a second lap automatically.
         if self.mission and self.mission['complete']:command=DriveDecision.stop('lap_complete')
-        self.service.encoder.details['inferred_frames']=self.service.encoder.details.get('inferred_frames',0)+1
+        self.model_details['inferred_frames']=self.model_details.get('inferred_frames',0)+1
         entry={'stamp_sec':request['stamp_sec'],'pose':pose,'camera_yaw':0.,'command':asdict(command),
             'flow_ms':0.,'surface_ms':0.,'perception':metrics,'sensor_faults':faults,'mission':self.mission,
             'policy':action,
             'evaluation':request.get('evaluation',{}),'environment':request.get('environment',{})}
         self.trace.append(entry)
         reply={'schema':'line_tracking.connectome.v1','request_id':request['request_id'],'stream_id':request['stream_id'],
-            'stamp_sec':request['stamp_sec'],'model':runtime_details(self.service.encoder.details),'perception':runtime_details(self.perception.details),
-            'command':asdict(command),'policy':runtime_details(self.policy.details),'policy_metrics':action,'paths':{},
+            'stamp_sec':request['stamp_sec'],'model':runtime_details(self.model_details),'perception':runtime_details(self.perception.details),
+            'command':asdict(command),'policy':runtime_details(self.policy.details),'policy_metrics':action,'paths':{'1':{'points_xy':points}} if points else {},
             'timing':{'flow_ms':0.,'surface_ms':0.,'policy_ms':action['ms']},'perception_metrics':metrics,
             'mission':self.mission,'sensor_faults':faults,
-            'simulation_only':True,'control':'learned connectome v/omega','emergency_stop_override':False}
+            'simulation_only':True,'control':'360 Road path tracking' if self.road_controller else 'learned connectome v/omega','emergency_stop_override':False}
         if surround_preview is not None:
             reply['surround_prediction_png']=encode_png(surround_preview)
         elif request.get('preview',True):
-            preview=np.full((*masks[0].shape,3),(50,48,27),np.uint8)
-            preview[masks[0]!=0]=(140,167,94);reply['prediction_png']=encode_png(preview)
+            preview=np.full((*front_mask.shape,3),(50,48,27),np.uint8)
+            preview[front_mask!=0]=(140,167,94);reply['prediction_png']=encode_png(preview)
         return reply
 
     def telemetry(self):
         distance=sum(math.hypot(b['pose']['x']-a['pose']['x'],b['pose']['y']-a['pose']['y']) for a,b in zip(self.trace,self.trace[1:]))
         return {'session':self.mission_id,'layout_revision':self.site.get('layout_revision'),'steps':len(self.trace),'distance_m':distance,'wall_s':time.monotonic()-self.started,
                 'errors':self.errors,'latest':self.trace[-1] if self.trace else None,'mission':self.mission,
-                'stops':sum(t['command']['vx']==0 for t in self.trace),'model':self.service.encoder.details,
+                'stops':sum(t['command']['vx']==0 for t in self.trace),'model':self.model_details,
                 'perception':self.perception.details,'sensor_faults':self.faults.config if self.faults else None,
                 'fault_events':len({t['sensor_faults']['event_id'] for t in self.trace if t['sensor_faults']['event_id']}),
                 'policy':self.policy.details if self.policy else None,'camera_profile':self.camera_profile,
@@ -244,7 +289,7 @@ def make_sim_server(sim, directory, port):
 
         def do_GET(self):
             if self.path=='/api/status':
-                self.reply(200,{'ready':True,'simulation_only':True,'sensor_faults_version':SensorFaults.version,'layout_revision':sim.site.get('layout_revision'),'model':sim.service.encoder.details,'no_go_zones':sim.site.get('no_go_zones',[]),'perception':sim.perception.details,'policy':sim.policy.details if sim.policy else None,'camera_transport':'atlas-v2-profiled',
+                self.reply(200,{'ready':True,'simulation_only':True,'sensor_faults_version':SensorFaults.version,'layout_revision':sim.site.get('layout_revision'),'model':sim.model_details,'no_go_zones':sim.site.get('no_go_zones',[]),'perception':sim.perception.details,'policy':sim.policy.details if sim.policy else None,'camera_transport':f'fcn-atlas-{sim.fcn_input_width}x{sim.fcn_input_width//2}' if sim.fcn else 'atlas-v2-profiled',
                     'camera_profile':sim.camera_profile,'camera_profile_sha256':sim.camera_profile_sha256,
                     'max_speed_mps':sim.max_speed_mps});return
             if self.path=='/api/telemetry':self.reply(200,sim.telemetry());return
@@ -300,10 +345,13 @@ def make_sim_server(sim, directory, port):
             if not sim.lock.acquire(blocking=False):self.reply(409,{'error':'planner busy; no queued control commands'});return
             try:
                 length=int(self.headers.get('Content-Length','0'))
-                if not 0<length<=MAX_BODY:raise ValueError('bounded request required')
+                if not 0<length<=(FCN_MAX_BODY if sim.fcn else MAX_BODY):raise ValueError('bounded request required')
                 self.reply(200,sim.step(json.loads(self.rfile.read(length))))
             except Exception as error:
-                sim.errors+=1;sim.service.encoder.reset();self.reply(422,{'error':str(error)[:240],'command':asdict(DriveDecision.stop('planner_error'))})
+                sim.errors+=1
+                if sim.road_controller:sim.policy.reset()
+                else:sim.service.encoder.reset()
+                self.reply(422,{'error':str(error)[:240],'command':asdict(DriveDecision.stop('planner_error'))})
             finally:sim.lock.release()
 
         def end_headers(self):
@@ -320,16 +368,32 @@ def main():
     p.add_argument('--road-backend',choices=['connectome','segformer'],default='connectome')
     p.add_argument('--road-model',type=Path)
     p.add_argument('--road-device',choices=['cpu','mps','cuda'],default='mps')
-    p.add_argument('--control',choices=['neural','baseline'],default='neural')
-    p.add_argument('--max-speed',type=float,default=1.,help='simulation forward-speed maximum in m/s (0.1 to 1.0; default 1.0)')
+    p.add_argument('--control',choices=['neural','baseline','road-controller'],default='neural')
+    p.add_argument('--fcn-model',type=Path,help='fine-tuned FCN360 folder with ONNX and complete.json')
+    p.add_argument('--max-speed',type=float,help='simulation maximum m/s (shared Road controller default 2.0, learned actor default 1.0)')
     p.add_argument('--policy-model',type=Path,default=ROOT/'.cache/dangjin-connectome-policy-vision')
     p.add_argument('--front-model',type=Path,help='trained single-front-camera model package')
     p.add_argument('--training-root',type=Path,help='separate directory for newly rendered training data')
     p.add_argument('--alias-port',type=int);a=p.parse_args()
-    if not .1 <= a.max_speed <= 1.:p.error('--max-speed must be 0.1 to 1.0 m/s')
+    learned_surround=a.control=='neural' and a.front_model is None
+    limit=2. if a.fcn_model or a.control=='road-controller' or learned_surround else 1.
+    if a.max_speed is None:a.max_speed=2. if a.fcn_model or a.control=='road-controller' else 1.
+    if not .1 <= a.max_speed <= limit:p.error(f'--max-speed must be 0.1 to {limit} m/s')
+    if a.fcn_model and (a.front_model or a.control=='baseline' or a.road_model):p.error('select a single Road backend')
+    if a.control=='road-controller' and (a.front_model or a.road_backend!='connectome'):
+        p.error('road-controller requires a 360-degree Connectome detector')
     from connectome_flow import FlyvisFlow
     directory=ROOT/'environments/dangjin';site=json.loads((directory/'site.json').read_text())
     cv2.setNumThreads(2)
+    if a.fcn_model:
+        from dangjin_fcn import FcnPerception,FcnDrive
+        detector=FcnPerception(a.fcn_model)
+        drive=FcnDrive(load_profile()['mount']['height_m'],a.max_speed)
+        sim=SimulationService(None,site,detector,json.loads((directory/'world.json').read_text()),drive)
+        server=make_sim_server(sim,directory,a.port)
+        print(f'Ready: http://127.0.0.1:{a.port} · FCN360 · {a.max_speed} m/s · simulation only',flush=True)
+        server.serve_forever()
+        return
     if a.front_model:
         from front_connectome import FrontConnectome,FrontSimulationPerception,FrontSimulationPolicy
         model=FrontConnectome(a.front_model,encoder_device=a.device,head_device=a.road_device)
@@ -347,7 +411,10 @@ def main():
         from dangjin_perception import RoadPerception
         perception=RoadPerception(a.road_model or ROOT/'.cache/dangjin-road-model',a.road_device)
     policy=None
-    if a.control=='neural':
+    if a.control=='road-controller':
+        from dangjin_fcn import FcnDrive
+        policy=FcnDrive(load_profile()['mount']['height_m'],a.max_speed)
+    elif a.control=='neural':
         if a.road_backend!='connectome':raise ValueError('neural drive requires Flyvis perception')
         from connectome_policy import ConnectomeDrivePolicy
         policy=ConnectomeDrivePolicy(a.policy_model,perception,'cpu',max_speed_mps=a.max_speed)

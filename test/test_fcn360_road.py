@@ -11,7 +11,7 @@ from test_surface_model_routing import start, cancel
 from test_task_inference_lifecycle_ros import image, wait_for_count
 
 SHA = 'b' * 64
-ARGS = ('--fcn-sha256', SHA, '--path-mask-class', '1', '--path-planner', 'local')
+ARGS = ('--fcn-sha256', SHA, '--fcn-input-width', '512', '--path-mask-class', '1', '--path-planner', 'local')
 
 
 def lane():
@@ -108,8 +108,9 @@ def test_tasks_use_only_current_camera_and_stop_on_lost_front(monkeypatch):
     ros.run(scenario, *ARGS)
 
 
-def test_invalid_ids_are_not_a_road_mask():
-    msg = Message(bytes(512))
+@pytest.mark.parametrize('class_id', [21, 254, 255])
+def test_invalid_ids_are_not_a_road_mask(class_id):
+    msg = Message(bytes([class_id]) * 512)
     msg.header.frame_id = FRAME_ID
     msg.encoding, msg.height, msg.width, msg.step = 'mono8', 32, 16, 16
     with pytest.raises(ValueError, match='class ID'):
@@ -117,13 +118,17 @@ def test_invalid_ids_are_not_a_road_mask():
 
 
 def test_only_robot_gap_can_join_front_road_and_history_expires():
+    from fcn360_road import front_robot_mask
+
     planner = FcnRoadPlanner(LocalPathConfig(), 1.6)
     grids = lane()
-    grids[0, 4:, 7:9] = 1
+    grids[0, front_robot_mask()] = 1
     for t in (1., 1.25, 1.5):
         path, metrics = planner.plan(grids, stamp=t)
     assert path is not None and metrics['correction_left_m'] > 0
     assert planner.plan(grids, stamp=4.)[1]['correction_left_m'] == 0
+    grids[0, 4, 7:9] = 1  # outside the smaller rig: do not bridge unseen ground
+    assert planner.plan(grids)[0] is None
     grids[0, 4:, 6:10] = 11
     assert planner.plan(grids)[0] is None
     grids = lane()
@@ -160,4 +165,84 @@ def test_inflight_road_result_is_discarded_on_switch_to_sidewalk(monkeypatch):
             assert ros.metrics()['fcn360'] is None
         finally:
             release.set()
+    ros.run(scenario, *ARGS)
+
+
+def test_arm_is_unobserved_independent_of_fcn_class_and_needs_visible_shoulders():
+    from fcn360_road import BLIND, FRONT_BLIND, observed_classes
+
+    masks = np.full((4, 8, 16), 3, np.uint8)
+    masks[0, 4, 7:9] = (14, 5)
+    masks[0, 4, 11] = 14
+    saved = masks.copy()
+    observed = observed_classes(masks)
+    assert np.all(observed[0, FRONT_BLIND] == BLIND)
+    assert observed[0, 4, 11] == 14
+    np.testing.assert_array_equal(masks, saved)
+    planner = FcnRoadPlanner(LocalPathConfig(), 1.6)
+    assert planner.plan(masks, stamp=1.)[0] is not None
+    # Arm pixels classified as road must never supply the only forward evidence.
+    masks[0] = 11
+    masks[0, FRONT_BLIND] = 3
+    for i in range(4):
+        assert planner.plan(masks, stamp=1.1 + i * .1)[0] is None
+
+
+@pytest.mark.parametrize('open_side,expected_sign', [('left',1), ('right',-1)])
+def test_only_forward_connected_side_can_turn_after_three_fresh_frames(open_side, expected_sign):
+    from dangjin_fcn import FcnDrive
+
+    masks = np.full((4, 8, 16), 13, np.uint8)
+    masks[:, 4:] = 3
+    if open_side == 'left':
+        masks[0, 4:, 9:] = 11
+        masks[3, 4:] = 11
+    else:
+        masks[0, 4:, :7] = 11
+        masks[1, 4:] = 11
+    drive = FcnDrive(1.6, 2.)
+    for t in [1., 1.1]:
+        cmd, info, _ = drive.command(masks,t,2.)
+        assert (cmd.vx,cmd.yaw_rate) == (0.,0.)
+        assert info['maneuver'] == 'confirm_' + open_side
+    cmd, info, _ = drive.command(masks,1.2,2.)
+    assert 0 < cmd.vx < 2 and np.sign(cmd.yaw_rate) == expected_sign
+    assert info['maneuver'] == 'turn_' + open_side
+    cmd, _, _ = drive.command(np.zeros_like(masks),1.3,2.)
+    assert (cmd.vx,cmd.yaw_rate) == (0.,0.)
+    assert drive.command(masks,1.4,2.)[1]['maneuver'] == 'confirm_' + open_side
+
+
+def test_two_missing_sides_or_a_blocked_near_strip_stop_with_distant_road():
+    planner = FcnRoadPlanner(LocalPathConfig(), 1.6)
+    masks = np.full((4,8,16), 3, np.uint8)
+    masks[[1,3], 4:] = 11
+    assert planner.plan(masks)[0] is None
+    masks[:] = 3
+    masks[0, 6:] = 11
+    assert planner.plan(masks)[0] is None
+
+
+def test_road_ros_worker_applies_turn_speed_and_stops_on_following_loss(monkeypatch):
+    ros = RosHarness(monkeypatch)
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_STOP_ON_' + check.upper(), 'false')
+
+    def scenario(node):
+        start(ros, 1, 'arm-control')
+        publish_masks = ros.subscriptions[mask_topic(SHA)]
+        grids = np.full((4, 8, 16), 13, np.uint8)
+        grids[:, 4:] = 3
+        grids[0, 4:, :7] = grids[1, 4:] = 11
+        for count in (1, 2, 3, 4):
+            ros.now += .2
+            publish_masks(packet(ros, grids if count < 4 else np.full_like(grids, 11)))
+            wait_for_count(ros, count)
+            command = json.loads(ros.published[SPORT][-1].parameter)
+            if count == 3:
+                assert ros.metrics()['fcn360']['maneuver'] == 'turn_right'
+                assert 0 < command['x'] <= node.drive_config.max_forward_mps * .45
+                assert command['y'] == 0 and command['z'] < 0
+            else:
+                assert command == ZERO
     ros.run(scenario, *ARGS)

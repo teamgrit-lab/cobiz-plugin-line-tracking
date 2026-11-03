@@ -1,7 +1,7 @@
 """Road readout of frozen Flyvis visual-circuit activity, without an RGB shortcut.
 
 The optical-flow-pretrained connectome is not a pretrained road classifier.
-Only the convolutional road readout is trained on offline synthetic labels.
+Offline road supervision updates only the convolutional readout.
 Detection receives camera pixels only. Map/pose guidance belongs to the planner.
 """
 from pathlib import Path

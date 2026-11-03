@@ -1514,6 +1514,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 last_image_stamp_ns = state["last_image_stamp_ns"]
                 last_inference_stamp_ns = state["last_inference_stamp_ns"]
                 path = smoothers[mask_class].current(now)
+                fcn_speed_fraction = state['fcn_metrics'].get('speed_fraction', 0.)
                 self.path_recovery_inferences = state["path_recovery_inferences"][mask_class]
                 recovering = (self.drive_config.path_loss_recovery_enabled and (
                     state["semantic_path_missing"][mask_class]
@@ -1572,6 +1573,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                 path_unavailable_inferences=self.path_unavailable_inferences,
                 path_recovery_inferences=self.path_recovery_inferences if recovering else None,
             )
+            if fcn is not None and mask_class == 1:
+                decision = replace(decision, vx=decision.vx * fcn_speed_fraction)
             if camera_fault_reason is not None and decision.reason not in (
                 "camera_stale", "inference_stale"
             ):
@@ -2015,7 +2018,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_planner": planner_status,
                 "profile": args.profile,
                 "fcn360": dict(state['fcn_metrics']) if fcn and mask_class == 1 else None,
-                "inference_backend": ('fcn512-360' if fcn and mask_class == 1 else 'front-connectome' if uses_front_policy(args, mask_class) else 'legacy'),
+                "inference_backend": (f'fcn{args.fcn_input_width}-360' if fcn and mask_class == 1 else 'front-connectome' if uses_front_policy(args, mask_class) else 'legacy'),
                 "front_connectome": (dict(state['front_metrics'], command=state['front_command'])
                     if uses_front_policy(args, mask_class) else None),
                 "camera_topic": mask_topic(args.fcn_sha256) if fcn and mask_class == 1 else args.image_topic,
@@ -2178,7 +2181,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 next_allowed = inference_started_at + inference_period
                 try:
                     if packet.fcn_masks:
-                        masks = read_masks(packet.image_message)
+                        masks = read_masks(packet.image_message, args.fcn_input_width)
                     else:
                         frame_rgb = camera_image_rgb(packet.image_message, node.bridge)
                 except Exception as error:  # noqa: BLE001 - retain camera fault handling.
@@ -2365,6 +2368,8 @@ def run_ros2(args: argparse.Namespace) -> int:
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--fcn-sha256', default=_env('LINE_TRACKING_FCN_SHA256', ''))
+    parser.add_argument('--fcn-input-width', type=int, choices=(512, 1024),
+                        default=int(_env('LINE_TRACKING_FCN_INPUT_WIDTH', '1024')))
     parser.add_argument('--fcn-height-m', type=float, default=_env_float('LINE_TRACKING_FCN_HEIGHT_M', 1.6))
     parser.add_argument('--fcn-max-age-sec', type=float, default=_env_float('LINE_TRACKING_FCN_MAX_AGE_SEC', 1.0))
     parser.add_argument('--front-connectome-url', default=_env('LINE_TRACKING_FRONT_CONNECTOME_URL', ''))
@@ -2720,7 +2725,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument("--segment-velocity-topic", default="/line_tracking/command")
     args = parser.parse_args(argv)
     if args.fcn_sha256:
-        if (len(args.fcn_sha256) != 64 or any(c not in '0123456789abcdef' for c in args.fcn_sha256)
+        if (args.fcn_input_width not in (512, 1024) or len(args.fcn_sha256) != 64 or any(c not in '0123456789abcdef' for c in args.fcn_sha256)
                 or not 0 < args.fcn_height_m < 5 or not math.isfinite(args.fcn_max_age_sec) or args.fcn_max_age_sec <= 0):
             parser.error('FCN requires a lowercase SHA256, camera height (0..5 m) and positive maximum age')
         if (args.mode != 'task-drive' or args.path_mask_class not in (1, 2) or args.path_planner != 'local'

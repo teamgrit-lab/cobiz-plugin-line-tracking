@@ -20,13 +20,20 @@ def _panorama_projection(width,height,forward_heading_deg=0):
     return u.astype(np.float32),v.astype(np.float32),visible,tuple(visible&(sector==i) for i in range(4))
 
 
-def panorama_mask(masks,width=768,height=384,forward_heading_deg=0):
+def panorama_mask(masks,width=768,height=384,forward_heading_deg=0,*,unobserved_value=None,ego_masks=None):
     """Four ±45° vertical views cover every azimuth; unseen polar caps stay unknown."""
     if len(masks)!=4 or any(m.shape!=(270,480) for m in masks):raise ValueError('four aligned masks required')
+    if ego_masks is not None and (len(ego_masks)!=4 or any(m.shape!=(270,480) for m in ego_masks)):
+        raise ValueError('four aligned ego masks required')
     u,v,visible,sectors=_panorama_projection(width,height,forward_heading_deg)
     output=np.full((height,width,3),(50,48,27),np.uint8)
     output[~visible]=(85,85,85)
     for i,mask in enumerate(masks):
         sampled=cv2.remap(mask,u,v,cv2.INTER_NEAREST,borderMode=cv2.BORDER_CONSTANT)
         output[sectors[i]&(sampled!=0)]=(140,167,94)
+        if unobserved_value is not None:
+            output[sectors[i]&(sampled==unobserved_value)]=(85,85,85)
+        if ego_masks is not None:
+            ego=cv2.remap(ego_masks[i].astype(np.uint8),u,v,cv2.INTER_NEAREST,borderMode=cv2.BORDER_CONSTANT)
+            output[sectors[i]&(ego!=0)]=(200,70,230)
     return output

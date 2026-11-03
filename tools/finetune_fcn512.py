@@ -6,7 +6,7 @@
 #   "pillow==13.0.0", "torch==2.14.1", "torchvision==0.29.1",
 # ]
 # ///
-"""Fine-tune the 512x256 Cityscapes FCN on the reviewed Dangjin 360 camera views."""
+"""Fine-tune the 512x256 or 1024x512 Cityscapes FCN on Dangjin 360 camera views."""
 
 import argparse
 import hashlib
@@ -30,6 +30,10 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision.models import resnet18
 
 BASE_SHA256 = "f9632c857366cf0115c036a35642a72703205cd8f0666851bdd604732788f43b"
+BASE_SHA256_BY_WIDTH = {
+    512: BASE_SHA256,
+    1024: "b05245c8fac1527fb1d5cc04db22a855ede25807a65b053c118571fa30d25901",
+}
 ROAD, IGNORE = 3, 255
 HEIGHT, WIDTH = 256, 512
 CLASSES = ("void ego_vehicle ground road sidewalk building wall fence pole traffic_light "
@@ -48,13 +52,16 @@ def write_json(path, data):
 
 
 def arguments():
+    global HEIGHT, WIDTH, BASE_SHA256
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     # A copy beside the base model on a removable drive also works after a mount-point change.
     here = Path(__file__).resolve().parent
     volume = here.parent.parent if here.name == "fcn512-training" else Path("/Volumes/MY_HDD")
     parser.add_argument("--volume", type=Path, default=volume, help="Drive containing connectum_data and connectum_models")
     parser.add_argument("--dataset", type=Path, help="Override the dataset directory")
-    parser.add_argument("--base-onnx", type=Path, help="Override path to the original FCN-ResNet18 512x256 ONNX")
+    parser.add_argument("--width", type=int, choices=[512, 1024], default=512,
+                        help="Fixed model input width; dataset must match this resolution")
+    parser.add_argument("--base-onnx", type=Path, help="Override path to the original FCN-ResNet18 ONNX")
     parser.add_argument("--output-root", type=Path, help="Parent of a unique directory for each training run")
     parser.add_argument("--device", choices=["auto", "cpu", "mps", "cuda"], default="auto")
     parser.add_argument("--epochs", type=int, default=8)
@@ -62,12 +69,14 @@ def arguments():
     parser.add_argument("--lr", type=float, default=0.0003, help="Classifier learning rate")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+    WIDTH, HEIGHT = args.width, args.width // 2
+    BASE_SHA256 = BASE_SHA256_BY_WIDTH[WIDTH]
     if args.epochs < 1 or args.batch_size < 1 or not math.isfinite(args.lr) or args.lr <= 0 or args.seed < 0:
         parser.error("epochs, batch-size and lr must be positive; seed must be nonnegative")
     models = args.volume / "connectum_models"
-    args.dataset = (args.dataset or args.volume / "connectum_data/real360/fcn512-road-dataset-v1").expanduser().resolve()
-    args.base_onnx = (args.base_onnx or models / "fcn512-training/base/fcn_resnet18.onnx").expanduser().resolve()
-    args.output_root = (args.output_root or models / "fcn512-road-runs").expanduser().resolve()
+    args.dataset = (args.dataset or args.volume / f"connectum_data/real360/fcn{WIDTH}-road-dataset-v1").expanduser().resolve()
+    args.base_onnx = (args.base_onnx or models / f"fcn{WIDTH}-training/base/fcn_resnet18.onnx").expanduser().resolve()
+    args.output_root = (args.output_root or models / f"fcn{WIDTH}-road-runs").expanduser().resolve()
     return args
 
 
@@ -94,7 +103,7 @@ def restore_base(path):
     if not path.is_file():
         raise FileNotFoundError(f"Missing FCN base: {path}. Supply the original model with --base-onnx.")
     if digest(path) != BASE_SHA256:
-        raise ValueError("Base ONNX does not match the expected 512x256 Cityscapes weights")
+        raise ValueError(f"Base ONNX does not match the expected {WIDTH}x{HEIGHT} Cityscapes weights")
     graph = onnx.load(path)
     model = CityscapesFCN()
     state = {t.name: torch.from_numpy(numpy_helper.to_array(t).copy()) for t in graph.graph.initializer}
@@ -114,7 +123,7 @@ def check_onnx_parity(model, path, samples):
             sample = sample.unsqueeze(0)
             native = session.run(["output_0"], {"input_0": sample.numpy()})[0]
             restored = model(sample).numpy()
-            if native.shape != (1, 21, 8, 16) or not np.isfinite(restored).all():
+            if native.shape != (1, 21, HEIGHT // 32, WIDTH // 32) or not np.isfinite(restored).all():
                 raise ValueError(f"Unexpected FCN output: {native.shape}")
             np.testing.assert_allclose(restored, native, rtol=2e-4, atol=2e-4)
             max_error = max(max_error, float(np.max(np.abs(restored - native))))
@@ -338,13 +347,13 @@ def main():
     run = Path(tempfile.mkdtemp(prefix=datetime.now().strftime("%Y%m%d-%H%M%S-"), dir=args.output_root))
     split_files = ["train.jsonl", "train-binary.jsonl", "validation.jsonl", "validation-binary.jsonl"]
     config = {
-        "architecture": "FCN-ResNet18-Cityscapes-512x256", "dataset": str(args.dataset),
+        "architecture": f"FCN-ResNet18-Cityscapes-{WIDTH}x{HEIGHT}", "dataset": str(args.dataset),
         "dataset_contract": schema, "base_onnx_sha256": BASE_SHA256, "base_onnx": str(args.base_onnx),
         "device": str(device), "epochs": args.epochs, "batch_size": args.batch_size, "seed": args.seed,
         "lr_classifier": args.lr, "lr_layer4": args.lr / 10, "head_only_epochs": min(args.epochs, 2),
         "optimizer": "AdamW", "binary_loss_weight": .5, "semantic_weights": {"ego_vehicle": 3, "sidewalk": 3, "vegetation": 2, "default": 1},
         "selection": "highest binary road IoU, ties use semantic road IoU, among updated epochs",
-        "runtime": "input_0: RGB ImageNet float32 [1,3,256,512]; output_0: logits [1,21,8,16]; argmax over classes 1..20 then nearest upsample",
+        "runtime": f"input_0: RGB ImageNet float32 [1,3,{HEIGHT},{WIDTH}]; output_0: logits [1,21,{HEIGHT // 32},{WIDTH // 32}]; argmax over classes 1..20 then nearest upsample",
         "supervised": {s: {"views": len(ds), "binary_views": sum("binary_road_label" in r for r in ds.rows)}
                        for s, ds in (("train", train), ("validation", valid))},
         "split_sha256": {name: digest(args.dataset / "splits" / name) for name in split_files},

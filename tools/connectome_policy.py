@@ -42,8 +42,8 @@ class DriveReadout(nn.Module):
 
 class ConnectomeDrivePolicy:
     def __init__(self,path,perception,device='cpu',*,max_speed_mps=.8):
-        if not .1 <= max_speed_mps <= 1.:
-            raise ValueError('simulation maximum speed must be 0.1 to 1.0 m/s')
+        if not .1 <= max_speed_mps <= 2.:
+            raise ValueError('simulation maximum speed must be 0.1 to 2.0 m/s')
         self.max_speed_mps=float(max_speed_mps)
         path=Path(path);checkpoint=torch.load(path/'drive-readout.pt',map_location='cpu',weights_only=True)
         if checkpoint.get('schema')!='dangjin.drive_readout.vision.v2':

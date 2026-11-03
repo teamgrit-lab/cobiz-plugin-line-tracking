@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { WorldGeometry, barnSilos } from './world-geometry.js';
-import { enrichScene, roadTexture } from './scene-details.js';
+import { enrichScene, groundTexture, fieldSky } from './scene-details.js';
 import { RobotSimulation } from './robot-sim.js';
 import { camera360ProfileHash } from './camera360.js';
 
@@ -55,14 +55,16 @@ scene.add(sun);
 
 const mat = (color, options = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.87, ...options });
 const M = {
-  road: mat('#858b83'), curb: mat('#cbd0bd'), concrete: mat('#c7c6b8'),
+  apron: mat('#ffffff', {map:groundTexture('concrete'),polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2}),
+  road: mat('#ffffff', {map:groundTexture('asphalt')}), curb: mat('#cbd0bd'), concrete: mat('#c7c6b8'),
   walls: mat('#d9dbcd'), steel: mat('#8e9c96', { metalness: 0.35, roughness: 0.5 }),
   roof: mat('#d9d9cc', { metalness: 0.3, roughness: 0.7, side: THREE.DoubleSide }),
-  trim: mat('#855646'), dark: mat('#4b574b'), grass: mat('#9ba987'),
+  trim: mat('#9b3d38',{side:THREE.DoubleSide}), dark: mat('#4b574b'),
   soil: mat('#9e9b79'), lane: mat('#d0b576'), glass: mat('#718e8c', { metalness: 0.35 }),
   trunk: mat('#787864'), silo: mat('#d6d9cc', { metalness: 0.5, roughness: 0.45 }),
 };
-M.road.map=roadTexture();
+scene.userData.fieldSky=fieldSky();
+const vergeMap=groundTexture('verge');
 const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
 const dummy = new THREE.Object3D();
 const batches = new Map();
@@ -109,12 +111,13 @@ function road(points, width, material = M.road, elevation = 0.08, sharedCurve=nu
   const curve = sharedCurve||new THREE.CatmullRomCurve3(points.map(p => V(p[0], p[1], elevation)), false, 'centripetal');
   const samples = curve.getPoints(Math.max(30, points.length * 18));
   for(const p of samples)p.y=elevation;
-  const positions = [], indices = [], uvs=[];let distance=0;
+  const positions = [], indices = [], uvs=[];
   samples.forEach((p, i) => {
     const tangent = (samples[Math.min(i+1, samples.length-1)].clone().sub(samples[Math.max(0, i-1)])).normalize();
     const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).multiplyScalar(width / 2);
-    positions.push(...p.clone().add(normal).toArray(), ...p.clone().sub(normal).toArray());
-    if(i)distance+=p.distanceTo(samples[i-1]);uvs.push(0,distance/8,1,distance/8);
+    for(const edge of [p.clone().add(normal),p.clone().sub(normal)]){
+      positions.push(...edge.toArray());uvs.push(edge.x/7,-edge.z/7);
+    }
     if (i > 0) { const n = i*2; indices.push(n-2, n, n-1, n-1, n, n+1); }
   });
   const geometry = new THREE.BufferGeometry();
@@ -122,15 +125,15 @@ function road(points, width, material = M.road, elevation = 0.08, sharedCurve=nu
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs,2));
   geometry.setIndex(indices); geometry.computeVertexNormals();
   const mesh = new THREE.Mesh(geometry, material); mesh.receiveShadow = true; model.add(mesh);
-  if(material===M.road)mesh.userData.semantic='road';
+  if(material===M.road||material===M.apron)mesh.userData.semantic='road';
   mesh.userData.sensorHidden=sensorHidden;
   return curve;
 }
 function pavedArea(area){
   const contour=area.points.map(([x,y])=>new THREE.Vector2(x,y));
   const indices=THREE.ShapeUtils.triangulateShape(contour,[]).flat();
-  const mesh=surface(area.points.map(([x,y])=>[x,y,.085]),indices,M.road);
-  mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(area.points.flatMap(([x,y])=>[x/8,y/8]),2));
+  const mesh=surface(area.points.map(([x,y])=>[x,y,.10]),indices,M.apron);
+  mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(area.points.flatMap(([x,y])=>[x/7,y/7]),2));
   mesh.userData.semantic='road';mesh.userData.pavedArea=area.id;
 }
 let randomSeed = 11618;
@@ -149,11 +152,12 @@ function terrain() {
   for (let i=0; i<positions.count; i++) {
     const x=positions.getX(i), y=-positions.getZ(i);
     positions.setY(i, terrainHeight(x, y) - 0.15);
-    const c = new THREE.Color('#a9b595').lerp(new THREE.Color('#8c9f78'), random() * 0.35);
+    g.attributes.uv.setXY(i,x/5,y/5);
+    const c = new THREE.Color('#ffffff').lerp(new THREE.Color('#d8d5bb'),random()*.5);
     colors.push(c.r, c.g, c.b);
   }
   g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); g.computeVertexNormals();
-  const mesh = new THREE.Mesh(g, mat('#ffffff', { vertexColors: true, flatShading: true }));
+  const mesh = new THREE.Mesh(g, mat('#ffffff', { map:vergeMap, vertexColors:true }));
   mesh.receiveShadow = true; model.add(mesh);
   // Quiet agricultural parcels outside the site. Their shapes are illustrative.
   for (const [x,y,l,w] of [[-170,-62,145,65],[-250,25,120,55],[-175,268,95,45],[80,270,130,48],[-200,318,185,50]]) {
@@ -212,19 +216,24 @@ function barn(b, a) {
     }
     box(x+l/2,c+side*5.8,.45,l,1.2,.6,M.concrete);
   }
-  // Gable planes follow the exterior observed in the recordings; heights are assumed.
-  for(const side of [-1,1]){
-    const outerY=c+side*(w/2+.8);
-    surface([[x-.8,c,r],[x+l+.8,c,r],[x+l+.8,outerY,e],[x-.8,outerY,e]],
-      side===1?[0,1,2,0,2,3]:[2,1,0,3,2,0],M.roof,roofs);
-    box(x+l/2,outerY,e,l+1.6,.3,.28,M.trim,roofs);
-    // Corrugations and roof purlins are economical line geometry.
-    for(let dx=0;dx<=l;dx+=3)line([[x+dx,c,r+.03],[x+dx,outerY,e+.03]],'#b6bcb0',roofs);
+  // Shallow arched end profile and red fascia visible in ID482 / RSSP.
+  const arch=Array.from({length:13},(_,i)=>{
+    const u=i/6-1;
+    return [c+u*(w/2+.8),e+(r-e)*(1-u*u)];
+  });
+  const strips=[];
+  for(let i=0;i<arch.length-1;i++){
+    const j=2*i;strips.push(j,j+1,j+2,j+2,j+1,j+3);
   }
+  surface(arch.flatMap(([cy,h])=>[[x-.8,cy,h],[x+l+.8,cy,h]]),strips,M.roof,roofs);
+  for(const [cy] of [arch[0],arch.at(-1)])box(x+l/2,cy,e,l+1.6,.3,.28,M.trim,roofs);
+  for(let dx=0;dx<=l;dx+=3)line(arch.map(([cy,h])=>[x+dx,cy,h+.03]),'#b6bcb0',roofs);
   box(x+l/2,c,r+.3,l*.9,1.9,.6,M.roof,roofs);
   box(x+l/2,c,r+.65,l*.92,2.5,.12,M.trim,roofs);
   for(const end of [x,x+l]){
-    surface([[end,y,e],[end,y+w,e],[end,c,r]], [0,1,2],M.roof,roofs);
+    surface(arch.flatMap(([cy,h])=>[[end,cy,e-.05],[end,cy,h]]),strips,M.roof,roofs);
+    const lip=end===x?x-.8:x+l+.8;
+    surface(arch.flatMap(([cy,h])=>[[lip,cy,h+.04],[lip,cy,h-.32]]),strips,M.trim,roofs);
     for(const side of [-1,1]){
       const frontWidth=(w-a.aisle_width)/2;
       box(end,c+side*(a.aisle_width/2+frontWidth/2),3.3,.25,frontWidth,6.6,M.walls);
@@ -263,8 +272,13 @@ function lamp(x,y){
 }
 function buildSite(site){
   terrain();trees();
-  box(145.5,94,-.02,320,225,.12,M.grass);
-  for(const r of world.roads){road(r.points,r.width+.4,M.curb,.055,r.curve);road(r.points,r.width,M.road,.08,r.curve);}
+  const verge=surface([[-14.5,-18.5,.04],[305.5,-18.5,.04],[305.5,206.5,.04],[-14.5,206.5,.04]],[0,1,2,0,2,3],mat('#ffffff',{map:vergeMap}));
+  verge.geometry.setAttribute('uv',new THREE.Float32BufferAttribute([0,0,64,0,64,45,0,45],2));
+  for(const r of world.roads){
+    const asphalt=['access','south-east','central'].includes(r.id);
+    road(r.points,r.width+.4,M.curb,.055,r.curve);
+    road(r.points,r.width,asphalt?M.road:M.apron,asphalt ? .08 : .10,r.curve);
+  }
   world.pavedAreas.forEach(pavedArea);
   // Policy guides belong to the overview, not to the robot's RGB observation.
   road([[145.65,5],[145.65,178]],.18,M.lane,.115,null,true);
@@ -527,6 +541,14 @@ try{
   recordings={october,september};manifest=october;world=new WorldGeometry(data);
   buildSite(data);connectUI();resize();camera.position.copy(V(405,-430,460));controls.target.copy(V(65,88,0));controls.update();
   sim=new RobotSimulation({scene,renderer,camera,controls,model,roofs,vegetation,world,cameraProfile,cameraProfileHash,onOpen:()=>{if(walking)setWalking(false);setMode('model');fly=null;tour=false;updateTour();$('selection').hidden=true;outline.visible=false;}});
+  if (new URLSearchParams(location.search).get('preset') === 'lap-9027') {
+    $('sim-fault-enabled').checked = true;
+    $('sim-fault-profile').value = 'normal';
+    $('sim-camera-sway').checked = false;
+    $('sim-scenario').value = 'patrol';
+    sim.reset('patrol', 9027);
+    sim.open();
+  }
   $('loading').hidden=true;requestAnimationFrame(animate);
 }catch(error){$('loading').textContent=`환경을 불러오지 못했습니다: ${error.message}. README의 로컬 서버 실행 방법을 확인해 주세요.`;console.error(error);}
 

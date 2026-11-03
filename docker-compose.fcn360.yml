@@ -1,6 +1,7 @@
 # Road (1) selects FCN masks from the Insta camera; Sidewalk (2) keeps its configured pipeline.
 x-fcn-identity: &fcn-identity
-  LINE_TRACKING_FCN_SHA256: ${FCN360_MODEL_SHA256:-6c0c39112cf2f39b65904c27f313cad4a07c2369ef464e953cb3df1e9ccf0671}
+  LINE_TRACKING_FCN_SHA256: ${FCN360_MODEL_SHA256:-77197ab82305f61eb7e83d4bff7f2dfad0122a618ea9332b4c80236862733e7f}
+  LINE_TRACKING_FCN_INPUT_WIDTH: ${FCN360_INPUT_WIDTH:-1024}
 
 services:
   fcn360-road:
@@ -13,7 +14,7 @@ services:
       - ${FCN360_VIDEO_DEVICE:-/dev/video91}:/dev/video91
     volumes:
       - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
-      - ${FCN360_MODEL_DIR:-./models/fcn512-road-20261102}:/fcn-model:ro
+      - ${FCN360_MODEL_DIR:-./models/fcn1024-road-20261103}:/fcn-model:ro
       - fcn360-engines:/fcn-engine-cache
     environment:
       <<: *fcn-identity

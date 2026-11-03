@@ -210,6 +210,10 @@ def test_surround_speed_ceiling_only_changes_forward_scale(stopped):
     new,_=actor.infer(np.ones((4,270,480),np.uint8))
     assert new.vx==(0. if stopped else 1.)
     assert new.yaw_rate==old.yaw_rate and new.vy==old.vy and new.reason==old.reason
+    actor.max_speed_mps=2.
+    fast,_=actor.infer(np.ones((4,270,480),np.uint8))
+    assert fast.vx==(0. if stopped else 2.)
+    assert fast.yaw_rate==old.yaw_rate and fast.reason==old.reason
 
 
 @pytest.mark.parametrize('stopped',[False,True])
@@ -255,3 +259,90 @@ def test_navigation_grid_keeps_subcell_silo_and_lamp_supports():
         x,y=box['x']+box['length']/2,box['y']+box['width']/2
         row=free.shape[0]-1-int((y-origin[1])/.25);col=int((x-origin[0])/.25)
         assert not free[row,col],box['id']
+
+
+def test_fcn_sim_uses_four_native_views_and_evaluates_without_guidance():
+    from dangjin_fcn import FcnDrive
+
+    class Detector:
+        details = {'backend':'fcn512-360', 'weights_sha256':'test', 'views':4}
+        front_visible = True
+
+        def predict_classes(self, frames):
+            assert [f.shape for f in frames] == [(256,512,3)] * 4
+            assert [int(f[0,0,0]) for f in frames] == [10,20,30,40]
+            classes = np.full((4,8,16), 11, np.uint8)
+            classes[:,4:] = 3
+            if not self.front_visible:
+                classes[0] = 11
+            return classes, 0.
+
+    world = json.loads((ROOT/'environments/dangjin/world.json').read_text())
+    site = json.loads((ROOT/'environments/dangjin/site.json').read_text())
+    detector = Detector()
+    sim = SimulationService(None, site, detector, world, FcnDrive(1.6, 2.))
+    r = request()
+    del r['image_png']
+    panels = [np.full((256,512,3), v, np.uint8) for v in (10,20,30,40)]
+    x,y = world['perimeter_route'][0]
+    r.update(scenario='patrol', pose=dict(x=x,y=y,heading=0), speed_mps=2.,
+             views_atlas_png=png(np.vstack([np.hstack(panels[:2]),np.hstack(panels[2:])])))
+    result = sim.step(r)
+    assert result['command']['vx'] == 2. and result['paths']['1']['points_xy']
+    assert 'target_site' not in result['mission']
+    detector.front_visible = False
+    r['stamp_sec'] += .1
+    result = sim.step(r)
+    assert result['command']['vx'] == result['command']['yaw_rate'] == 0.
+    assert not result['paths'] and not result['policy_metrics']['front_path_valid']
+    r['views_atlas_png'] = png(np.zeros((540,960,3),np.uint8))
+    with pytest.raises(ValueError,match='1024x512'):
+        sim.step(r)
+
+
+def test_fcn_sim_rejects_mismatched_weights(tmp_path):
+    from dangjin_fcn import FcnPerception
+
+    (tmp_path/'complete.json').write_text(json.dumps({'sha256':{'fcn_resnet18.onnx':'wrong'}}))
+    (tmp_path/'fcn_resnet18.onnx').write_bytes(b'not the trained model')
+    with pytest.raises(ValueError, match='training manifest'):
+        FcnPerception(tmp_path)
+
+
+def test_connectome_binary_detector_uses_same_road_controller_without_map_or_actor():
+    from dangjin_fcn import FcnDrive, binary_road_grid
+    from fcn360_road import ROAD, BINARY_NONROAD, side_edge
+
+    native = np.zeros((4, 270, 480), np.uint8)
+    native[:, 135:] = 1
+    native[1, 135:169] = 0
+    native[3, 135:203] = 0
+    native[2, :, :15] = 1  # exactly half the first rear grid column
+    grid = binary_road_grid(native)
+    assert grid[2, 0, 0] == BINARY_NONROAD and grid[0, 4, 0] == ROAD
+    assert 0 < side_edge(grid[3], 1.6) < side_edge(grid[1], 1.6)
+
+    class Detector:
+        details = {'backend':'flyvis-road-readout','views':4,'weights_sha256':'test'}
+        def predict_views(self, frames):
+            assert [f.shape for f in frames] == [(270, 480, 3)] * 4
+            return native, {'ms':1., 'circuit_ms':.75}
+
+    world = json.loads((ROOT/'environments/dangjin/world.json').read_text())
+    site = json.loads((ROOT/'environments/dangjin/site.json').read_text())
+    sim = SimulationService(TestEncoder(), site, Detector(), world, FcnDrive(1.6, 2.))
+    req = request()
+    del req['image_png']
+    x,y = world['perimeter_route'][0]
+    req.update(scenario='patrol', pose=dict(x=x,y=y,heading=0), speed_mps=2.,
+               views_atlas_png=png(np.zeros((540, 960, 3), np.uint8)))
+    result = sim.step(req)
+    assert 'target_site' not in result['mission']
+    assert result['perception_metrics']['circuit_ms'] == .75
+    assert result['policy']['planner_revision'] == 'native-fcn-grid-v4'
+    assert result['command']['vx'] == 2. and result['paths']['1']['points_xy']
+    native[:] = 0
+    req['stamp_sec'] += .1
+    result = sim.step(req)
+    assert result['command']['vx'] == result['command']['yaw_rate'] == 0.
+    assert result['policy_metrics']['maneuver'] == 'stop' and not result['paths']

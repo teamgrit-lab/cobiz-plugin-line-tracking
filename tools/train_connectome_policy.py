@@ -24,15 +24,15 @@ from dangjin_sensor_faults import SensorFaults
 from dangjin_sim_server import BUNDLE_SHA256
 
 
-def teacher(metadata,route):
+def teacher(metadata,route,max_speed=.8):
     pose=metadata['pose'];p=np.array([pose['x'],pose['y']]);heading=pose['heading']
     # Offline reference centerline labels, never called by the deployed actor.
     delta=route-p;nearest=int(np.argmin(np.linalg.norm(delta,axis=1)))
     points=route[(nearest+np.arange(0,61))%len(route)]-p
     c,s=np.cos(heading),np.sin(heading);rotation=np.array([[c,-s],[s,c]])
     local=points@rotation
-    command=track_camera_path(local,0,.8)
-    return np.array([command.vx/.8,command.yaw_rate/.35],np.float32)
+    command=track_camera_path(local,0,max_speed)
+    return np.array([command.vx/max_speed,command.yaw_rate/.35],np.float32)
 
 
 def main():
@@ -41,7 +41,11 @@ def main():
     p.add_argument('--output',type=Path,default=Path('.cache/dangjin-connectome-policy-vision'))
     p.add_argument('--epochs',type=int,default=120)
     p.add_argument('--road-model',type=Path,default=Path('.cache/dangjin-connectome-road'))
+    p.add_argument('--init-policy',type=Path,help='Initialize the action and stop heads from an existing vision-policy folder')
     a=p.parse_args();start=time.monotonic();rng=np.random.default_rng(731);torch.manual_seed(731)
+    if a.epochs < 1:p.error('--epochs must be positive')
+    if a.init_policy and a.init_policy.resolve() == a.output.resolve():
+        p.error('select a separate output folder to preserve the parent policy')
     torch.set_num_threads(2);cv2.setNumThreads(2)
     metadata=[json.loads(f.read_text()) for f in sorted(a.data.glob('[0-9][0-9][0-9][0-9].json'))]
     if len(metadata)!=768:raise ValueError(f'768 four-view examples required, got {len(metadata)}')
@@ -74,7 +78,19 @@ def main():
     valid=np.array([i for i,m in enumerate(metadata) if not m['pose_group']%5])
     device='mps' if torch.backends.mps.is_available() else 'cpu'
     torch.set_default_device('cpu');model=DriveReadout().to(device)
-    optimizer=torch.optim.AdamW(model.parameters(),lr=.001,weight_decay=.0001)
+    initial_policy = None
+    if a.init_policy:
+        weights = a.init_policy / 'drive-readout.pt'
+        parent = torch.load(weights, map_location='cpu', weights_only=True)
+        training = json.loads((a.init_policy / 'training.json').read_text())
+        if (parent.get('schema') != 'dangjin.drive_readout.vision.v2' or
+                training['encoder_sha256'] != BUNDLE_SHA256 or training['road_sha256'] != parent['road_sha256']):
+            raise ValueError('incompatible parent Flyvis drive policy')
+        model.load_state_dict(parent['state_dict'], strict=True)
+        initial_policy = {'policy_sha256': hashlib.sha256(weights.read_bytes()).hexdigest(),
+                          'road_sha256': parent['road_sha256']}
+    learning_rate = .0003 if initial_policy else .001
+    optimizer=torch.optim.AdamW(model.parameters(),lr=learning_rate,weight_decay=.0001)
     scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,a.epochs,eta_min=.00005)
     a.output.mkdir(parents=True,exist_ok=True);history=[];best=float('inf')
     # Reuse held-out corruptions exactly across epochs; training draws fresh ones.
@@ -108,6 +124,8 @@ def main():
                 acc.extend((logits.argmax(1)==z).cpu().tolist());prob.extend(z.cpu().tolist())
         error=np.sum(errors,axis=0)/max(1,len(prob)-sum(prob))
         return {'speed_mae_mps':float(error[0]*.8),'yaw_mae_rad_s':float(error[1]*.35),'stop_accuracy':float(np.mean(acc))}
+    if initial_policy:
+        initial_policy['heldout_before_adaptation'] = score()
     for epoch in range(a.epochs):
         model.train();losses=[]
         for ids in np.array_split(rng.permutation(np.tile(train,2)),max(1,len(train)*2//48)):
@@ -128,6 +146,8 @@ def main():
         'fault_seed_range':[1000,1999],'validation_fault_seed_range':[2000,2999],'selected_epoch':selected,'history':history,
         'layout_revision':metadata[0]['layout_revision'],'camera_profile_sha256':next(iter(camera_profiles)),'wall_s':time.monotonic()-start,
         'scope':'synthetic scene imitation learning; needs independent closed-loop tests'}
+    if initial_policy:
+        manifest.update(initial_policy=initial_policy, learning_rate=learning_rate)
     (a.output/'training.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print(json.dumps({'saved':str(a.output),'selected':selected}),flush=True)
 

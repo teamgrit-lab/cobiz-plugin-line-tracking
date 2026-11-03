@@ -23,12 +23,12 @@ def encode_image(image):
     return base64.b64encode(data).decode('ascii')
 
 
-def decode_image(value, color):
+def decode_image(value, color, *, max_width=1280, max_height=720):
     raw = base64.b64decode(value, validate=True)
     # Reject oversized PNG dimensions before OpenCV allocates the image.
     if (raw[:8] != b'\x89PNG\r\n\x1a\n' or len(raw) < 24
-            or not 1 <= int.from_bytes(raw[16:20], 'big') <= 1280
-            or not 1 <= int.from_bytes(raw[20:24], 'big') <= 720):
+            or not 1 <= int.from_bytes(raw[16:20], 'big') <= max_width
+            or not 1 <= int.from_bytes(raw[20:24], 'big') <= max_height):
         raise ValueError('bounded PNG camera/mask required')
     image = cv2.imdecode(np.frombuffer(raw, np.uint8), color)
     if image is None:

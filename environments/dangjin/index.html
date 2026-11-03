@@ -26,7 +26,7 @@
       <button id="entrance" class="location-button"><span class="location-icon">↳</span><span>진입로<small>관리동 방향</small></span><span class="arrow">↗</span></button>
       <button id="rear-road" class="location-button"><span class="location-icon">↝</span><span>4동 뒤편 외곽길<small>퇴비사 바깥 연결로</small></span><span class="arrow">↗</span></button>
       <div id="sim-controls" hidden>
-        <div class="section-label places-label">ROBOT / CONNECTOME</div>
+        <div class="section-label places-label">ROBOT / ROAD</div>
         <label for="sim-scenario">출발 구간</label><select id="sim-scenario"><option value="patrol">우사 전체 한 바퀴</option><option value="bend">퇴비사 옆 굽은 길</option><option value="east">4동 동쪽 외곽도로</option><option value="west">1·2동 외곽도로</option><option value="blocked">중앙도로 접근 · 금지 시험</option></select>
         <label for="sim-rate">재생 속도</label><select id="sim-rate"><option value="1">1배속</option><option value="5" selected>최대 5배속</option><option value="20">가능한 빠르게</option></select>
         <div class="sim-actions"><button id="sim-start" class="primary">▶ 추종 시작</button><button id="sim-reset">↺ 새 시험</button></div>
@@ -34,7 +34,7 @@
           <label class="sim-check"><input type="checkbox" id="sim-fault-enabled" checked>랜덤 구멍 · 순간 전체 누락</label>
           <label for="sim-fault-profile">누락 강도</label><select id="sim-fault-profile"><option value="mild">약하게</option><option value="normal" selected>보통</option><option value="severe">강하게</option></select>
           <details><summary>패턴 재현 · 시드</summary><label for="sim-fault-seed">시험 시드</label><div class="fault-seed-row"><input id="sim-fault-seed" type="number" min="0" max="4294967295" step="1" aria-label="시험 시드"><button id="sim-fault-replay" type="button">재현</button></div></details>
-          <p>새 시험마다 새 패턴 · 일시 정지는 유지<br>정지·재출발도 학습된 모델이 판단</p>
+          <p>새 시험마다 새 패턴 · 일시 정지는 유지<br>검출 누락은 경로·제어 입력에 반영</p>
         </fieldset>
         <fieldset class="fault-controls"><legend>보행 카메라 흔들림</legend>
           <label class="sim-check"><input type="checkbox" id="sim-camera-sway" checked>보행 카메라 흔들림 ±5°</label>
@@ -43,8 +43,8 @@
         <label class="sim-check"><input type="checkbox" id="sim-follow" checked>로봇 따라가기</label>
         <label class="sim-check"><input type="checkbox" id="sim-obstacle">마주 오는 승용차 · 0.35 m/s</label>
         <button id="sim-nudge" class="sim-secondary">옆으로 0.6 m 이동</button><button id="sim-export" class="sim-secondary">주행 기록 저장 ↓</button>
-        <p class="sim-note">최대 <span id="sim-max-speed">1.0</span> m/s · 곡선 구간 감속<br>커넥톰 차도 인식 → 학습된 속도·조향<br>주행 모델은 영상만 입력 · 지도 목표점 없음<br>전면·360° 모두 별도 회피 제어 없음<br>다리·접촉 물리는 모사하지 않습니다.</p>
-      <details class="sim-note"><summary>커넥톰 제어 흐름</summary><p id="sim-control-flow">360° 영상 → Flyvis 시각 회로 → 차도 검출 → 랜덤 누락 → 학습된 행동 출력층 → 속도·회전 → 로봇</p><p>지도·목표점은 행동 모델에 전달되지 않습니다. 지도는 완주·이탈 평가에만 사용합니다.</p></details><details class="sim-note"><summary>인식 모델 개발</summary><button id="sim-collect" class="sim-secondary">학습 표본 수집</button><button id="sim-policy-collect" class="sim-secondary">주행 정책 학습 영상 수집</button></details></div>
+        <p class="sim-note">최대 <span id="sim-max-speed">1.0</span> m/s · 곡선 구간 감속<br>카메라 차도 인식 → 속도·조향<br>주행 모델은 영상만 입력 · 지도 목표점 없음<br>전면·360° 모두 별도 회피 제어 없음<br>다리·접촉 물리는 모사하지 않습니다.</p>
+      <details class="sim-note"><summary>주행 제어 흐름</summary><p id="sim-control-flow">연결한 서버의 영상 인식·제어 구성을 표시합니다.</p><p>FCN 모드에서 지도는 완주·이탈 평가에만 사용합니다.</p></details><details class="sim-note"><summary>인식 모델 개발</summary><button id="sim-collect" class="sim-secondary">학습 표본 수집</button><button id="sim-policy-collect" class="sim-secondary">주행 정책 학습 영상 수집</button></details></div>
       <div class="sidebar-bottom"><span class="tiny-dot"></span><span>1 unit = 1 metre<br><small>높이·지형·부속 시설은 추정 포함</small></span></div>
     </aside>
     <section class="viewport" id="viewport" aria-label="3D 환경 탐색">
@@ -68,7 +68,7 @@
         <div class="photo-caption"><span><span id="recording-caption">2026.10.21</span> <b>MCAP</b></span><button id="evidence-button"><span id="evidence-count">32개 장면 보기 →</span></button></div>
       </div>
       <section id="robot-panel" hidden aria-label="로봇 카메라와 추종 상태">
-        <div class="robot-panel-head"><div><strong id="sim-status" role="status">주행 준비</strong><small id="sim-detail"></small></div><span id="sim-backend">Flyvis 연결 확인 중</span><button id="sim-panel-toggle" class="quiet" aria-expanded="true" aria-controls="robot-panel-body">로봇 화면 접기 ▾</button></div>
+        <div class="robot-panel-head"><div><strong id="sim-status" role="status">주행 준비</strong><small id="sim-detail"></small></div><span id="sim-backend">주행 서버 연결 확인 중</span><button id="sim-panel-toggle" class="quiet" aria-expanded="true" aria-controls="robot-panel-body">로봇 화면 접기 ▾</button></div>
         <div id="robot-panel-body">
         <div class="fault-readout"><span id="sim-fault-live" role="status">검출 누락 시험 준비</span><span id="sim-fault-counts">전체 누락 0회 · 재검출 대기 0.0 s</span></div>
         <div class="camera-readout" id="sim-camera-pitch" aria-live="off">보행 피치 0.0° / ±5°</div><small>영상 미리보기 최대 5 Hz · 화면을 접으면 미리보기 생략</small>
@@ -76,7 +76,7 @@
         <div class="sensor-grid">
           <figure><canvas id="sim-panorama" width="768" height="384" aria-label="실제 카메라 방향 기준 360도 파노라마, 로봇 전방은 왼쪽 4분의 1 지점"></canvas><figcaption>360° 원본 방향 · 전방=90° (왼쪽 ¼) · 높이 1.6 m 추정</figcaption></figure>
           <figure><canvas id="sim-forward" width="480" height="270" aria-label="전방 가상 카메라와 추종 경로"></canvas><figcaption>전방 영상 + 모델 명령의 예상 궤적</figcaption></figure>
-          <figure><canvas id="sim-mask" width="768" height="384" aria-label="커넥톰이 360도 영상에서 추정한 차도 영역"></canvas><figcaption>360° 차도 검출 · 초록: 통행 추정 / 회색: 미관측</figcaption></figure>
+          <figure><canvas id="sim-mask" width="768" height="384" aria-label="360도 영상에서 추정한 차도 영역"></canvas><figcaption>360° 차도 검출 · 초록: 통행 추정 / 회색: 미관측</figcaption></figure>
         </div>
         <div class="patrol-progress"><span>순환 진행</span><strong id="sim-progress">0%</strong></div><div class="sim-metrics"><span>이동 <b id="sim-distance">0 m</b></span><span>속도 <b id="sim-speed">0 m/s</b></span><span>중앙 오차 RMS <b id="sim-error">0 m</b></span><span>추론 <b id="sim-frames">0</b></span><span>가상 시간 <b id="sim-time">0 s</b></span></div>
         </div>

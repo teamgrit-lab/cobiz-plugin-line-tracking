@@ -1,13 +1,43 @@
 import * as THREE from 'three';
 import {distanceToSegment,polygonClearance} from './world-geometry.js';
 
-export function roadTexture(){
-  const c=document.createElement('canvas');c.width=c.height=512;const ctx=c.getContext('2d');
-  ctx.fillStyle='#d0cec5';ctx.fillRect(0,0,512,512);
-  let seed=5401;const rnd=()=>{seed=(1664525*seed+1013904223)>>>0;return seed/4294967296;};
-  for(let i=0;i<17000;i++){const shade=Math.floor(90+rnd()*105);ctx.fillStyle=`rgba(${shade},${shade},${shade-5},${.08+rnd()*.18})`;const r=.4+rnd()*2;ctx.fillRect(rnd()*512,rnd()*512,r,r);}
-  ctx.strokeStyle='#777b7040';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,4);ctx.lineTo(512,4);ctx.stroke();
-  const texture=new THREE.CanvasTexture(c);texture.colorSpace=THREE.SRGBColorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;texture.anisotropy=4;return texture;
+// Surface appearance is based on the September Insta360 recordings. The
+// switches between pavement types are approximate; they do not mark a route.
+export function groundTexture(kind){
+  const c=document.createElement('canvas');c.width=c.height=512;
+  const ctx=c.getContext('2d'),grass=kind==='verge',concrete=kind==='concrete';
+  let seed=grass?153:concrete?823:5401;
+  const rand=()=>{seed=(1664525*seed+1013904223)>>>0;return seed/4294967296;};
+  ctx.fillStyle=grass?'#8e915b':concrete?'#c5bfb3':'#818182';ctx.fillRect(0,0,512,512);
+  for(let i=0;i<2600;i++){
+    ctx.fillStyle=grass?(i%3?'#a39753':'#677440'):(i%2?'#504c48':'#ede6dc');
+    ctx.globalAlpha=grass ? .20 : .027;
+    const r=2+rand()*13;ctx.fillRect(rand()*512,rand()*512,r,r*(.35+rand()));
+  }
+  for(let i=0;i<18000;i++){
+    const value=Math.floor(55+rand()*185);
+    ctx.fillStyle=grass?(i%3?'#bdab68':'#5f753c'):`rgb(${value},${value},${value})`;
+    ctx.globalAlpha=grass ? .48 : .12+rand()*.23;
+    const n=.6+rand()*2;ctx.fillRect(rand()*512,rand()*512,n,grass?n*2:n);
+  }
+  ctx.globalAlpha=1;
+  if(concrete){
+    ctx.strokeStyle='#68645e88';ctx.lineWidth=1.6;
+    ctx.beginPath();ctx.moveTo(0,2);ctx.lineTo(512,2);ctx.moveTo(256,0);ctx.lineTo(255,230);ctx.lineTo(257,512);ctx.stroke();
+    ctx.strokeStyle='#6b676152';ctx.lineWidth=.8;
+    ctx.beginPath();ctx.moveTo(255,229);ctx.lineTo(232,217);ctx.lineTo(220,221);ctx.lineTo(194,210);ctx.stroke();
+  }
+  const texture=new THREE.CanvasTexture(c);texture.colorSpace=THREE.SRGBColorSpace;
+  texture.wrapS=texture.wrapT=THREE.RepeatWrapping;texture.anisotropy=4;return texture;
+}
+
+export function fieldSky(){
+  const c=document.createElement('canvas');c.width=32;c.height=512;
+  const ctx=c.getContext('2d'),g=ctx.createLinearGradient(0,0,0,512);
+  for(const [stop,color] of [[0,'#2363b3'],[.26,'#599ce0'],[.44,'#acd2ee'],[.51,'#e3e6d5'],[1,'#c2c8ae']])g.addColorStop(stop,color);
+  ctx.fillStyle=g;ctx.fillRect(0,0,c.width,c.height);
+  const tex=new THREE.CanvasTexture(c);tex.colorSpace=THREE.SRGBColorSpace;
+  tex.mapping=THREE.EquirectangularReflectionMapping;return tex;
 }
 
 export function enrichScene({model,world,box,cylinder,line,M,addLabel}){

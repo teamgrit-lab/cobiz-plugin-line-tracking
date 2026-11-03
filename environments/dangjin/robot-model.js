@@ -61,8 +61,8 @@ export function createRobotModel({cameraHeight=1.6}={}){
   cable([[-.4,.99,.15],[-.16,.91,.24],[.12,.9,.23],[.25,.92,.10]],.012);
   cable([[-.36,.9,-.15],[-.44,.97,-.23],[-.1,.92,-.26],[.18,.91,-.13]],.011);
 
-  // Forward-mounted arm: the raised wrist and loose cable loop form the narrow
-  // central silhouette seen in the real camera. Reach stays inside the old .65 m footprint.
+  // Forward-mounted arm with simplified wiring omitted from its silhouette.
+  // Reach stays inside the old .65 m footprint.
   const base=[.16,.91,0],shoulder=[.20,1.02,0],elbow=[.32,1.22,0],wrist=[.50,1.40,0];
   rod([.16,.85,0],base,.105,shell);rod(base,shoulder,.075,dark);
   for(const p of [shoulder,elbow,wrist]){
@@ -77,14 +77,12 @@ export function createRobotModel({cameraHeight=1.6}={}){
     rod([.56,1.47,side*.025],[.61,1.49,side*.05],.012,metal);
     rod([.61,1.49,side*.05],[.64,1.48,side*.035],.009,dark);
   }
-  cable([[.16,.92,.075],[.11,1.04,.10],[.29,1.17,.09],[.27,1.29,.085],[.44,1.40,.065]],.010);
-  cable([[.43,1.37,.045],[.50,1.55,.035],[.60,1.59,-.025],[.58,1.48,-.065],[.53,1.45,-.04]],.009);
-  cable([[.23,1.08,-.07],[.37,1.10,-.14],[.42,1.21,-.13],[.33,1.27,-.065]],.008);
 
   // The lens origin remains at the configured camera height. Only the camera
   // housings are excluded from their own sensor views; the arm/deck stay visible.
   rod([0,.88,0],[0,cameraHeight-.10,0],.019,dark);
-  rod([0,cameraHeight-.11,0],[0,cameraHeight-.06,0],.034,metal);
+  // The stitched Insta360 nadir shows the deck, not a polished near-lens cap.
+  rod([0,cameraHeight-.11,0],[0,cameraHeight-.06,0],.034,metal).userData.sensorHidden=true;
   const surround=new THREE.Group(),front=new THREE.Group();
   surround.name='360 camera housing';front.name='front camera housing';
   for(const housing of [surround,front]){housing.userData.sensorHidden=true;root.add(housing);}

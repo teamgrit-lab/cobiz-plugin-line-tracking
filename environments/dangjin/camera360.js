@@ -80,10 +80,11 @@ export class SurroundCameraCapture {
     this.quad.material=this.viewMaterial;this.renderer.setRenderTarget(target);this.renderer.render(this.scene,this.camera);
     return target;
   }
-  renderAtlas(){
+  renderAtlas(width=480,height=270){
+    this.atlasTarget.setSize(2*width,2*height);
     for(let sector=0;sector<4;sector++){
-      const x=(sector%2)*480,y=(1-Math.floor(sector/2))*270;
-      this.atlasTarget.viewport.set(x,y,480,270);this.atlasTarget.scissor.set(x,y,480,270);
+      const x=(sector%2)*width,y=(1-Math.floor(sector/2))*height;
+      this.atlasTarget.viewport.set(x,y,width,height);this.atlasTarget.scissor.set(x,y,width,height);
       this.renderView(sector,this.atlasTarget);
     }
     return this.atlasTarget;

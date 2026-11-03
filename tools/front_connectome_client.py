@@ -34,22 +34,25 @@ def validated_command(value):
 def limit_front_command(command, max_speed, max_yaw):
     factor = min(1., max_speed / command.vx if command.vx else 1.,
                  max_yaw / abs(command.yaw_rate) if command.yaw_rate else 1.)
-    return DriveDecision(command.vx * factor, 0., command.yaw_rate * factor, command.reason)
+    return DriveDecision(min(max_speed, command.vx * factor), 0.,
+                         max(-max_yaw, min(max_yaw, command.yaw_rate * factor)), command.reason)
 
 
-def front_drive_decision(command, mode, ages, max_age, camera_fault=None):
+def front_drive_decision(command, mode, ages, max_age, camera_fault=None, *, backend='front_connectome'):
     if mode != 1:
-        return DriveDecision.stop('front_connectome_requires_road')
+        return DriveDecision.stop(backend + '_requires_road')
     if camera_fault:
         return DriveDecision.stop(camera_fault)
     if any(age is None or not math.isfinite(age) or not 0 <= age <= max_age for age in ages):
-        return DriveDecision.stop('front_connectome_source_stale')
+        return DriveDecision.stop(backend + '_source_stale')
     if command is None:
-        return DriveDecision.stop('front_connectome_unavailable')
+        return DriveDecision.stop(backend + '_unavailable')
     return validated_command(command)
 
 
 class FrontConnectomeSegmenter:
+    protocol = PROTOCOL
+
     def __init__(self, url, expected_sha256, timeout=1.):
         if not url.startswith(('http://127.0.0.1:', 'http://localhost:')):
             raise ValueError('front model endpoint must be loopback')
@@ -59,7 +62,7 @@ class FrontConnectomeSegmenter:
         health_url = url.rsplit('/', 2)[0] + '/health'
         with urllib.request.urlopen(health_url, timeout=timeout) as response:
             health = json.loads(response.read(MAX_BODY))
-        if not health.get('ready') or health.get('schema') != PROTOCOL:
+        if not health.get('ready') or health.get('schema') != self.protocol:
             raise ValueError('front model service not ready')
         self.details = health['model']; self.validate_model(self.details)
         self.device = torch.device(self.details['head_device'])
@@ -75,17 +78,23 @@ class FrontConnectomeSegmenter:
     def reset(self):
         self.stream = uuid.uuid4().hex; self.sequence = 0; self.last_command = None
 
+    def prepare_frame(self, bgr):
+        return cv2.resize(bgr, (480, 270), interpolation=cv2.INTER_AREA)
+
+    def decode_command(self, value):
+        return validated_command(value)
+
     def segment(self, frame, *, color_order='bgr', path_mask_class=1,
                 detect_road_hazards=False, source_stamp=None):
         if color_order not in ['bgr', 'rgb'] or path_mask_class != 1:
             raise ValueError('front model supports explicit Road mode 1 only')
         self.last_command = None; self.sequence += 1; start = time.monotonic()
         bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR) if color_order == 'rgb' else frame
-        # Bound transport dimensions; the same 480x270 resize runs in training.
-        bgr = cv2.resize(bgr, (480, 270), interpolation=cv2.INTER_AREA)
+        # Each adapter retains its own trained image/projection dimensions.
+        bgr = self.prepare_frame(bgr)
         stamp = float(source_stamp if source_stamp is not None else start)
         identity = f'{self.stream}:{self.sequence}'
-        request = {'schema': PROTOCOL, 'stream_id': self.stream, 'request_id': identity,
+        request = {'schema': self.protocol, 'stream_id': self.stream, 'request_id': identity,
                    'stamp_sec': stamp, 'mode': 1, 'image_png': encode_image(bgr)}
         req = urllib.request.Request(self.url, data=json.dumps(request).encode(), headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req, timeout=self.timeout) as response:
@@ -96,7 +105,7 @@ class FrontConnectomeSegmenter:
         if any(reply.get(k) != request[k] for k in ['schema', 'stream_id', 'request_id', 'stamp_sec', 'mode']):
             raise ValueError('front reply does not match the camera frame')
         self.validate_model(reply['model'])
-        command = validated_command(reply['command'])
+        command = self.decode_command(reply['command'])
         mask = decode_image(reply['selected_png'], cv2.IMREAD_GRAYSCALE)
         if mask.shape != (270, 480) or not np.isin(mask, [0, 1]).all():
             raise ValueError('invalid front road mask')

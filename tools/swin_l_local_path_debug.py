@@ -118,6 +118,11 @@ from unitree_sport_api import (
 
 
 def _segmenter_from_args(args):
+    if getattr(args, 'connectome360_url', ''):
+        from connectome360_client import Connectome360Segmenter
+        return SurfaceSegmenter(BestSoFarSegmenter(_runtime_config(args)),
+            lambda: Connectome360Segmenter(args.connectome360_url,
+                args.connectome360_sha256, args.connectome360_timeout_sec))
     if getattr(args, 'front_connectome_url', ''):
         from front_connectome_client import FrontConnectomeSegmenter
         return SurfaceSegmenter(BestSoFarSegmenter(_runtime_config(args)),
@@ -126,8 +131,13 @@ def _segmenter_from_args(args):
     return BestSoFarSegmenter(_runtime_config(args))
 
 
-def uses_front_policy(args, mask_class):
-    return bool(getattr(args, 'front_connectome_url', '') and mask_class == 1)
+def uses_learned_road_policy(args, mask_class):
+    return bool((getattr(args, 'front_connectome_url', '')
+                 or getattr(args, 'connectome360_url', '')) and mask_class == 1)
+
+
+def learned_road_backend(args):
+    return 'connectome360' if getattr(args, 'connectome360_url', '') else 'front_connectome'
 
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
 # Published by apriltag_camera_relay, paired with each detector frame.
@@ -1045,6 +1055,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             self.fcn_subscription = None
             self.fcn_session_start_ns = None
+            self.connectome360_subscription = None
+            self.connectome360_session_start_ns = None
             self.fcn_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
                                       reliability=ReliabilityPolicy.BEST_EFFORT)
             self.path_publisher = self.create_publisher(
@@ -1424,6 +1436,15 @@ def run_ros2(args: argparse.Namespace) -> int:
             # to the worker, which alone owns the segmenter during forward().
             with state_lock:
                 latest.set_enabled(enabled)
+                if args.connectome360_url:
+                    from connectome360_runtime import VIEWS_TOPIC
+                    self.connectome360_session_start_ns = self.get_clock().now().nanoseconds if enabled else None
+                    if self.connectome360_subscription is not None:
+                        self.destroy_subscription(self.connectome360_subscription)
+                        self.connectome360_subscription = None
+                    if enabled and self.tasks.active and self.tasks.active.selected_mask == 1:
+                        self.connectome360_subscription = self.create_subscription(
+                            Image, VIEWS_TOPIC, self.on_connectome360_image, self.fcn_qos)
                 if fcn is not None:
                     self.fcn_session_start_ns = self.get_clock().now().nanoseconds if enabled else None
                     if self.fcn_subscription is not None:
@@ -1551,12 +1572,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                                             age_sec=max(camera_age_sec, inference_age_sec))
                     return None, (DriveDecision(0., 0., yaw, 'fcn_side_recovery') if yaw
                                   else DriveDecision.stop('fcn_front_path_unavailable'))
-            if uses_front_policy(args, mask_class):
+            if uses_learned_road_policy(args, mask_class):
                 from front_connectome_client import front_drive_decision, limit_front_command
                 with state_lock:
                     learned = state['front_command']
                 decision = front_drive_decision(learned, mask_class,
-                    (camera_age_sec, inference_age_sec), args.connectome_max_age_sec, camera_fault_reason)
+                    (camera_age_sec, inference_age_sec), args.connectome_max_age_sec, camera_fault_reason,
+                    backend=learned_road_backend(args))
                 decision = limit_front_command(decision, self.drive_config.max_forward_mps,
                                                self.drive_config.max_yaw_rps)
                 return path, decision
@@ -1635,10 +1657,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.on_shared_task_event(event, now)
                 return
             rejection_reason = None
-            if args.front_connectome_url or fcn is not None:
+            if args.front_connectome_url or args.connectome360_url or fcn is not None:
                 try:
                     if requested_selected_mask(event, args.path_mask_class) not in (1, 2):
-                        rejection_reason = ('fcn_requires_road_or_sidewalk' if fcn else 'front_connectome_requires_road_or_sidewalk')
+                        rejection_reason = ('fcn_requires_road_or_sidewalk' if fcn else learned_road_backend(args) + '_requires_road_or_sidewalk')
                 except ValueError:
                     rejection_reason = 'invalid_selected_mask'
             if self.command_publisher is not None and self.tasks.active is None:
@@ -1704,7 +1726,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if self.command_publisher is None:
                 return decision
             active = self.tasks.active if self.tasks is not None else None
-            front_road = uses_front_policy(args, active_path_mask_class(active, args.path_mask_class))
+            front_road = uses_learned_road_policy(args, active_path_mask_class(active, args.path_mask_class))
             if task_mode and not rclpy.ok():
                 # A callback interrupted by SIGTERM can resume after its stop.
                 decision = DriveDecision.stop("shutdown")
@@ -1752,7 +1774,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                         for received, stamp in [('last_image_at', 'last_image_stamp_ns'),
                                                 ('last_inference_at', 'last_inference_stamp_ns')]]
                     guard = front_drive_decision(state['front_command'], mask_class, ages,
-                        args.connectome_max_age_sec, state['camera_fault_reason'])
+                        args.connectome_max_age_sec, state['camera_fault_reason'],
+                        backend=learned_road_backend(args))
                 if guard.reason != 'tracking':
                     decision = guard
                 decision = limit_front_command(decision, self.drive_config.max_forward_mps,
@@ -1816,7 +1839,27 @@ def run_ros2(args: argparse.Namespace) -> int:
                     return
                 self.accept_image(message, stamp, is_fcn=True)
 
+        def on_connectome360_image(self, message):
+            from connectome360_runtime import views_frame_id
+            with state_lock:
+                if not latest.enabled or self.tasks.active is None or self.tasks.active.selected_mask != 1:
+                    return
+                stamp = _stamp_ns(message.header)
+                if (self.connectome360_session_start_ns is None or stamp < self.connectome360_session_start_ns
+                        or message.header.frame_id != views_frame_id()
+                        or (message.height, message.width, message.encoding) != (540, 960, 'bgr8')
+                        or not _live_source_stamp(stamp, self.get_clock().now().nanoseconds, args.connectome_max_age_sec)
+                        or (state['last_image_stamp_ns'] is not None and stamp <= state['last_image_stamp_ns'])):
+                    return
+                try:
+                    validate_camera_image(message, self.bridge)
+                    self.accept_image(message, stamp)
+                except Exception as error:
+                    self.camera_conversion_failed(error)
+
         def on_image(self, message: Any) -> None:
+            if args.connectome360_url and self.tasks.active and self.tasks.active.selected_mask == 1:
+                return
             if fcn is not None and self.tasks.active and self.tasks.active.selected_mask == 1:
                 return
             if task_mode and not latest.enabled:
@@ -2038,10 +2081,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_planner": planner_status,
                 "profile": args.profile,
                 "fcn360": dict(state['fcn_metrics']) if fcn and mask_class == 1 else None,
-                "inference_backend": (f'fcn{args.fcn_input_width}-360' if fcn and mask_class == 1 else 'front-connectome' if uses_front_policy(args, mask_class) else 'legacy'),
+                "inference_backend": (f'fcn{args.fcn_input_width}-360' if fcn and mask_class == 1 else learned_road_backend(args).replace('_', '-') if uses_learned_road_policy(args, mask_class) else 'legacy'),
                 "front_connectome": (dict(state['front_metrics'], command=state['front_command'])
-                    if uses_front_policy(args, mask_class) else None),
-                "camera_topic": mask_topic(args.fcn_sha256) if fcn and mask_class == 1 else args.image_topic,
+                    if args.front_connectome_url and mask_class == 1 else None),
+                "connectome360": (dict(state['front_metrics'], command=state['front_command'])
+                    if args.connectome360_url and mask_class == 1 else None),
+                "camera_topic": (mask_topic(args.fcn_sha256) if fcn and mask_class == 1 else
+                    '/line_tracking/connectome360/views' if args.connectome360_url and mask_class == 1 else args.image_topic),
                 "path_mask_class": mask_class,
                 "path_roi_polygon": [] if fcn and mask_class == 1 else list(path_config_for_mode(local_config, mask_class).roi_polygon),
                 "path_roi_exclusion_polygon": [] if fcn and mask_class == 1 else list(path_config_for_mode(local_config, mask_class).roi_exclusion_polygon),
@@ -2220,7 +2266,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     target_xy = guidance_packet['target_xy'] if guidance_packet else None
                     guidance_kwargs = guidance_packet or {}
                 kwargs = {"color_order": "rgb", "path_mask_class": requested_mode}
-                if uses_front_policy(args, requested_mode):
+                if uses_learned_road_policy(args, requested_mode):
                     kwargs['source_stamp'] = _stamp_ns(packet.source_header) / 1e9
                 if planner or guided:
                     kwargs['detect_road_hazards'] = True
@@ -2247,7 +2293,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                             # abort a newer Sidewalk (or Road) task.
                             if latest.is_current(packet):
                                 if task_mode:
-                                    node.abort_active_task('front_connectome_unavailable')
+                                    node.abort_active_task(learned_road_backend(args) + '_unavailable')
                                 else:
                                     state['front_command'] = None
                                     state['front_metrics'] = {}
@@ -2272,6 +2318,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                         getattr(result, 'road_hazard_mask', np.zeros_like(result.selected_mask)),
                         requested_mode, _stamp_ns(packet.source_header)/1e9, packet.generation, target_xy,
                         robot_pose=guidance_packet['robot_pose'])
+                elif args.connectome360_url and requested_mode == 1:
+                    # The actor supplies velocity directly. Do not derive a
+                    # geometric path from an atlas or invent one for telemetry.
+                    estimates = {key: None for key in smoothers}
                 else:
                     estimates = extract_path_estimates(result.selected_mask, tuple(smoothers), local_config)
                 if guidance_reason:
@@ -2288,8 +2338,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                         state['fcn_metrics'] = fcn_metrics
                         state['planner_status'] = {'backend': 'fcn360-local', 'ready': estimate is not None,
                                                    'reason': fcn_metrics['path_status']}
-                    state['front_command'] = result.front_command if uses_front_policy(args, requested_mode) else None
-                    state['front_metrics'] = result.front_metrics if uses_front_policy(args, requested_mode) else {}
+                    state['front_command'] = result.front_command if uses_learned_road_policy(args, requested_mode) else None
+                    state['front_metrics'] = result.front_metrics if uses_learned_road_policy(args, requested_mode) else {}
                     state['waypoint_guidance'] = (
                         {'ready': False, 'reason': guidance_reason} if guidance_reason else
                         dict(planner.metrics.get('waypoint_guidance', {})) if planner else
@@ -2387,6 +2437,10 @@ def run_ros2(args: argparse.Namespace) -> int:
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument('--connectome360-url', default=_env('LINE_TRACKING_CONNECTOME360_URL', ''))
+    parser.add_argument('--connectome360-sha256', default=_env('LINE_TRACKING_CONNECTOME360_SHA256', ''))
+    parser.add_argument('--connectome360-timeout-sec', type=float,
+                        default=_env_float('LINE_TRACKING_CONNECTOME360_TIMEOUT_SEC', 2.))
     parser.add_argument('--fcn-sha256', default=_env('LINE_TRACKING_FCN_SHA256', ''))
     parser.add_argument('--fcn-input-width', type=int, choices=(512, 1024),
                         default=int(_env('LINE_TRACKING_FCN_INPUT_WIDTH', '1024')))
@@ -2744,6 +2798,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument("--segment-status-topic", default="/line_tracking/segment_status")
             live.add_argument("--segment-velocity-topic", default="/line_tracking/command")
     args = parser.parse_args(argv)
+    if args.connectome360_url:
+        if (args.mode != 'task-drive' or args.path_mask_class not in (1, 2)
+                or args.path_planner != 'local' or args.inference_process
+                or args.front_connectome_url or args.fcn_sha256):
+            parser.error('360 Connectome requires task-drive, mask 1 or 2, local planner and an exclusive Road backend')
+        if (len(args.connectome360_sha256) != 64
+                or any(c not in '0123456789abcdef' for c in args.connectome360_sha256)
+                or not math.isfinite(args.connectome360_timeout_sec) or args.connectome360_timeout_sec <= 0
+                or not args.connectome360_url.startswith(('http://127.0.0.1:', 'http://localhost:'))):
+            parser.error('360 Connectome requires a pinned model.json SHA256, loopback URL and positive timeout')
     if args.fcn_sha256:
         if (args.fcn_input_width not in (512, 1024) or len(args.fcn_sha256) != 64 or any(c not in '0123456789abcdef' for c in args.fcn_sha256)
                 or not 0 < args.fcn_height_m < 5 or not math.isfinite(args.fcn_max_age_sec) or args.fcn_max_age_sec <= 0):

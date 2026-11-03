@@ -214,6 +214,10 @@ def test_surround_speed_ceiling_only_changes_forward_scale(stopped):
     fast,_=actor.infer(np.ones((4,270,480),np.uint8))
     assert fast.vx==(0. if stopped else 10.)
     assert fast.yaw_rate==old.yaw_rate and fast.reason==old.reason
+    actor.max_speed_mps=20.
+    accelerated,_=actor.infer(np.ones((4,270,480),np.uint8))
+    assert accelerated.vx==(0. if stopped else 20.)
+    assert accelerated.yaw_rate==old.yaw_rate and accelerated.reason==old.reason
 
 
 @pytest.mark.parametrize('stopped',[False,True])

@@ -1,4 +1,4 @@
-"""Select the front Road policy or the original Sidewalk segmenter per task."""
+"""Select a learned camera Road policy or the original Sidewalk model per task."""
 
 
 class FrontRoadInferenceError(RuntimeError):
@@ -22,7 +22,7 @@ class SurfaceSegmenter:
 
     def segment(self, frame, *, path_mask_class, source_stamp=None, **kwargs):
         if path_mask_class not in (1, 2):
-            raise ValueError('front/sidewalk routing requires explicit mode 1 or 2')
+            raise ValueError('Road/Sidewalk routing requires explicit mode 1 or 2')
         if self.mode is not None and self.mode != path_mask_class:
             self.reset()
         self.mode = path_mask_class

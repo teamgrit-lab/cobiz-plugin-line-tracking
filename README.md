@@ -17,6 +17,11 @@ reports. `--front-connectome-url` selects it for Road mode. The task lifecycle,
 image freshness checks and AprilTag policy govern the final command. It is experimental and
 has not been deployed or validated on a real Jetson/A2 by this change.
 
+The [360-camera Connectome adapter](docs/connectome360.md) runs a paired road
+detector and learned driving policy on Jetson without a browser. Its default is
+the pre-shadow `connectome360-both-20261103-135251-10mps` package. Road uses the
+four projected camera views; Sidewalk keeps its existing camera/model/controller.
+
 The [Dangjin browser simulator](environments/dangjin/README.md) provides a local
 360° camera robot, road detection read from frozen Flyvis neural activity,
 a trained neural readout that directly selects speed, yaw rate and stopping,

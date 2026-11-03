@@ -184,15 +184,27 @@ def policy_training(args, encoder, package, device):
             raise ValueError('Cached synthetic actor data differs from current renderer')
     route=np.asarray(json.loads(Path('environments/dangjin/world.json').read_text())['perimeter_route'])
     xs,ys,parts,origins,ids,packed_masks=[],[],[],[],[],[]
+    illumination_variants=[]
+    shadow_enabled=getattr(args,'shadow_augment',False)
+    shadow_records=[]
+    def add_input(frames,target,partition,origin,sample_id):
+        variants=[('original',frames)]
+        if shadow_enabled:
+            from connectome_shadow import augment_views
+            changed,params=augment_views(frames,seed=args.seed+(51000 if partition=='train' else 61000),key=sample_id)
+            variants.append(('shadow',changed))
+            shadow_records.append(dict(id=sample_id,split=partition,params=params,command_target_unchanged=True))
+        for illumination,images in variants:
+            mask,_=road.predict_views(images)
+            packed_masks.append(np.packbits(mask.reshape(-1)))
+            xs.append(policy_pixels(mask));ys.append(target)
+            parts.append(partition);origins.append(origin)
+            ids.append(sample_id if illumination=='original' else sample_id+'|shadow')
+            illumination_variants.append(illumination)
     for i,row in enumerate(poses):
         frames=[cv2.imread(str(args.synthetic_policy/f'{row["index"]:04d}-{sector}-rgb.png')) for sector in range(4)]
-        mask,_=road.predict_views(frames)
-        packed_masks.append(np.packbits(mask.reshape(-1)))
-        xs.append(policy_pixels(mask))
-        ys.append([*teacher(row,route,max_speed=args.max_speed),0.])
-        parts.append('train' if row['pose_group']%5 else 'development')
-        origins.append('synthetic')
-        ids.append(f'sim-{i:04d}')
+        add_input(frames,[*teacher(row,route,max_speed=args.max_speed),0.],
+                  'train' if row['pose_group']%5 else 'development','synthetic',f'sim-{i:04d}')
         if i%96==0:
             print('Policy synthetic inference',i+1,'/ 768',flush=True)
     frame_map={r['id']:r for r in read_rows(args.data/'frames.jsonl')}
@@ -201,14 +213,10 @@ def policy_training(args, encoder, package, device):
         proposed.extend(r for r in read_rows(file) if r['split'] in ('train','development'))
     selected=take_seconds([dict(frame_map[r['id']],proposal=r) for r in proposed])
     for i,row in enumerate(selected):
-        mask,_=road.predict_views(list(four_views(args.data,row['views_atlas'])))
-        packed_masks.append(np.packbits(mask.reshape(-1)))
-        xs.append(policy_pixels(mask))
         cmd=row['proposal']['estimated_command']
-        ys.append([cmd['vx_mps']/args.max_speed,cmd['yaw_radps']/.35,float(cmd['stop'])])
-        parts.append(row['split'])
-        origins.append('real_estimated')
-        ids.append(row['id'])
+        add_input(list(four_views(args.data,row['views_atlas'])),
+                  [cmd['vx_mps']/args.max_speed,cmd['yaw_radps']/.35,float(cmd['stop'])],
+                  row['split'],'real_estimated',row['id'])
         if i%128==0:
             print('Policy real inference',i+1,'/',len(selected),flush=True)
     x=np.asarray(xs,np.float32)
@@ -217,6 +225,7 @@ def policy_training(args, encoder, package, device):
     del xs,ys,road
     np.savez_compressed(package/'training/policy-inputs.npz',pixels=x,targets=y,ids=np.asarray(ids),
                         partitions=np.asarray(parts),origins=np.asarray(origins),
+                        illumination_variants=np.asarray(illumination_variants),
                         native_masks_packed=packed_masks,native_mask_shape=np.array([4,270,480]),
                         road_sha256=digest(package/'road/road-readout.pt'))
     fit={source:np.array([i for i,p in enumerate(parts) if p=='train' and origins[i]==source])
@@ -323,6 +332,9 @@ def policy_training(args, encoder, package, device):
                   fit_real_estimated=int(len(fit['real_estimated'])),development_real_estimated=int(len(valid['real_estimated'])),
                   real_sampling='first actual frame in each occupied 1-second interval',
                   max_speed_mps=args.max_speed,
+                  shadow_augmentation_enabled=shadow_enabled,
+                  illumination_variants=['original','shadow'] if shadow_enabled else ['original'],
+                  temporal_memory=False,
                   real_targets_preserve_original_mps=True,
                   real_estimated_weight=.2,synthetic_teacher_weight=.8,executed_real_commands=False,
                   real_targets='unreviewed offline FCN/geometry pseudo commands; explicitly enabled by this training run',
@@ -330,6 +342,9 @@ def policy_training(args, encoder, package, device):
                   train_fault_seed_range=[1000,1999],validation_fault_seed_range=[2000,2999],
                   selected_epoch=history[best_epoch-1],history=history,seed=args.seed,wall_sec=time.monotonic()-started)
     write_json(folder/'training.json',training)
+    if shadow_enabled:
+        write_json(package/'training/policy-shadow-augmentation.json',dict(variants=shadow_records,
+                   image_augmentation_before_detector=True,command_targets_unchanged=True))
     write_json(package/'training/policy-splits.json',dict(ids=ids,parts=parts,origins=origins))
     print('POLICY complete',best_epoch,flush=True)
 
@@ -344,14 +359,16 @@ def main():
     p.add_argument('--init-policy',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--allow-estimated-actions',action='store_true')
+    p.add_argument('--shadow-augment',action='store_true',help='Train with coherent 360 shadow/exposure variants before Flyvis feature extraction')
+    p.add_argument('--shadow-feature-cache',type=Path,help='Reuse activities previously extracted from the exact same seeded shadow images')
     p.add_argument('--stage',choices=['all','policy'],default='all')
-    p.add_argument('--max-speed',type=float,default=2.)
+    p.add_argument('--max-speed',type=float,default=2.,help='simulation teacher/actor speed scale; not a robot deployment limit')
     p.add_argument('--road-epochs',type=int,default=48)
     p.add_argument('--policy-epochs',type=int,default=120)
     p.add_argument('--seed',type=int,default=62417)
     a=p.parse_args()
-    if not .1 <= a.max_speed <= 2.:
-        p.error('--max-speed must be between 0.1 and 2.0 m/s')
+    if not .1 <= a.max_speed <= 20.:
+        p.error('--max-speed must be between 0.1 and 20.0 m/s (simulation only)')
     if a.road_epochs<1 or a.policy_epochs<1:
         p.error('Both epoch limits must be positive')
     if not a.allow_estimated_actions:
@@ -371,7 +388,11 @@ def main():
     shutil.copyfile(bundle,a.output/'flyvis_encoder.pt')
     encoder=FlyvisFlow(bundle,expected,'cpu')
     if a.stage=='all':
-        road_training(a,encoder,a.output,device)
+        if a.shadow_augment:
+            from train_connectome360_shadow import road_training_shadow
+            road_training_shadow(a,encoder,a.output,device)
+        else:
+            road_training(a,encoder,a.output,device)
     policy_training(a,encoder,a.output,device)
     write_json(a.output/'model.json',dict(schema='connectome360.camera_only.pair.v1',data=str(a.data),
                road_sha256=digest(a.output/'road/road-readout.pt'),

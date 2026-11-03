@@ -16,13 +16,15 @@ PROTOCOL = 'line_tracking.front_connectome.v1'
 
 
 class FrontService:
+    protocol = PROTOCOL
+
     def __init__(self, model):
         self.model = model; self.stream = None; self.stamp = None
 
     def process(self, request):
         allowed = {'schema', 'stream_id', 'request_id', 'stamp_sec', 'mode', 'image_png'}
-        if set(request) != allowed or request['schema'] != PROTOCOL or type(request['mode']) is not int or request['mode'] != 1:
-            raise ValueError('front camera image and explicit Road mode 1 required; no masks, map or goals')
+        if set(request) != allowed or request['schema'] != self.protocol or type(request['mode']) is not int or request['mode'] != 1:
+            raise ValueError('camera image and explicit Road mode 1 required; no masks, map or goals')
         for key in ['stream_id', 'request_id']:
             if not isinstance(request[key], str) or not 1 <= len(request[key]) <= 160:
                 raise ValueError('invalid request identity')
@@ -37,13 +39,13 @@ class FrontService:
         start = time.perf_counter()
         mask, command, metrics = self.model.infer(frame)
         self.stamp = stamp
-        return {'schema': PROTOCOL, 'stream_id': self.stream, 'request_id': request['request_id'],
+        return {'schema': self.protocol, 'stream_id': self.stream, 'request_id': request['request_id'],
             'stamp_sec': stamp, 'mode': 1, 'model': self.model.details,
             'selected_png': encode_image(mask), 'command': asdict(command),
             'metrics': metrics, 'total_seconds': time.perf_counter() - start}
 
 
-def make_server(service, host, port):
+def make_server(service, host, port, *, endpoint='/v1/front-road'):
     class Handler(BaseHTTPRequestHandler):
         def reply(self, status, data):
             body = json.dumps(data, allow_nan=False).encode()
@@ -56,12 +58,12 @@ def make_server(service, host, port):
 
         def do_GET(self):
             if self.path == '/health':
-                self.reply(200, {'ready': True, 'schema': PROTOCOL, 'model': service.model.details})
+                self.reply(200, {'ready': True, 'schema': service.protocol, 'model': service.model.details})
             else:
                 self.reply(404, {'error': 'unknown endpoint'})
 
         def do_POST(self):
-            if self.path != '/v1/front-road':
+            if self.path != endpoint:
                 self.reply(404, {'error': 'unknown endpoint'}); return
             try:
                 size = int(self.headers.get('Content-Length', '0'))

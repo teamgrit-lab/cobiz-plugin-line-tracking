@@ -116,7 +116,7 @@ class SimulationService:
         self.faults=None;self.fault_origin=0.
         self.policy=policy
         self.max_speed_mps=float(getattr(policy,'max_speed_mps',max_speed_mps))
-        if not .1 <= self.max_speed_mps <= 10.:
+        if not .1 <= self.max_speed_mps <= 20.:
             raise ValueError('simulation maximum speed outside backend limits')
         self.camera_profile=load_profile()
         self.camera_profile_sha256=profile_sha256(self.camera_profile)
@@ -369,12 +369,12 @@ def main():
     p.add_argument('--road-device',choices=['cpu','mps','cuda'],default='mps')
     p.add_argument('--control',choices=['neural','baseline','road-controller'],default='neural')
     p.add_argument('--fcn-model',type=Path,help='fine-tuned FCN360 folder with ONNX and complete.json')
-    p.add_argument('--max-speed',type=float,default=10.,help='simulation maximum m/s (default 10.0, range 0.1 to 10.0)')
+    p.add_argument('--max-speed',type=float,default=10.,help='simulation maximum m/s (default 10.0, range 0.1 to 20.0)')
     p.add_argument('--policy-model',type=Path,default=ROOT/'.cache/dangjin-connectome-policy-vision')
     p.add_argument('--front-model',type=Path,help='trained single-front-camera model package')
     p.add_argument('--training-root',type=Path,help='separate directory for newly rendered training data')
     p.add_argument('--alias-port',type=int);a=p.parse_args()
-    if not .1 <= a.max_speed <= 10.:p.error('--max-speed must be 0.1 to 10.0 m/s')
+    if not .1 <= a.max_speed <= 20.:p.error('--max-speed must be 0.1 to 20.0 m/s')
     if a.fcn_model and (a.front_model or a.control=='baseline' or a.road_model):p.error('select a single Road backend')
     if a.control=='road-controller' and (a.front_model or a.road_backend!='connectome'):
         p.error('road-controller requires a 360-degree Connectome detector')

@@ -27,6 +27,9 @@ set -u
 if [[ "${SWIN_L_MODE:-}" == "fcn360-detector" ]]; then
   exec python3 /workspace/tools/fcn360_detector.py "$@"
 fi
+if [[ "${SWIN_L_MODE:-}" == "connectome360-camera" ]]; then
+  exec python3 /workspace/tools/connectome360_camera.py "$@"
+fi
 
 python3 - <<'PY'
 import sys

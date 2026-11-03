@@ -13,4 +13,5 @@ RUN /opt/connectome-venv/bin/python -m pip install --no-cache-dir \
     && /opt/connectome-venv/bin/python -c "import cv2,torch,json; assert [torch.__file__,torch.__version__,torch.version.cuda]==json.load(open('/tmp/connectome-torch.json')); print('OpenCV',cv2.__version__,'CUDA',torch.version.cuda)"
 ENV MPLBACKEND=Agg MPLCONFIGDIR=/tmp/connectome-matplotlib FLYVIS_ROOT_DIR=/tmp/connectome-flyvis
 COPY tools /workspace/tools
+COPY environments/dangjin/camera360-profile.json /workspace/environments/dangjin/camera360-profile.json
 ENTRYPOINT ["/opt/connectome-venv/bin/python", "/workspace/tools/connectome_server.py"]

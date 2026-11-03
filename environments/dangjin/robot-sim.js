@@ -99,7 +99,7 @@ export class RobotSimulation {
       if(!fcn&&value.camera_transport!=='atlas-v2-profiled')throw Error('카메라 입력이 변경되었습니다. 서버를 다시 시작하세요.');
       if(value.perception.views!==1&&value.camera_profile_sha256!==this.cameraProfileHash)throw Error('브라우저와 서버의 카메라 프로필이 다릅니다.');
       this.maxSpeed=value.max_speed_mps??10.;
-      if(!Number.isFinite(this.maxSpeed)||this.maxSpeed<.1||this.maxSpeed>10.)throw Error('서버 속도 상한이 잘못되었습니다.');
+      if(!Number.isFinite(this.maxSpeed)||this.maxSpeed<.1||this.maxSpeed>20.)throw Error('서버 속도 상한이 잘못되었습니다.');
       this.health=value;this.isFcn=fcn;this.roadController=roadController;this.frontOnly=value.perception.views===1;this.fixedCamera=!!value.policy;
       this.fcnWidth=format?.width;this.fcnHeight=format?.height;
       $('sim-max-speed').textContent=this.maxSpeed.toFixed(1);
@@ -262,7 +262,9 @@ export class RobotSimulation {
   async plan(now){
     this.busy=true;const generation=this.generation,pose={...this.pose},stamp=this.stamp,id=`${this.session}:${generation}:${++this.sequence}`;
     // Sample the 1.7 Hz walking motion at 10 Hz; a 0.5 s step aliases the camera swing.
-    const dt=this.cameraSway.config.enabled ? .1 : DT,substeps=Math.round(dt/.05);
+    // Keep each observation within Patrol's 1.5 m pose-jump bound even at
+    // accelerated simulation speeds; retain <= 0.05 s swept collision steps.
+    const dt=Math.min(this.cameraSway.config.enabled ? .1 : DT,1.25/this.maxSpeed),substeps=Math.ceil(dt/.05);
     const started=performance.now();
     try{
       const preview=!$('robot-panel-body').hidden&&started-this.lastPreview>=PREVIEW_INTERVAL_MS;

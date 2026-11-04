@@ -8,9 +8,12 @@ RUN /opt/venv/bin/python -m venv --system-site-packages /opt/connectome-venv \
     && /opt/venv/bin/python -c "import importlib.metadata as m; open('/tmp/connectome-constraints.txt','w').write('\n'.join(k+'=='+m.version(k) for k in ['torch','torchvision','numpy']))" \
     && /opt/venv/bin/python -c "import torch,json; json.dump([torch.__file__,torch.__version__,torch.version.cuda],open('/tmp/connectome-torch.json','w'))"
 COPY requirements-connectome.txt /tmp/requirements-connectome.txt
-RUN /opt/connectome-venv/bin/python -m pip install --no-cache-dir \
+# The parent image can export Jetson wheel indexes or PIP_CONSTRAINT settings.
+# Only this layer's explicit CUDA-stack constraints apply to Flyvis dependencies.
+RUN PIP_CONFIG_FILE=/dev/null /opt/connectome-venv/bin/python -m pip --isolated install --no-cache-dir \
+        --index-url https://pypi.org/simple \
         -c /tmp/connectome-constraints.txt -r /tmp/requirements-connectome.txt \
-    && /opt/connectome-venv/bin/python -c "import cv2,torch,json; assert [torch.__file__,torch.__version__,torch.version.cuda]==json.load(open('/tmp/connectome-torch.json')); print('OpenCV',cv2.__version__,'CUDA',torch.version.cuda)"
+    && MPLBACKEND=Agg /opt/connectome-venv/bin/python -c "import cv2,torch,json,flyvis,hydra,omegaconf; assert [torch.__file__,torch.__version__,torch.version.cuda]==json.load(open('/tmp/connectome-torch.json')); print('Flyvis',flyvis.__version__,'Hydra',hydra.__version__,'OmegaConf',omegaconf.__version__,'OpenCV',cv2.__version__,'CUDA',torch.version.cuda)"
 ENV MPLBACKEND=Agg MPLCONFIGDIR=/tmp/connectome-matplotlib FLYVIS_ROOT_DIR=/tmp/connectome-flyvis
 COPY tools /workspace/tools
 COPY environments/dangjin/camera360-profile.json /workspace/environments/dangjin/camera360-profile.json

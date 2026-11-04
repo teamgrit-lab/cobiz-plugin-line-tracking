@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+# The camera-owned FCN service does not consume ROS or the Sidewalk backend.
+if [[ "${SWIN_L_MODE:-}" == "fcn360-detector" && " $* " == *" --direct-camera "* ]]; then
+  exec python3 /workspace/tools/fcn360_detector.py "$@"
+fi
+
 # Reject an incompatible R50 backend before ROS setup or Swin-L engine builds.
 if [[ ( "${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}" == "r50-fp16-640x360" \
   || "${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}" == "r50-finetuned-fp16-640x360" ) \

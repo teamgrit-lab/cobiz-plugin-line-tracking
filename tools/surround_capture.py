@@ -1,6 +1,7 @@
 """Timestamped latest-frame capture shared by stitched 360 camera consumers."""
 import cv2
 import numpy as np
+import time
 
 
 class Camera:
@@ -20,7 +21,7 @@ class Camera:
             self.close()
             raise RuntimeError(f"Cannot open 2880x1440 MJPEG capture on {device}")
 
-    def read(self, clock):
+    def read(self, clock=None):
         gst = self.gst
         sample = self.sink.emit("try-pull-sample", 200 * gst.MSECOND)
         if sample is None:
@@ -36,8 +37,13 @@ class Camera:
         age = running - pts
         if not 0 <= age <= gst.SECOND:
             return None
-        from rclpy.duration import Duration
-        stamp = (clock.now() - Duration(nanoseconds=int(age))).to_msg()
+        # Direct-camera inference does not need ROS. Preserve the original
+        # capture time, rather than stamping a completed inference as new input.
+        if clock is None:
+            stamp = time.time_ns() - int(age)
+        else:
+            from rclpy.duration import Duration
+            stamp = (clock.now() - Duration(nanoseconds=int(age))).to_msg()
         encoded = np.frombuffer(buffer.extract_dup(0, buffer.get_size()), np.uint8)
         image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         if image is None:

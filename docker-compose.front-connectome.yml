@@ -7,13 +7,18 @@ services:
       args:
         CONNECTOME_BASE_IMAGE: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
     image: cobiz-plugin-line-tracking-connectome
-    entrypoint: ["/opt/connectome-venv/bin/python", "/workspace/tools/front_connectome_service.py"]
-    command: ["--model", "/front-model", "--device", "cuda", "--port", "8092"]
+    entrypoint: ["/entrypoint-connectome-camera.sh", "/workspace/tools/front_connectome_service.py"]
+    command: ["--model", "/front-model", "--device", "cuda", "--port", "8092",
+              "--camera-topic", "${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/image_raw}"]
     network_mode: host
     runtime: nvidia
     volumes:
       - ${CONNECTUM_FRONT_MODEL_DIR:?set the copied front model package directory}:/front-model:ro
+      - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
     environment:
+      CONNECTUM_FRONT_CAMERA_TOPIC: ${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/image_raw}
+      ROS_DISTRO: ${ROS_DISTRO:-humble}
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       OMP_NUM_THREADS: "2"
       OPENBLAS_NUM_THREADS: "2"
     healthcheck:
@@ -36,7 +41,8 @@ services:
       SWIN_L_PATH_MASK_CLASS: "1"
       SWIN_L_INFERENCE_PROCESS: "false"
       LINE_TRACKING_PATH_PLANNER: local
-      LINE_TRACKING_FRONT_CONNECTOME_URL: http://127.0.0.1:8092/v1/front-road
+      LINE_TRACKING_ROAD_DIRECT_INPUT: "true"
+      LINE_TRACKING_FRONT_CONNECTOME_URL: http://127.0.0.1:8092/v1/direct-road
       LINE_TRACKING_FRONT_CONNECTOME_SHA256: ${CONNECTUM_FRONT_SHA256:?set front_model.pt SHA-256}
       LINE_TRACKING_FRONT_CONNECTOME_TIMEOUT_SEC: ${LINE_TRACKING_FRONT_CONNECTOME_TIMEOUT_SEC:-1.0}
       LINE_TRACKING_CONNECTOME_MAX_AGE_SEC: ${LINE_TRACKING_CONNECTOME_MAX_AGE_SEC:-1.0}

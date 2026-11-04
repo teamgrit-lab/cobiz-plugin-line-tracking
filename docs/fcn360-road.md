@@ -2,6 +2,11 @@
 
 기본 검출기는 당진에서 파인튜닝한 **FCN-ResNet18 1024×512**다. CoBiz `LINE_TRACKING`의 `selected_mask=1`은 Insta 카메라와 FCN을, `selected_mask=2`는 기존 전면 카메라·인도 모델·제어기를 사용한다. 아래 명령은 Jetson의 `/home/teamgrit/dev/dangjin-a2/cobiz-plugin-line-tracking/`에서 Compose를 실행하는 기준이다.
 
+현재 Compose는 `fcn360-road`가 USB 카메라를 직접 읽고 TensorRT로 검출한 작은
+분류 격자만 로컬 HTTP `127.0.0.1:8094/v1/direct-road`로 반환한다.
+`actual-activate`가 기존 FCN 경로·명령을 계산한다. 영상과 마스크의 ROS 중계는
+사용하지 않는다. [공통 직접 입력 안내](direct-camera.md)를 참고한다.
+
 ## Mac에서 브라우저 실행
 
 ```bash
@@ -86,7 +91,7 @@ docker compose logs --tail=100 fcn360-road
 
 - 같은 ROS 도메인·DDS 설정의 ROS 2 뷰어에서 `/line_tracking/fcn360/overlay/compressed`를 `CompressedImage`, best-effort QoS로 구독한다. 앞·좌·후·우 순서의 2×2 미리보기이며 초록은 차도, 분홍은 고정 로봇 영역이다. 표시만 512×256 패널로 축소하고 추론·경로 계산은 원래 해상도를 유지한다.
 - Road 작업에서 `/line_tracking/swin_l/metrics`의 `inference_backend`는 `fcn1024-360`이다. `fcn360.front_path_valid`, `maneuver`, `observed_horizon_m`, `speed_fraction`을 확인한다. Sidewalk 작업의 backend는 `legacy`이며 기존 전면 카메라와 인도 제어기를 사용한다.
-- 모델 해시가 포함된 `/line_tracking/fcn360/masks/model_<SHA>`에는 네 방향의 원래 `4×16×32` 클래스 격자가 전송된다. ROS `Image`는 `mono8`, `height=64`, `width=32`, `step=32`, 데이터 2,048바이트다. 0은 미관측, 1은 고정 로봇, 3은 차도다.
+- 직접 입력 HTTP 응답의 `classes`에는 네 방향의 원래 `4×16×32` 클래스 격자와 원본 촬영 시각이 포함된다. 격자를 축소하지 않는다. 0은 미관측, 1은 고정 로봇, 3은 차도다. ROS 마스크·미리보기 토픽은 기존 검사 CLI를 `--direct-camera` 없이 실행할 때만 제공한다.
 - 전방 고정 팔 영역은 0 기준 14~17열·10~15행, 1 기준 15~18열·11~16행이다. 512 기준 2열×3행과 같은 화면 비율의 4열×6행이며 경로 계산에서는 미관측으로 제외한다. 그 밖의 로봇 예측도 미관측으로 처리한다.
 - 전방과 연결된 노면과 좌우 차도를 기준으로 경로를 선택한다. 작은 중앙 보정은 확인 대기 없이 적용한다. 새 큰 회전은 방향 기울기 0.40(약 22°)에서 확인을 시작하고 0.25(약 14°)까지 유지하는 히스테리시스로 직진·회전 왕복을 줄인다. 새 회전은 마스크 세 장에서 연속 확인한다.
 - 회전 확인 중에는 이전 진행 방향을 현재 마스크의 연결·폭 조건으로 재검증하고, 통과하는 구간만 현재 카메라 좌표에서 다시 생성해 감속 주행한다. 이전 좌표·검출 마스크를 그대로 재사용하지 않는다. 유지할 통로가 없으면 아래의 측면 회전 재탐색을 시도한다. 전체 검출 누락에서는 정지하고 방향 확인을 초기화한다. 0.65 m 여유 폭과 최소 3.2 m 관측 길이는 유지한다.

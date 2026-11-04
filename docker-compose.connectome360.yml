@@ -8,9 +8,11 @@ services:
         CONNECTOME_BASE_IMAGE: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
     image: cobiz-plugin-line-tracking-connectome360
     entrypoint: ["/opt/connectome-venv/bin/python", "/workspace/tools/connectome360_service.py"]
-    command: ["--model", "/360-model", "--device", "cuda", "--port", "8093"]
+    command: ["--model", "/360-model", "--device", "cuda", "--port", "8093", "--direct-camera"]
     network_mode: host
     runtime: nvidia
+    devices:
+      - ${CONNECTUM_360_VIDEO_DEVICE:-/dev/video91}:/dev/video91
     volumes:
       - ${CONNECTUM_360_MODEL_DIR:-./models/connectome360-both-20261103-135251-10mps}:/360-model:ro
     environment:
@@ -25,37 +27,20 @@ services:
       retries: 3
     restart: unless-stopped
 
-  connectome360-camera:
-    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
-    pull_policy: never
-    network_mode: host
-    ipc: host
-    devices:
-      - ${CONNECTUM_360_VIDEO_DEVICE:-/dev/video91}:/dev/video91
-    volumes:
-      - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
-    environment:
-      SWIN_L_MODE: connectome360-camera
-      ROS_DISTRO: ${ROS_DISTRO:-humble}
-      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
-      OMP_NUM_THREADS: "2"
-    restart: unless-stopped
-
   actual-activate:
     depends_on:
       connectome360:
-        condition: service_started
-      connectome360-camera:
         condition: service_started
     environment:
       SWIN_L_MODE: task-drive
       SWIN_L_PATH_MASK_CLASS: "1"
       SWIN_L_INFERENCE_PROCESS: "false"
       LINE_TRACKING_PATH_PLANNER: local
+      LINE_TRACKING_ROAD_DIRECT_INPUT: "true"
       # Explicitly clear mutually exclusive Road backends from older setups.
       LINE_TRACKING_FRONT_CONNECTOME_URL: ""
       LINE_TRACKING_FCN_SHA256: ""
-      LINE_TRACKING_CONNECTOME360_URL: http://127.0.0.1:8093/v1/360-road
+      LINE_TRACKING_CONNECTOME360_URL: http://127.0.0.1:8093/v1/direct-road
       LINE_TRACKING_CONNECTOME360_SHA256: ${CONNECTUM_360_MODEL_SHA256:-1dd52c0e04834aaaf21f863201b1208ecb3725eb7ea49b84d1b7ee27f5d2b4e0}
       LINE_TRACKING_CONNECTOME360_TIMEOUT_SEC: ${LINE_TRACKING_CONNECTOME360_TIMEOUT_SEC:-2.0}
       LINE_TRACKING_CONNECTOME_MAX_AGE_SEC: ${LINE_TRACKING_CONNECTOME_MAX_AGE_SEC:-1.5}

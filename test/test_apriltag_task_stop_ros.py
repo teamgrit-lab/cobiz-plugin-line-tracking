@@ -75,6 +75,7 @@ class RosHarness:
         self.published = {}
         self.events = []
         self.subscriptions = {}
+        self.subscription_handles = {}
         self.subscription_types = {}
         self.subscription_qos = {}
         self.errors = []
@@ -94,7 +95,15 @@ class RosHarness:
                 harness.subscriptions[topic] = callback
                 harness.subscription_types[topic] = message_type
                 harness.subscription_qos[topic] = qos
-                return object()
+                handle = object()
+                harness.subscription_handles[handle] = (topic, callback)
+                return handle
+
+            def destroy_subscription(self, handle):
+                topic, callback = harness.subscription_handles.pop(handle)
+                if harness.subscriptions.get(topic) is callback:
+                    harness.subscriptions.pop(topic)
+                return True
 
             def create_publisher(self, _message_type, topic, _qos):
                 messages = harness.published.setdefault(topic, [])

@@ -8,18 +8,20 @@
 
 ```text
 /dev/video91 (2880×1440, stitched ERP MJPEG)
- → connectome360-camera: 상대방위 90°를 전방으로 투영
- → 전방·좌측·후방·우측 480×270 영상 → 960×540 무손실 묶음
- → /line_tracking/connectome360/views (sensor_msgs/Image, 촬영 시각 포함)
- → actual-activate의 Road 작업 → 로컬 HTTP connectome360
+ → connectome360 안에서 직접 수집·상대방위 90°를 전방으로 투영
+ → 전방·좌측·후방·우측 480×270 배열을 메모리에서 직접 추론
  → 고정 Flyvis → 차도 검출 헤드 → 주행·정지 헤드
+ → 로컬 HTTP로 명령·촬영 시각만 actual-activate에 반환
  → 실제 속도·회전 상한 적용 → 기존 Unitree Sport Move 발행
 ```
 
 Road(`selected_mask=1`)에서만 360도 영상과 학습한 명령을 사용한다. Sidewalk(`2`)는
 기존 `SWIN_L_IMAGE_TOPIC`, `SWIN_L_PROFILE` 검출기·제어기를 사용한다. 생략한 작업은
 Road가 기본이며 혼합 모드 `0`은 거부한다. 지도·목표점·LiDAR·odom·브라우저 서버는
-360도 모델 추론에 넣지 않는다. 360도 카메라는 해당 영상 토픽에 구독자가 있을 때만 연다.
+360도 모델 추론에 넣지 않는다. 컨테이너는 `connectome360`, `actual-activate` 두 개다.
+Road 요청 때 카메라를 열고, 요청이 끊긴 후 유휴 1.5초가 지나면 해제한다.
+영상이 1.5초 없다고 강제 종료하는 설정이 아니다. 프로그램은 유지하며 다음 요청에서 다시 연다.
+영상의 ROS·PNG·HTTP 재전송은 없다. [직접 입력 구조와 전환 방법](direct-camera.md)을 참고한다.
 
 두 모델의 Road 입력·학습 방식은 그대로다. 정답이나 미리 정한 경로로 검출 결과를
 보완하지 않고, 실기에 합성 그림자·보행 흔들림·랜덤 검출 누락을 주입하지 않는다.
@@ -91,13 +93,15 @@ curl --fail http://127.0.0.1:8093/health
 
 ```bash
 docker compose up -d --force-recreate actual-activate
-docker compose logs --tail=100 connectome360 connectome360-camera actual-activate
+docker compose logs --tail=100 connectome360 actual-activate
 ```
 
 이 명령은 의존 서비스도 시작한다. Cobiz의 `LINE_TRACKING` 작업에
 `selected_mask=1`을 주면 Road, `2`를 주면 Sidewalk다. 실제 로봇 실행은 이 작업을
 수락한 동안에만 이뤄진다. `/line_tracking/swin_l/metrics`의 `inference_backend`가
 Road에서 `connectome360`, Sidewalk에서 `legacy`인지 확인할 수 있다.
+Road의 `camera_transport`는 `direct`, `camera_topic`은 `null`이다.
+처음 전환할 때는 기존 `connectome360-camera` 컨테이너를 종료·제거해야 한다.
 
 ## 명령 척도와 오류 처리
 

@@ -1,4 +1,4 @@
-"""Jetson FCN-ResNet18 perception publisher. This process has no motion publisher."""
+"""Jetson FCN direct-camera inference or diagnostic publisher. No motion publisher."""
 import argparse
 import hashlib
 import os
@@ -92,20 +92,33 @@ def overlay(views, masks):
 
 
 def main():
-    import rclpy
-    from rclpy.qos import qos_profile_sensor_data
-    from sensor_msgs.msg import CompressedImage, Image
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="/dev/video91")
     parser.add_argument("--model", type=Path, default=Path("/fcn-model/fcn_resnet18.onnx"))
     parser.add_argument("--cache", type=Path, default=Path("/fcn-engine-cache"))
+    parser.add_argument('--direct-camera', action='store_true')
+    parser.add_argument('--port', type=int, default=8094)
     parser.add_argument("--input-width", type=int, choices=(512, 1024),
                         default=int(os.environ.get("LINE_TRACKING_FCN_INPUT_WIDTH", DEFAULT_INPUT_WIDTH)))
     args = parser.parse_args()
     sha = os.environ["LINE_TRACKING_FCN_SHA256"]
     infer = TrtFcn(args.model, sha, args.cache, args.input_width)
     print(f"FCN {args.input_width}x{args.input_width//2} · native {args.input_width//32}x{args.input_width//64} grid · {sha}", flush=True)
+    if args.direct_camera:
+        from types import SimpleNamespace
+        from direct_camera_service import DirectCameraService, UsbSource, serve
+        # No image publishers or ROS initialization in direct-camera mode.
+        model = SimpleNamespace(reset=lambda: None, details=dict(
+            backend=f'fcn{args.input_width}-360', weights_sha256=sha,
+            input_width=args.input_width, class_grid_shape=[4, args.input_width//64, args.input_width//32]))
+        def predict(panorama):
+            masks, _ = classify_panorama(panorama, infer, args.input_width)
+            return dict(classes=masks.tolist())
+        serve(DirectCameraService(model, UsbSource(args.device), predict), args.port)
+        return
+    import rclpy
+    from rclpy.qos import qos_profile_sensor_data
+    from sensor_msgs.msg import CompressedImage, Image
     rclpy.init()
     node = rclpy.create_node("fcn360_road_detector")
     masks_pub = node.create_publisher(Image, mask_topic(sha), qos_profile_sensor_data)

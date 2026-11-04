@@ -88,6 +88,9 @@ class Connectome360Runtime:
         self.encoder.reset()
 
     def infer(self, atlas):
-        masks, metrics = self.road.predict_views(unpack_views(atlas))
+        return self.infer_views(unpack_views(atlas))
+
+    def infer_views(self, views):
+        masks, metrics = self.road.predict_views(views)
         command, policy = self.policy.infer(masks)
         return masks[0], command, dict(perception=metrics, policy=policy)

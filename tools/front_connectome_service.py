@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Front-image-only model service. Never publishes robot commands."""
+"""Front model with direct A2-topic input or image replay. No robot command publisher."""
 import argparse
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -87,10 +87,16 @@ if __name__ == '__main__':
     p.add_argument('--model', required=True); p.add_argument('--port', type=int, default=8092)
     p.add_argument('--device', choices=['cpu', 'cuda'], default='cuda')
     p.add_argument('--head-device', choices=['cpu', 'mps', 'cuda'])
+    p.add_argument('--camera-topic', help='Read the A2 camera directly in this service; no image HTTP requests')
     args = p.parse_args()
     from front_connectome import FrontConnectome
     model = FrontConnectome(args.model, encoder_device=args.device, head_device=args.head_device or args.device)
     # Compile/allocate before advertising readiness, not on the first live frame.
     model.infer(np.zeros((270, 480, 3), np.uint8)); model.reset()
     print(json.dumps({'ready': True, 'model': model.details}), flush=True)
+    if args.camera_topic:
+        from direct_camera_service import DirectCameraService, RosSource, learned_output, serve
+        serve(DirectCameraService(model, RosSource(args.camera_topic),
+                                  lambda frame: learned_output(model, frame)), args.port)
+        raise SystemExit(0)
     make_server(FrontService(model), '127.0.0.1', args.port).serve_forever()

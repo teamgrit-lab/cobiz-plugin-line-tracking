@@ -1,5 +1,9 @@
 # cobiz-plugin-line-tracking
 
+Sidewalk tasks can optionally carry `start_tag_id` and `end_tag_id` in the COBIZ
+payload to align parallel to the start tag, follow a fixed straight line, and stop
+at the end tag. See [tag-to-tag setup and payload](docs/tag-straight.md).
+
 For waypoint-controlled execution from `teamgrit-navigation`, use the new
 [`navigation-worker` integration](docs/navigation.md). It reuses this engine and
 publishes leased internal commands for Navigation segments. The same worker also accepts

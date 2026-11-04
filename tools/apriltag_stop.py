@@ -276,6 +276,13 @@ def tag_range_m(
         solved, _rvec, tvec = cv2.solvePnP(
             square, normalized, np.eye(3), None, flags=cv2.SOLVEPNP_IPPE_SQUARE
         )
+        if not solved or not np.isfinite(tvec).all() or float(tvec[2][0]) <= 0.0:
+            # Some OpenCV versions return a non-finite IPPE solution for a
+            # frontal square offset from the optical axis. Keep valid IPPE
+            # estimates; retry the planar iterative solve only for that failure.
+            solved, _rvec, tvec = cv2.solvePnP(
+                square, normalized, np.eye(3), None, flags=cv2.SOLVEPNP_ITERATIVE
+            )
     except cv2.error:
         return None
     if not solved or float(tvec[2][0]) <= 0.0:

@@ -9,6 +9,8 @@ import math
 import re
 from typing import Any, Mapping
 
+from tag_straight import TagRouteSpec, parse_tag_route
+
 
 ACTION_NAME = "LINE_TRACKING"
 TRACKING_REASONS = frozenset(("tracking", "tracking_slow_turn", "tracking_path_hold",
@@ -83,6 +85,7 @@ class ActiveTask:
     started_at: float
     duration_sec: float
     selected_mask: int
+    tag_route: TagRouteSpec | None = None
 
 
 def _task_id(event: Mapping[str, Any]) -> tuple[str | int, str] | None:
@@ -113,6 +116,11 @@ def requested_selected_mask(event: Mapping[str, Any], default: int) -> int:
     """Return the requested drivable class, falling back to the configured default."""
 
     return _selected_mask(_payload(event), default)
+
+
+def requested_tag_route(event: Mapping[str, Any], default: int):
+    payload = _payload(event)
+    return parse_tag_route(payload, _selected_mask(payload, default))
 
 
 def _selected_mask(payload: Mapping[str, Any], default: int) -> int:
@@ -234,12 +242,13 @@ class LineTrackingTasks:
             payload = _payload(event)
             selected_mask = _selected_mask(payload, self.policy.default_selected_mask)
             duration = _duration(payload, self.policy)
+            tag_route = parse_tag_route(payload, selected_mask)
         except ValueError as error:
             return self._state(candidate, "TASK_REJECTED", str(error))
         if rejection_reason is not None:
             return self._state(candidate, "TASK_REJECTED", rejection_reason)
         self.active = ActiveTask(
-            raw_id, key, device_id, device_name, now, duration, selected_mask
+            raw_id, key, device_id, device_name, now, duration, selected_mask, tag_route
         )
         self.tracking_seen = False
         self.unsafe_since = None

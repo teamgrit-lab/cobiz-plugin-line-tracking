@@ -16,14 +16,15 @@ MAX_BODY = 128 * 1024
 
 
 class UsbSource:
-    def __init__(self, device):
+    def __init__(self, device, *, camera_factory=None):
         self.device = device
+        self.camera_factory = camera_factory
         self.camera = None
 
     def read(self):
         from surround_capture import Camera
         if self.camera is None:
-            self.camera = Camera(self.device)
+            self.camera = (self.camera_factory or Camera)(self.device)
         return self.camera.read()
 
     def close(self):

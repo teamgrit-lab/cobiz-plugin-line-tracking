@@ -69,6 +69,31 @@ class CircuitFeatures:
         grid=(channels[:,:,self.indices]*self.weights[None,None]).sum(axis=-1)
         return grid.reshape(len(frames),34,self.height,self.width)
 
+    @torch.inference_mode()
+    def tensor(self, frames):
+        """CUDA camera pixels -> CUDA circuit features, with no NumPy roundtrip."""
+        from surround_tensor import eye_canvases
+        e = self.encoder
+        if frames.device != e.device:
+            # CUDA's unindexed device and cuda:0 denote the same model device.
+            frames = frames.to(e.device)
+        receptors = e.eye(eye_canvases(frames, e.size))
+        D = type(e.grey)
+        baseline = e.network._state_api(D(nodes=D(activity=e.grey.nodes.activity.expand(len(frames), -1).clone()), edges=D()))
+        e.network.stimulus.zero(len(frames), self.steps)
+        e.network.stimulus.add_input(receptors.expand(-1, self.steps, -1, -1))
+        states = e.network(e.network.stimulus(), dt=self.dt, state=baseline, as_states=True)
+        activity = states[-1].nodes.activity[:, None, :]
+        e.decoder.dvs_channels.update(activity)
+        channels = F.relu(e.decoder.dvs_channels.output[:, 0])
+        if channels.shape[1:] != (34, 721) or not torch.isfinite(channels).all():
+            raise ValueError('invalid connectome output activity')
+        if not hasattr(self, '_tensor_indices'):
+            self._tensor_indices = torch.as_tensor(self.indices, device=channels.device)
+            self._tensor_weights = torch.as_tensor(self.weights, device=channels.device)
+        grid = (channels[:, :, self._tensor_indices] * self._tensor_weights[None, None]).sum(-1)
+        return grid.reshape(len(frames), 34, self.height, self.width)
+
 
 def block(in_channels,out_channels):
     return nn.Sequential(nn.Conv2d(in_channels,out_channels,3,padding=1),nn.GroupNorm(8,out_channels),nn.SiLU(),
@@ -122,6 +147,26 @@ class ConnectomeRoadPerception:
                  'view_road_fractions':[float(m.mean()) for m in masks],
                  'mean_road_probability':float(probability[0][masks[0]!=0].mean()) if masks[0].any() else 0.}
         return masks,metrics
+
+    @torch.inference_mode()
+    def predict_views_tensor(self, frames):
+        if len(frames) != 4:
+            raise ValueError('all four 360-camera views required')
+        start = time.perf_counter()
+        features = self.features.tensor(frames).to(self.device)
+        circuit_end = time.perf_counter()
+        probability = F.interpolate(self.model(features), size=(270, 480), mode='bilinear',
+                                    align_corners=False).sigmoid()[:, 0]
+        if not torch.isfinite(probability).all():
+            raise ValueError('invalid road probabilities')
+        masks = probability >= self.threshold
+        fractions = masks.float().mean((1, 2))
+        mean = (probability[0]*masks[0]).sum() / masks[0].sum().clamp_min(1)
+        values = torch.cat((fractions, mean[None])).tolist()
+        return masks, dict(ms=(time.perf_counter()-start)*1000,
+                           circuit_ms=(circuit_end-start)*1000,
+                           road_fraction=values[0], views=4,
+                           view_road_fractions=values[:4], mean_road_probability=values[4])
 
     def infer_views(self,frames):
         masks,metrics=self.predict_views(frames)

@@ -25,7 +25,9 @@ RUN apt-get update \
         python3-colcon-common-extensions \
         python3-numpy \
         python3-opencv \
-        python3-gi gir1.2-gstreamer-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+        python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+        gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+        nvidia-l4t-gstreamer \
         python3-libnvinfer \
         ros-humble-apriltag-ros \
         ros-humble-cv-bridge \

@@ -8,8 +8,8 @@
 
 ```text
 /dev/video91 (2880×1440, stitched ERP MJPEG)
- → connectome360 안에서 직접 수집·상대방위 90°를 전방으로 투영
- → 전방·좌측·후방·우측 480×270 배열을 메모리에서 직접 추론
+ → Jetson 하드웨어 MJPEG 디코딩·VIC BGRx 변환·CUDA 업로드
+ → GPU에서 상대방위 90°를 전방으로 네 방향 480×270 투영·정규화
  → 고정 Flyvis → 차도 검출 헤드 → 주행·정지 헤드
  → 로컬 HTTP로 명령·촬영 시각만 actual-activate에 반환
  → 실제 속도·회전 상한 적용 → 기존 Unitree Sport Move 발행
@@ -55,7 +55,7 @@ CONNECTUM_360_MODEL_SHA256=1dd52c0e04834aaaf21f863201b1208ecb3725eb7ea49b84d1b7e
 CONNECTUM_360_VIDEO_DEVICE=/dev/video91
 LINE_TRACKING_CONNECTOME360_TIMEOUT_SEC=2.0
 LINE_TRACKING_CONNECTOME_MAX_AGE_SEC=1.5
-LINE_TRACKING_MAX_FORWARD_MPS=0.50
+LINE_TRACKING_MAX_FORWARD_MPS=0.80
 ```
 
 `CONNECTUM_360_MODEL_SHA256`는 **model.json 자체**의 SHA-256이다. 시작할 때 이 파일의

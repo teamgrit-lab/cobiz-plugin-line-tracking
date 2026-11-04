@@ -70,9 +70,34 @@ class TrtFcn:
         if image.shape != tuple(self.input.shape) or image.dtype != np.float32:
             raise ValueError("FCN input does not match the configured engine")
         self.input.copy_(self.torch.from_numpy(image))
+        return self._execute().cpu().numpy()
+
+    def infer_tensor(self, image):
+        if (tuple(image.shape) != tuple(self.input.shape) or image.dtype != self.torch.float32
+                or image.device != self.input.device):
+            raise ValueError('FCN requires normalized CUDA NCHW input on the engine device')
+        self.input.copy_(image)
+        return self._execute()
+
+    def _execute(self):
         if not self.context.execute_async_v3(self.torch.cuda.current_stream().cuda_stream):
             raise RuntimeError("TensorRT FCN inference failed")
-        return self.output.cpu().numpy()
+        return self.output
+
+
+def classify_cuda(panorama, projector, infer):
+    """Only compact native class grids leave the GPU; no full-frame download."""
+    import torch
+    from fcn360_road import apply_front_robot_prior
+    with torch.inference_mode():
+        inputs = projector.fcn_input(panorama)
+        classes = []
+        for view in inputs:
+            logits = infer.infer_tensor(view[None])
+            if not torch.isfinite(logits).all():
+                raise ValueError('Invalid FCN scores')
+            classes.append((1 + logits[0, 1:].argmax(0)).to(torch.uint8))
+        return apply_front_robot_prior(torch.stack(classes).cpu().numpy())
 
 
 def overlay(views, masks):
@@ -101,8 +126,18 @@ def main():
     parser.add_argument("--input-width", type=int, choices=(512, 1024),
                         default=int(os.environ.get("LINE_TRACKING_FCN_INPUT_WIDTH", DEFAULT_INPUT_WIDTH)))
     args = parser.parse_args()
+    if args.direct_camera:
+        from surround_capture import HardwareCamera
+        from surround_tensor import SurroundTensorProjector
+        HardwareCamera.check_runtime()
+        projector = SurroundTensorProjector('fcn', input_width=args.input_width)
     sha = os.environ["LINE_TRACKING_FCN_SHA256"]
     infer = TrtFcn(args.model, sha, args.cache, args.input_width)
+    if args.direct_camera:
+        import torch
+        # Allocate/initialize CUDA preprocessing and TensorRT before health is
+        # advertised, without opening the camera or emitting robot commands.
+        classify_cuda(torch.full((1440, 2880, 4), 127, dtype=torch.uint8, device='cuda'), projector, infer)
     print(f"FCN {args.input_width}x{args.input_width//2} · native {args.input_width//32}x{args.input_width//64} grid · {sha}", flush=True)
     if args.direct_camera:
         from types import SimpleNamespace
@@ -110,11 +145,13 @@ def main():
         # No image publishers or ROS initialization in direct-camera mode.
         model = SimpleNamespace(reset=lambda: None, details=dict(
             backend=f'fcn{args.input_width}-360', weights_sha256=sha,
-            input_width=args.input_width, class_grid_shape=[4, args.input_width//64, args.input_width//32]))
+            input_width=args.input_width, class_grid_shape=[4, args.input_width//64, args.input_width//32],
+            camera_decode='nvv4l2decoder-mjpeg', camera_conversion='VIC-BGRx',
+            camera_preprocess='cuda', camera_memory='host-staging-to-cuda'))
         def predict(panorama):
-            masks, _ = classify_panorama(panorama, infer, args.input_width)
+            masks = classify_cuda(panorama, projector, infer)
             return dict(classes=masks.tolist())
-        serve(DirectCameraService(model, UsbSource(args.device), predict), args.port)
+        serve(DirectCameraService(model, UsbSource(args.device, camera_factory=HardwareCamera), predict), args.port)
         return
     import rclpy
     from rclpy.qos import qos_profile_sensor_data

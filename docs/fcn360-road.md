@@ -7,6 +7,11 @@
 `actual-activate`가 기존 FCN 경로·명령을 계산한다. 영상과 마스크의 ROS 중계는
 사용하지 않는다. [공통 직접 입력 안내](direct-camera.md)를 참고한다.
 
+Compose의 직접 입력은 Jetson 하드웨어 MJPEG 디코딩과 VIC BGRx 변환 후,
+시스템 메모리 staging을 통해 CUDA로 올린다. 네 방향 투영·RGB 정규화·TensorRT
+추론은 GPU에서 수행하며 원래 분류 격자만 CPU에 반환한다. zero-copy 구현은 아니며
+지원 플러그인/CUDA가 없으면 오류로 알린다. 전면 카메라·Sidewalk 경로는 유지한다.
+
 ## Mac에서 브라우저 실행
 
 ```bash

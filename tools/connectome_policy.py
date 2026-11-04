@@ -66,8 +66,25 @@ class ConnectomeDrivePolicy:
     def infer(self,masks):
         start=time.perf_counter()
         pixels=policy_pixels(masks)
+        return self._infer_pixels(torch.as_tensor(pixels[None],device=self.device), start)
+
+    def infer_tensor(self, masks):
+        """Keep detector masks and the trained AREA-resampled actor input on CUDA."""
+        from surround_tensor import area_weights
+        if tuple(masks.shape) != (4, 270, 480):
+            raise ValueError('four aligned camera road masks required')
+        start = time.perf_counter()
+        device = torch.device(self.device)
+        if not hasattr(self, '_area_weights'):
+            self._area_weights = (area_weights(122, 32, device), area_weights(480, 64, device))
+        rows, columns = self._area_weights
         with torch.inference_mode():
-            action,logits=self.model(torch.as_tensor(pixels[None],device=self.device))
+            pixels = rows @ masks[:, 135:257].to(device=device, dtype=torch.float32) @ columns.T
+            return self._infer_pixels(pixels[None], start)
+
+    def _infer_pixels(self, pixels, start):
+        with torch.inference_mode():
+            action,logits=self.model(pixels)
             action=action[0].cpu().numpy();prob=logits.softmax(1)[0].cpu().numpy()
         stopped=bool(prob[1]>prob[0])
         command=DriveDecision(0. if stopped else self.max_speed_mps*float(action[0]),0.,0. if stopped else float(.35*action[1]),

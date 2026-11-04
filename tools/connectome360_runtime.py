@@ -94,3 +94,8 @@ class Connectome360Runtime:
         masks, metrics = self.road.predict_views(views)
         command, policy = self.policy.infer(masks)
         return masks[0], command, dict(perception=metrics, policy=policy)
+
+    def infer_views_tensor(self, views):
+        masks, metrics = self.road.predict_views_tensor(views)
+        command, policy = self.policy.infer_tensor(masks)
+        return masks[0], command, dict(perception=metrics, policy=policy)

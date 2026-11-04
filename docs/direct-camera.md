@@ -75,6 +75,13 @@ USB 카메라를 열지 않는다. Road 작업에서만 실제 영상을 추론�
 경로는 그대로다. 실제 FPS·GPU/EMC·전력·온도와 장시간 동작은 Jetson 검증 대기다.
 구현 근거: [NVIDIA MJPEG 가속 디코딩 문서](https://docs.nvidia.com/jetson/archives/r36.4.4/DeveloperGuide/SD/Multimedia/AcceleratedGstreamer.html).
 
+Flyvis 이미지의 패키지 설치는 부모 이미지의 pip 인덱스·제약 환경변수와 설정 파일을
+격리하고 PyPI에서 수행한다. 학습 환경에서 사용한 Hydra 1.3.7·OmegaConf 2.3.1·ANTLR
+4.9.3 조합을 고정하며, CUDA PyTorch·torchvision·NumPy는 베이스 이미지의 정확한
+버전 제약을 유지한다. 빌드 중 Flyvis/Hydra/OmegaConf import와 기존 CUDA PyTorch의
+경로·버전·CUDA 버전 유지 여부를 확인한다. 이 설치 단계만 실패한 경우 기본 이미지가
+이미 정상 빌드됐다면 `docker compose build connectome360`부터 다시 실행하면 된다.
+
 ## 기존 구성에서 전환
 
 진행 중인 작업을 종료하고 **기존 Compose 구성으로** 컨테이너를 내린다.

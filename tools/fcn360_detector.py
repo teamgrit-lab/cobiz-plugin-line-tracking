@@ -1,16 +1,13 @@
-"""Jetson FCN direct-camera inference or diagnostic publisher. No motion publisher."""
+"""Jetson FCN camera-owned inference. No ROS image or motion publisher."""
 import argparse
 import hashlib
 import os
 import tempfile
 from pathlib import Path
 
-import cv2
 import numpy as np
 
-from fcn360_road import (BLIND, DEFAULT_INPUT_WIDTH, EGO, FRAME_ID, ROAD,
-                         classify_panorama, mask_topic, model_shapes, observed_classes)
-from surround_capture import Camera
+from fcn360_road import DEFAULT_INPUT_WIDTH, classify_panorama, model_shapes
 
 
 class TrtFcn:
@@ -75,28 +72,11 @@ class TrtFcn:
         return self.output.cpu().numpy()
 
 
-def overlay(views, masks):
-    panels = []
-    for name, view, grid, semantic in zip(("FRONT 90", "LEFT 180", "REAR 270", "RIGHT 0"), views,
-                                         observed_classes(masks), masks):
-        panel = cv2.resize(view, (512, 256), interpolation=cv2.INTER_AREA)
-        labels = cv2.resize(grid, (512, 256), interpolation=cv2.INTER_NEAREST)
-        panel[(labels == BLIND) | (labels == 0)] //= 2
-        road = labels == ROAD
-        panel[road] = .55 * panel[road] + np.array([15, 215, 95]) * .45
-        ego = cv2.resize(semantic, (512, 256), interpolation=cv2.INTER_NEAREST) == EGO
-        panel[ego] = .5 * panel[ego] + np.array([200, 70, 230]) * .5
-        cv2.putText(panel, name, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, .6, (255, 255, 255), 2)
-        panels.append(panel)
-    return np.vstack((np.hstack(panels[:2]), np.hstack(panels[2:])))
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="/dev/video91")
     parser.add_argument("--model", type=Path, default=Path("/fcn-model/fcn_resnet18.onnx"))
     parser.add_argument("--cache", type=Path, default=Path("/fcn-engine-cache"))
-    parser.add_argument('--direct-camera', action='store_true')
     parser.add_argument('--port', type=int, default=8094)
     parser.add_argument("--input-width", type=int, choices=(512, 1024),
                         default=int(os.environ.get("LINE_TRACKING_FCN_INPUT_WIDTH", DEFAULT_INPUT_WIDTH)))
@@ -104,62 +84,16 @@ def main():
     sha = os.environ["LINE_TRACKING_FCN_SHA256"]
     infer = TrtFcn(args.model, sha, args.cache, args.input_width)
     print(f"FCN {args.input_width}x{args.input_width//2} · native {args.input_width//32}x{args.input_width//64} grid · {sha}", flush=True)
-    if args.direct_camera:
-        from types import SimpleNamespace
-        from direct_camera_service import DirectCameraService, UsbSource, serve
-        # No image publishers or ROS initialization in direct-camera mode.
-        model = SimpleNamespace(reset=lambda: None, details=dict(
-            backend=f'fcn{args.input_width}-360', weights_sha256=sha,
-            input_width=args.input_width, class_grid_shape=[4, args.input_width//64, args.input_width//32]))
-        def predict(panorama):
-            masks, _ = classify_panorama(panorama, infer, args.input_width)
-            return dict(classes=masks.tolist())
-        serve(DirectCameraService(model, UsbSource(args.device), predict), args.port)
-        return
-    import rclpy
-    from rclpy.qos import qos_profile_sensor_data
-    from sensor_msgs.msg import CompressedImage, Image
-    rclpy.init()
-    node = rclpy.create_node("fcn360_road_detector")
-    masks_pub = node.create_publisher(Image, mask_topic(sha), qos_profile_sensor_data)
-    preview_pub = node.create_publisher(CompressedImage, "/line_tracking/fcn360/overlay/compressed", qos_profile_sensor_data)
-    camera = None
-    def tick():
-        nonlocal camera
-        if not (masks_pub.get_subscription_count() or preview_pub.get_subscription_count()):
-            if camera is not None:
-                camera.close()
-                camera = None
-            return
-        if camera is None:
-            camera = Camera(args.device)
-        capture = camera.read(node.get_clock())
-        if capture is None:
-            return
-        image, stamp = capture
-        masks, views = classify_panorama(image, infer, args.input_width)
-        msg = Image()
-        msg.header.frame_id, msg.header.stamp = FRAME_ID, stamp
-        rows, columns = masks.shape[1:]
-        msg.height, msg.width, msg.step, msg.encoding = 4 * rows, columns, columns, "mono8"
-        msg.data = masks.tobytes()
-        masks_pub.publish(msg)
-        if preview_pub.get_subscription_count():
-            ok, encoded = cv2.imencode(".jpg", overlay(views, masks))
-            if ok:
-                preview = CompressedImage()
-                preview.header, preview.format, preview.data = msg.header, "jpeg", encoded.tobytes()
-                preview_pub.publish(preview)
-
-    node.create_timer(.25, tick)
-    try:
-        rclpy.spin(node)
-    finally:
-        if camera is not None:
-            camera.close()
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+    from types import SimpleNamespace
+    from direct_camera_service import DirectCameraService, UsbSource, serve
+    # Camera-owned inference has no image publishers or ROS initialization.
+    model = SimpleNamespace(reset=lambda: None, details=dict(
+        backend=f'fcn{args.input_width}-360', weights_sha256=sha,
+        input_width=args.input_width, class_grid_shape=[4, args.input_width//64, args.input_width//32]))
+    def predict(panorama):
+        masks, _ = classify_panorama(panorama, infer, args.input_width)
+        return dict(classes=masks.tolist())
+    serve(DirectCameraService(model, UsbSource(args.device), predict), args.port)
 
 
 if __name__ == "__main__":

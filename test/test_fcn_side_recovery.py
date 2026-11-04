@@ -7,9 +7,9 @@ import pytest
 
 from dangjin_fcn import FcnDrive
 from fcn360_road import SIDE_RECOVERY_MAX_SECONDS, side_recovery_yaw
-from test_fcn360_road import ARGS, SHA, lane, mask_topic, packet
+from test_fcn360_road import ARGS, SHA, lane
 from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
-from test_surface_model_routing import start, cancel
+from road_test_support import FcnInput, start, cancel
 from test_task_inference_lifecycle_ros import wait_for_count
 
 
@@ -98,15 +98,15 @@ def test_ros_recovery_obeys_staleness_dropouts_regained_path_and_cancellation(mo
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV,'LINE_TRACKING_STOP_ON_'+check.upper(),'false')
 
+    inputs = FcnInput(monkeypatch, ros)
+
     def scenario(node):
-        node.destroy_subscription = lambda sub: ros.subscriptions.pop(mask_topic(SHA),None)
         start(ros,1,'recover-road')
-        callback = ros.subscriptions[mask_topic(SHA)]
         count = 0
         def publish(grids):
             nonlocal count
             ros.now += .1
-            callback(packet(ros,grids));count += 1;wait_for_count(ros,count)
+            inputs.send(grids);count += 1;wait_for_count(ros,count)
             return json.loads(ros.published[SPORT][-1].parameter)
         assert publish(side_only(shape=(8,16))) == ZERO
         command = publish(side_only(shape=(8,16)))
@@ -123,7 +123,7 @@ def test_ros_recovery_obeys_staleness_dropouts_regained_path_and_cancellation(mo
         assert ros.metrics()['fcn360']['recovery_status'] == 'inactive'
         publish(side_only(shape=(8,16)));publish(side_only(shape=(8,16)))
         cancel(ros,'recover-road')
-        callback(packet(ros,side_only(shape=(8,16))))
+        inputs.send(side_only(shape=(8,16)))
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
     ros.run(scenario,*ARGS)
 

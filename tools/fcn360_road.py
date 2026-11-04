@@ -15,7 +15,6 @@ ASPECT = 480 / 270  # shared optical field, sampled at either native FCN resolut
 GRID = (4, 8, 16)  # reference/legacy grid: front, left, rear, right
 DEFAULT_INPUT_WIDTH = 1024
 SUPPORTED_INPUT_WIDTHS = (512, 1024)
-FRAME_ID = "fcn360_camera"
 FRONT_ROBOT_COLUMNS = (7, 9)  # 0-based, end-exclusive, in the reference 8x16 grid
 FRONT_ROBOT_ROWS = (5, 8)
 FRONT_ROBOT_REVISION = "front-two-columns-bottom-three-v3"
@@ -93,10 +92,6 @@ def apply_front_robot_prior(classes):
     return fixed
 
 
-def mask_topic(sha):
-    return "/line_tracking/fcn360/masks/model_" + sha
-
-
 @lru_cache(maxsize=2)
 def camera_maps(input_width=DEFAULT_INPUT_WIDTH):
     _, _, height, width = model_shapes(input_width)[0]
@@ -133,21 +128,6 @@ def classify_panorama(bgr, infer, input_width=DEFAULT_INPUT_WIDTH):
         classes.append(classify_view(view, infer))
         views.append(view)
     return apply_front_robot_prior(np.stack(classes)), views
-
-
-def read_masks(message, input_width=None):
-    supported = {(32, 16): (4, 8, 16), (64, 32): (4, 16, 32)}
-    shape = supported.get((message.height, message.width))
-    if (message.header.frame_id != FRAME_ID or message.encoding != "mono8"
-            or shape is None or message.step != message.width
-            or len(message.data) != message.height * message.width):
-        raise ValueError("Invalid FCN four-view class packet")
-    if input_width is not None and shape[1:] != model_shapes(input_width)[1][2:]:
-        raise ValueError("FCN class packet does not match the configured model resolution")
-    masks = np.frombuffer(message.data, np.uint8).reshape(shape)
-    if masks.max() > 20:  # 0 is unobserved, including suppressed off-region ego.
-        raise ValueError("Invalid FCN class ID")
-    return apply_front_robot_prior(masks)
 
 
 def ground_sample(mask, forward, left, height):

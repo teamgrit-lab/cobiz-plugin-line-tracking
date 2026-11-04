@@ -13,8 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'tools'))
 from direct_camera_client import DirectCameraClient
 from direct_camera_service import DirectCameraService, SCHEMA, make_server
-from swin_l_drive_control import DriveDecision
-from test_connectome360_runtime import PIN, details
+from road_test_support import PIN, details
 
 
 class Source:
@@ -85,6 +84,10 @@ def test_real_http_transports_no_images_and_keeps_native_grids_and_caps(backend)
         else:
             assert result.front_command['vx'] == (.8 if backend == 'connectome360' else .4)
             assert result.front_command['yaw_rate'] == pytest.approx(.016 if backend == 'connectome360' else .2)
+        if backend == 'connectome360':
+            identity['policy_sha256'] = 'e' * 64
+            with pytest.raises(ValueError, match='paired weights changed'):
+                client.infer('task-123', started, result.capture_stamp_ns, 1.5, time.time_ns)
 
 
 def test_capture_freshness_is_checked_before_and_after_inference_and_on_task_switch(monkeypatch):
@@ -168,7 +171,7 @@ def test_client_rejects_untrusted_stamp_identity_and_class_packets(change):
 @pytest.mark.parametrize('backend', ['connectome360', 'front_connectome', 'fcn360'])
 def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend):
     from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
-    from test_surface_model_routing import start, cancel
+    from road_test_support import start, cancel
     from test_task_inference_lifecycle_ros import image, wait_for_count
     from test_fcn360_road import lane
     import direct_camera_client
@@ -215,13 +218,13 @@ def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend)
         assert side_calls == [2] and len(road_calls) == 1
         assert ros.metrics()['inference_backend'] == 'legacy'
         assert ros.metrics()['camera_transport'] == 'ros'
-    ros.run(scenario, '--road-direct-input', '--path-mask-class', '1', '--path-planner', 'local', *args)
+    ros.run(scenario, '--path-mask-class', '1', '--path-planner', 'local', *args)
 
 
 @pytest.mark.parametrize('failure', [False, True])
 def test_cancelled_direct_inference_cannot_move_or_abort_next_sidewalk(monkeypatch, failure):
     from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
-    from test_surface_model_routing import start, cancel
+    from road_test_support import start, cancel
     from test_task_inference_lifecycle_ros import image, wait_for_count
     import direct_camera_client
     monkeypatch.setattr(debug, 'ENV', {})
@@ -250,13 +253,13 @@ def test_cancelled_direct_inference_cannot_move_or_abort_next_sidewalk(monkeypat
         assert node.tasks.active.task_id == 'sidewalk'
         assert ros.metrics()['inference_backend'] == 'legacy'
         assert ros.metrics()['connectome360'] is None
-    ros.run(scenario, '--road-direct-input', '--path-mask-class', '1', '--path-planner', 'local',
+    ros.run(scenario, '--path-mask-class', '1', '--path-planner', 'local',
             '--connectome360-url', 'http://127.0.0.1:8093/v1/direct-road', '--connectome360-sha256', PIN)
 
 
 def test_current_direct_service_failure_aborts_only_road(monkeypatch):
     from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
-    from test_surface_model_routing import start
+    from road_test_support import start
     from test_task_inference_lifecycle_ros import image, wait_for_count
     import direct_camera_client
     monkeypatch.setattr(debug, 'ENV', {})
@@ -283,5 +286,15 @@ def test_current_direct_service_failure_aborts_only_road(monkeypatch):
         image(ros)
         wait_for_count(ros, 1)
         assert ros.metrics()['inference_backend'] == 'legacy'
-    ros.run(scenario, '--road-direct-input', '--path-mask-class', '1', '--path-planner', 'local',
+    ros.run(scenario, '--path-mask-class', '1', '--path-planner', 'local',
             '--connectome360-url', 'http://127.0.0.1:8093/v1/direct-road', '--connectome360-sha256', PIN)
+
+
+def test_sidewalk_model_pin_is_still_required_with_direct_road(monkeypatch):
+    from test_apriltag_task_stop_ros import RosHarness, debug
+    RosHarness(monkeypatch)
+    args = debug.parse_args(['task-drive', '--path-mask-class', '1', '--path-planner', 'local',
+        '--front-connectome-url', 'http://127.0.0.1:8092/v1/direct-road', '--front-connectome-sha256', PIN])
+    args.model_id = 'unexpected-unpinned-model'
+    with pytest.raises(ValueError, match='pinned checkpoint'):
+        debug._validate_task_drive_preflight(args)

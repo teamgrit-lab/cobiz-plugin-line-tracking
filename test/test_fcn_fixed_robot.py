@@ -1,12 +1,11 @@
 """Only the video-bounded front rig can be ego; it supplies no road evidence."""
-from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import pytest
 
-from fcn360_road import (BLIND, EGO, FRAME_ID, FRONT_BLIND, FRONT_ROBOT_ROWS, FcnRoadPlanner, apply_front_robot_prior,
-                         classify_panorama, front_robot_mask, observed_classes, read_masks)
+from fcn360_road import (BLIND, EGO, FRONT_BLIND, FRONT_ROBOT_ROWS, FcnRoadPlanner, apply_front_robot_prior,
+                         classify_panorama, front_robot_mask, observed_classes)
 from local_path import LocalPathConfig
 
 
@@ -51,29 +50,15 @@ def test_fixed_robot_is_blind_for_planning_and_cannot_supply_its_own_pavement():
     assert planner.plan(fixed,stamp=1.2)[0] is not None
 
 
-def test_ros_reader_applies_same_prior_without_mutating_packet_bytes():
-    raw = np.full((4,8,16),3,np.uint8)
-    payload = raw.tobytes()
-    msg = SimpleNamespace(header=SimpleNamespace(frame_id=FRAME_ID),encoding='mono8',
-                          height=32,width=16,step=16,data=payload)
-    actual = read_masks(msg)
-    assert np.all(actual[0,front_robot_mask()] == EGO)
-    np.testing.assert_array_equal(actual[1:],raw[1:])
-    assert msg.data == payload
-
-
-def test_suppressed_ego_packet_round_trips_and_unknown_does_not_create_road():
+def test_suppressed_ego_is_stable_and_unknown_does_not_create_road():
     raw = np.full((4,8,16),EGO,np.uint8)
     raw[0,0,0] = 14  # preserve an external person
     fixed = apply_front_robot_prior(raw)
-    msg = SimpleNamespace(header=SimpleNamespace(frame_id=FRAME_ID),encoding='mono8',
-                          height=32,width=16,step=16,data=fixed.tobytes())
-    np.testing.assert_array_equal(read_masks(msg),fixed)
+    np.testing.assert_array_equal(apply_front_robot_prior(fixed),fixed)
     assert fixed[0,0,0] == 14
     assert FcnRoadPlanner(LocalPathConfig(),1.6).plan(fixed)[0] is None
     # Complete inference loss is valid unknown data and still cannot start driving.
-    msg.data = bytes(512)
-    assert FcnRoadPlanner(LocalPathConfig(),1.6).plan(read_masks(msg))[0] is None
+    assert FcnRoadPlanner(LocalPathConfig(),1.6).plan(apply_front_robot_prior(np.zeros_like(fixed)))[0] is None
 
 
 def road_logits(_):
@@ -95,15 +80,9 @@ def test_jetson_and_browser_perception_apply_prior_only_after_four_view_inferenc
     assert np.all(classes[1:] == 3)
 
 
-def test_robot_class_is_visible_in_ros_and_panorama_previews():
-    from fcn360_detector import overlay
+def test_robot_class_is_visible_in_panorama_preview():
     from dangjin_camera import panorama_mask
     classes = apply_front_robot_prior(np.full((4,8,16),3,np.uint8))
-    views = [np.zeros((256,512,3),np.uint8) for _ in range(4)]
-    preview = overlay(views,classes)
-    np.testing.assert_array_equal(preview[180,272],(100,35,115))
-    assert not np.array_equal(preview[180,512+272],preview[180,272])
-    assert not np.array_equal(preview[100,272],preview[180,272])
     ego = np.stack([cv2.resize((c == EGO).astype(np.uint8),(480,270),interpolation=cv2.INTER_NEAREST) for c in classes])
     masks = np.zeros((4,270,480),np.uint8)
     pane = panorama_mask(masks,forward_heading_deg=90,ego_masks=ego)

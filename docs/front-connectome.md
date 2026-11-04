@@ -168,8 +168,8 @@ Sidewalk는 시작할 수 있습니다. 전면 모델 응답 오류·해시 불�
 카메라는 A2가 제공하는 ROS 입력이므로 이 최초 ROS 전달은 유지하며,
 `actual-activate`를 거치는 영상의 PNG·HTTP 재전송은 제거했습니다.
 제어기는 `http://127.0.0.1:8092/v1/direct-road`에서 명령·원본 촬영 시각만 받습니다.
-직접 입력 규격은 `line_tracking.direct_camera.v1`입니다. 수동 이미지 추론 CLI는
-`--camera-topic`을 지정하지 않을 때 기존 이미지 입력 규격으로 사용할 수 있습니다.
+직접 입력 규격은 `line_tracking.direct_camera.v1`입니다. 구형 PNG 이미지 HTTP
+API는 제거했으며 서비스는 `--camera-topic`으로 지정한 전면 입력을 직접 구독합니다.
 서비스 시작 후 Road 모드의 `LINE_TRACKING` 작업을 수락하면 추론과 추종을 수행합니다.
 이 문서 작성 과정에서는 Jetson 서비스를 시작하거나 실기 주행하지 않았습니다.
 전면 override를 사용하지 않는 기본 Compose 실행 방식은 유지됩니다.
@@ -204,7 +204,9 @@ Flyvis 1.2.0 및 호환 CUDA PyTorch가 설치된 Python 환경에서는 독립 
 
 ```sh
 python /절대경로/front-road-v2-road-only-20261027/infer.py 영상.png --device cuda --mask 예측.png
-python /절대경로/front-road-v2-road-only-20261027/serve.py --device cuda --port 8092
+python tools/front_connectome_service.py \
+  --model ./models/front-road-v2-road-only-20261027 \
+  --camera-topic /a2/front_camera/res_360p/image_raw --device cuda --port 8092
 ```
 
 직접 실행하는 플러그인의 연결 설정은 `LINE_TRACKING_FRONT_CONNECTOME_URL`,

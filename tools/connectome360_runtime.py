@@ -8,9 +8,6 @@ import numpy as np
 
 from surround_camera import load_profile, profile_sha256
 
-PROTOCOL = 'line_tracking.connectome360.v1'
-VIEWS_TOPIC = '/line_tracking/connectome360/views'
-
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -18,10 +15,6 @@ def sha256(path):
         for chunk in iter(lambda: stream.read(1024*1024), b''):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def views_frame_id():
-    return 'connectome360_views_' + profile_sha256(load_profile())
 
 
 def unpack_views(atlas):

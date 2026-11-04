@@ -1,13 +1,12 @@
 import json
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from fcn360_road import FRAME_ID, FcnRoadPlanner, mask_topic, read_masks
+from fcn360_road import FcnRoadPlanner
 from local_path import LocalPathConfig
-from test_apriltag_task_stop_ros import Message, RosHarness, SPORT, ZERO, debug
-from test_surface_model_routing import start, cancel
+from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
+from road_test_support import FcnInput, start, cancel
 from test_task_inference_lifecycle_ros import image, wait_for_count
 
 SHA = 'b' * 64
@@ -21,14 +20,6 @@ def lane():
     grids[1, 5:] = 3
     grids[3, 6:] = 3
     return grids
-
-
-def packet(ros, grids=None):
-    grids = lane() if grids is None else grids
-    msg = Message(grids.tobytes())
-    msg.height, msg.width, msg.step, msg.encoding = 32, 16, 16, 'mono8'
-    msg.header.stamp, msg.header.frame_id = ros.stamp(), FRAME_ID
-    return msg
 
 
 def test_sides_confirm_then_correct_towards_more_space_rear_never_steers():
@@ -54,71 +45,6 @@ def test_sides_confirm_then_correct_towards_more_space_rear_never_steers():
     assert planner.plan(grids)[0] is None
 
 
-def test_tasks_use_only_current_camera_and_stop_on_lost_front(monkeypatch):
-    ros = RosHarness(monkeypatch)
-    for check in debug.AUTOMATIC_STOP_CHECKS:
-        monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_STOP_ON_' + check.upper(), 'false')
-    # An old deployment .env must not reactivate the removed sensor pipeline.
-    monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_AVOIDANCE_ENABLED', 'true')
-    monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED', 'true')
-    side_calls = []
-    def segment(frame, path_mask_class, **kwargs):
-        side_calls.append(path_mask_class)
-        return SimpleNamespace(selected_mask=np.full((360, 640), 2, np.uint8), inference_seconds=.01)
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _: SimpleNamespace(
-        device=SimpleNamespace(type='cuda'), reset=lambda: None, segment=segment))
-
-    def drive():
-        return json.loads(ros.published[SPORT][-1].parameter)
-
-    def scenario(node):
-        node.destroy_subscription = lambda sub: ros.subscriptions.pop(mask_topic(SHA))
-        start(ros, 1, 'fcn')
-        road = ros.subscriptions[mask_topic(SHA)]
-        old_packet = packet(ros)
-        ros.now += 2.1
-        image(ros)  # front ROS camera is silent for the Road worker
-        node.publish_state()
-        assert drive() == ZERO and not side_calls and ros.metrics()['inference_count'] == 0
-        road(packet(ros))
-        wait_for_count(ros, 1)
-        assert ros.metrics()['inference_backend'] == 'fcn512-360'
-        assert drive()['x'] > 0 and drive()['y'] == 0
-        assert not {'/livox/lidar', '/livox/imu'} & ros.subscriptions.keys()
-        assert 'lidar_obstacles' not in ros.metrics()
-        ros.now += 1.2
-        node.publish_state()
-        assert drive() == ZERO
-        grass = lane()
-        grass[0] = 11
-        road(packet(ros, grass))
-        wait_for_count(ros, 2)
-        assert drive() == ZERO and not ros.metrics()['fcn360']['front_path_valid']
-        cancel(ros, 'fcn')
-        assert mask_topic(SHA) not in ros.subscriptions
-        start(ros, 2, 'sidewalk')
-        road(old_packet)
-        ros.now += 2.1
-        image(ros)
-        wait_for_count(ros, 3)
-        assert side_calls == [2] and ros.metrics()['inference_backend'] == 'legacy'
-        cancel(ros, 'sidewalk')
-        start(ros, 1, 'new-fcn')
-        ros.subscriptions[mask_topic(SHA)](old_packet)
-        node.publish_state()
-        assert drive() == ZERO and ros.metrics()['inference_count'] == 3
-    ros.run(scenario, *ARGS)
-
-
-@pytest.mark.parametrize('class_id', [21, 254, 255])
-def test_invalid_ids_are_not_a_road_mask(class_id):
-    msg = Message(bytes([class_id]) * 512)
-    msg.header.frame_id = FRAME_ID
-    msg.encoding, msg.height, msg.width, msg.step = 'mono8', 32, 16, 16
-    with pytest.raises(ValueError, match='class ID'):
-        read_masks(msg)
-
-
 def test_only_robot_gap_can_join_front_road_and_history_expires():
     from fcn360_road import front_robot_mask
 
@@ -142,38 +68,6 @@ def test_only_robot_gap_can_join_front_road_and_history_expires():
     grids = lane()
     grids[0, 7] = 11  # Road visible at 3 m, grass immediately in front.
     assert planner.plan(grids)[0] is None
-
-
-def test_inflight_road_result_is_discarded_on_switch_to_sidewalk(monkeypatch):
-    import threading
-    ros = RosHarness(monkeypatch)
-    for check in debug.AUTOMATIC_STOP_CHECKS:
-        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "false")
-    entered = threading.Event()
-    release = threading.Event()
-    original_plan = FcnRoadPlanner.plan
-    def blocked(planner, masks, **kwargs):
-        entered.set()
-        assert release.wait(4)
-        return original_plan(planner, masks, **kwargs)
-    monkeypatch.setattr(FcnRoadPlanner, 'plan', blocked)
-    def scenario(node):
-        node.destroy_subscription = lambda sub: ros.subscriptions.pop(mask_topic(SHA))
-        try:
-            start(ros, 1, 'old-road')
-            ros.subscriptions[mask_topic(SHA)](packet(ros))
-            assert entered.wait(4)
-            cancel(ros, 'old-road')
-            start(ros, 2, 'new-sidewalk')
-            release.set()
-            ros.now += 2.1
-            image(ros)
-            wait_for_count(ros, 1)
-            assert ros.metrics()['inference_backend'] == 'legacy'
-            assert ros.metrics()['fcn360'] is None
-        finally:
-            release.set()
-    ros.run(scenario, *ARGS)
 
 
 def test_arm_is_unobserved_independent_of_fcn_class_and_needs_visible_shoulders():
@@ -236,20 +130,20 @@ def test_two_missing_sides_or_a_blocked_near_strip_stop_with_distant_road():
     assert planner.plan(masks)[0] is None
 
 
-def test_road_ros_worker_applies_turn_speed_and_stops_on_following_loss(monkeypatch):
+def test_direct_road_applies_turn_speed_and_stops_on_following_loss(monkeypatch):
     ros = RosHarness(monkeypatch)
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_STOP_ON_' + check.upper(), 'false')
+    inputs = FcnInput(monkeypatch, ros)
 
     def scenario(node):
         start(ros, 1, 'arm-control')
-        publish_masks = ros.subscriptions[mask_topic(SHA)]
         grids = np.full((4, 8, 16), 13, np.uint8)
         grids[:, 4:] = 3
         grids[0, 4:, :7] = grids[1, 4:] = 11
         for count in (1, 2, 3, 4):
             ros.now += .2
-            publish_masks(packet(ros, grids if count < 4 else np.full_like(grids, 11)))
+            inputs.send(grids if count < 4 else np.full_like(grids, 11))
             wait_for_count(ros, count)
             command = json.loads(ros.published[SPORT][-1].parameter)
             if count == 3:
@@ -257,7 +151,7 @@ def test_road_ros_worker_applies_turn_speed_and_stops_on_following_loss(monkeypa
                 assert 0 < command['x'] <= node.drive_config.max_forward_mps * .45
                 assert command['y'] == 0 and command['z'] < 0
             elif count == 2:
-                assert command == {'x':0.,'y':0.,'z':-.18}
+                assert command == {'x': 0., 'y': 0., 'z': -.18}
                 assert ros.metrics()['drive_reason'] == 'fcn_side_recovery'
                 assert not ros.metrics()['fcn360']['front_path_valid']
             else:
@@ -266,4 +160,38 @@ def test_road_ros_worker_applies_turn_speed_and_stops_on_following_loss(monkeypa
                     assert ros.metrics()['drive_reason'] == 'fcn_turn_confirmation'
                     assert ros.metrics()['fcn360']['candidate_path_valid']
                     assert not ros.metrics()['fcn360']['front_path_valid']
+    ros.run(scenario, *ARGS)
+
+
+def test_inflight_fcn_plan_is_discarded_on_switch_to_sidewalk(monkeypatch):
+    import threading
+    ros = RosHarness(monkeypatch)
+    for check in debug.AUTOMATIC_STOP_CHECKS:
+        monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_STOP_ON_' + check.upper(), 'false')
+    inputs = FcnInput(monkeypatch, ros)
+    entered, release = threading.Event(), threading.Event()
+    original_plan = FcnRoadPlanner.plan
+
+    def blocked(planner, masks, **kwargs):
+        entered.set()
+        assert release.wait(4)
+        return original_plan(planner, masks, **kwargs)
+    monkeypatch.setattr(FcnRoadPlanner, 'plan', blocked)
+
+    def scenario(node):
+        try:
+            start(ros, 1, 'old-road')
+            ros.now += .2
+            inputs.send(lane())
+            assert entered.wait(4)
+            cancel(ros, 'old-road')
+            start(ros, 2, 'new-sidewalk')
+            ros.now += 2.1
+            image(ros)
+            release.set()
+            wait_for_count(ros, 1)
+            assert ros.metrics()['inference_backend'] == 'legacy'
+            assert ros.metrics()['fcn360'] is None
+        finally:
+            release.set()
     ros.run(scenario, *ARGS)

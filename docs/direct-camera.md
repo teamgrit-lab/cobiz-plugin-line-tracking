@@ -1,7 +1,7 @@
 # Road 추론 서비스의 카메라 직접 입력
 
-세 가지 Road Compose override 모두 `LINE_TRACKING_ROAD_DIRECT_INPUT=true`를
-지정한다. 학습 가중치·카메라 투영·속도 제한·FCN 경로 생성 방식은 유지하고,
+세 가지 Road Compose override에서 해당 Road 백엔드를 지정하면 카메라 직접 입력을
+자동으로 사용한다. 별도의 직접 입력 전환 플래그는 없다. 학습 가중치·카메라 투영·속도 제한·FCN 경로 생성 방식은 유지하고,
 추론할 영상을 제어기에 보낸 뒤 다시 HTTP로 보내던 과정을 제거한다.
 
 | 구성 | 카메라 소유 서비스 | 입력 | 제어기가 받는 결과 |
@@ -69,4 +69,14 @@ docker compose logs --tail=100 connectome360 actual-activate
 
 이 변경의 확인 범위는 로컬 HTTP·모의 카메라·ROS 작업 수명 검사다.
 Jetson CUDA/USB/DDS 통합, 실제 FPS·CPU 부하 개선 및 현장 주행은 별도로 측정해야 한다.
-기존 이미지 입력 CLI와 시뮬레이션은 유지하며 모델을 재학습하거나 교체하지 않는다.
+구형 PNG 이미지 HTTP·ROS 마스크 중계와 해당 검사 CLI는 제거했다.
+브라우저 시뮬레이션과 저장 영상의 로컬 모델 추론은 유지하며 가중치는 바꾸지 않는다.
+
+## 제거한 구형 경로
+
+`connectome360-camera` 영상 발행기, FCN ROS 마스크·미리보기 발행기, 전면·360°
+PNG 이미지 HTTP API 및 로컬 Road/Sidewalk 모델 라우터는 현재 구성에서 사용하지 않아
+제거했다. 서비스는 카메라 직접 입력만 제공하며 `--direct-camera`,
+`--road-direct-input`, `LINE_TRACKING_ROAD_DIRECT_INPUT` 전환 옵션도 제거했다.
+전면 서비스 직접 실행에는 `--camera-topic`이 필요하다. 세 Compose 실행 명령은
+필요한 카메라·백엔드 설정을 전달한다. Sidewalk와 시뮬레이션의 모델·제어기는 유지한다.

@@ -3,14 +3,13 @@ import math
 
 import numpy as np
 
-from connectome360_runtime import PROTOCOL
 from front_connectome_client import FrontConnectomeSegmenter, limit_front_command, validated_command
 from surround_camera import load_profile, profile_sha256
 from swin_l_drive_control import DriveDecision
 
 
 class Connectome360Segmenter(FrontConnectomeSegmenter):
-    protocol = PROTOCOL
+    """Validate paired weights and convert the learned action to physical limits."""
 
     def validate_model(self, model):
         scale = model.get('trained_max_speed_mps')
@@ -31,11 +30,6 @@ class Connectome360Segmenter(FrontConnectomeSegmenter):
             raise ValueError('360 paired weights changed during stream')
         self._paired_hashes = [model[k] for k in ['road_sha256', 'policy_sha256', 'encoder_sha256']]
 
-    def prepare_frame(self, bgr):
-        if bgr.dtype != np.uint8 or bgr.shape != (540, 960, 3):
-            raise ValueError('360 adapter requires the original four-view 960x540 atlas')
-        return bgr
-
     def decode_command(self, value):
         if not isinstance(value, dict) or set(value) != {'vx', 'vy', 'yaw_rate', 'reason'}:
             raise ValueError('invalid 360 learned command')
@@ -52,7 +46,7 @@ class Connectome360Segmenter(FrontConnectomeSegmenter):
                                 'tracking' if value['reason'] == 'neural_drive' else 'neural_wait')
         # The simulation's 10 m/s scale is never a physical robot speed setting.
         # Apply both caps with ONE factor so curvature is preserved. The live
-        # node applies its existing (default 0.5 m/s) cap again at publication.
+        # node applies its configured physical cap again at publication.
         limited = limit_front_command(command, .8, .35)
         return validated_command(dict(vx=limited.vx, vy=limited.vy,
                                       yaw_rate=limited.yaw_rate, reason=limited.reason))

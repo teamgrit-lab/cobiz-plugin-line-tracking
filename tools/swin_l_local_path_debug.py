@@ -97,8 +97,7 @@ from local_path import (
 )
 from perception_process import PerceptionProcess
 from surface_path_planner import SurfacePathPlanner, uses_connectome
-from fcn360_road import FcnRoadPlanner, mask_topic, read_masks, side_recovery_yaw
-from surface_segmenter import FrontRoadInferenceError, SurfaceSegmenter
+from fcn360_road import FcnRoadPlanner, side_recovery_yaw
 from waypoint_guidance import WaypointGuide
 from r50_checkpoint import validate_checkpoint
 from swin_l_drive_control import (
@@ -119,17 +118,13 @@ from unitree_sport_api import (
 
 
 def _segmenter_from_args(args):
-    if getattr(args, 'connectome360_url', ''):
-        from connectome360_client import Connectome360Segmenter
-        return SurfaceSegmenter(BestSoFarSegmenter(_runtime_config(args)),
-            lambda: Connectome360Segmenter(args.connectome360_url,
-                args.connectome360_sha256, args.connectome360_timeout_sec))
-    if getattr(args, 'front_connectome_url', ''):
-        from front_connectome_client import FrontConnectomeSegmenter
-        return SurfaceSegmenter(BestSoFarSegmenter(_runtime_config(args)),
-            lambda: FrontConnectomeSegmenter(args.front_connectome_url,
-                args.front_connectome_sha256, args.front_connectome_timeout_sec))
+    # Road services own capture and inference. This local model retains the
+    # existing Sidewalk and standalone local/debug/navigation paths.
     return BestSoFarSegmenter(_runtime_config(args))
+
+
+def has_road_service(args):
+    return bool(args.connectome360_url or args.front_connectome_url or args.fcn_sha256)
 
 
 def uses_learned_road_policy(args, mask_class):
@@ -462,7 +457,6 @@ class FramePacket:
     sequence: int
     source_header: Any = None
     generation: int = 0
-    fcn_masks: bool = False
     direct_request: tuple | None = None
 
 
@@ -939,7 +933,7 @@ def run_ros2(args: argparse.Namespace) -> int:
         for mask_class in (PATH_MASK_CLASSES if task_mode else (args.path_mask_class,))
     }
     fcn = FcnRoadPlanner(local_config, args.fcn_height_m) if args.fcn_sha256 else None
-    direct_input = args.road_direct_input
+    direct_input = has_road_service(args)
     latest = LatestFrameQueue(enabled=not task_mode)
     # SIGTERM can interrupt a ROS callback already reading this state.
     state_lock = threading.RLock()
@@ -1066,13 +1060,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.front_input_qos = input_qos
             self.image_subscription = (None if direct_input else self.create_subscription(
                 Image, args.image_topic, self.on_image, input_qos))
-            self.fcn_subscription = None
-            self.fcn_session_start_ns = None
-            self.connectome360_subscription = None
-            self.connectome360_session_start_ns = None
             self.direct_session = None
-            self.fcn_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
-                                      reliability=ReliabilityPolicy.BEST_EFFORT)
             self.path_publisher = self.create_publisher(
                 __import__("nav_msgs.msg", fromlist=["Path"]).Path,
                 args.local_path_topic,
@@ -1461,23 +1449,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                     if enabled and self.tasks.active and self.tasks.active.selected_mask == 2:
                         self.image_subscription = self.create_subscription(
                             Image, args.image_topic, self.on_image, self.front_input_qos)
-                if args.connectome360_url and not direct_input:
-                    from connectome360_runtime import VIEWS_TOPIC
-                    self.connectome360_session_start_ns = self.get_clock().now().nanoseconds if enabled else None
-                    if self.connectome360_subscription is not None:
-                        self.destroy_subscription(self.connectome360_subscription)
-                        self.connectome360_subscription = None
-                    if enabled and self.tasks.active and self.tasks.active.selected_mask == 1:
-                        self.connectome360_subscription = self.create_subscription(
-                            Image, VIEWS_TOPIC, self.on_connectome360_image, self.fcn_qos)
-                if fcn is not None and not direct_input:
-                    self.fcn_session_start_ns = self.get_clock().now().nanoseconds if enabled else None
-                    if self.fcn_subscription is not None:
-                        self.destroy_subscription(self.fcn_subscription)
-                        self.fcn_subscription = None
-                    if enabled and self.tasks.active and self.tasks.active.selected_mask == 1:
-                        self.fcn_subscription = self.create_subscription(
-                            Image, mask_topic(args.fcn_sha256), self.on_fcn_masks, self.fcn_qos)
                 if fcn is not None:
                     state['fcn_metrics'] = {}
                 state['front_command'] = None
@@ -1865,54 +1836,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return "fcn_front_path_unavailable"
             return path.stop_reason
 
-        def on_fcn_masks(self, message):
-            if direct_input:
-                return
-            with state_lock:
-                if not latest.enabled or self.tasks.active is None or self.tasks.active.selected_mask != 1:
-                    return
-                stamp = _stamp_ns(message.header)
-                if self.fcn_session_start_ns is None or stamp < self.fcn_session_start_ns:
-                    return  # A queued DDS sample from before this task.
-                if not _live_source_stamp(stamp, self.get_clock().now().nanoseconds, args.fcn_max_age_sec):
-                    return
-                if state['last_image_stamp_ns'] is not None and stamp <= state['last_image_stamp_ns']:
-                    return
-                self.accept_image(message, stamp, is_fcn=True)
-
-        def on_connectome360_image(self, message):
-            if direct_input:
-                return
-            from connectome360_runtime import views_frame_id
-            with state_lock:
-                if not latest.enabled or self.tasks.active is None or self.tasks.active.selected_mask != 1:
-                    return
-                stamp = _stamp_ns(message.header)
-                if (self.connectome360_session_start_ns is None or stamp < self.connectome360_session_start_ns
-                        or message.header.frame_id != views_frame_id()
-                        or (message.height, message.width, message.encoding) != (540, 960, 'bgr8')
-                        or not _live_source_stamp(stamp, self.get_clock().now().nanoseconds, args.connectome_max_age_sec)
-                        or (state['last_image_stamp_ns'] is not None and stamp <= state['last_image_stamp_ns'])):
-                    return
-                try:
-                    validate_camera_image(message, self.bridge)
-                    self.accept_image(message, stamp)
-                except Exception as error:
-                    self.camera_conversion_failed(error)
-
         def on_image(self, message: Any) -> None:
             if direct_input and self.tasks.active and self.tasks.active.selected_mask == 1:
-                return
-            if args.connectome360_url and self.tasks.active and self.tasks.active.selected_mask == 1:
-                return
-            if fcn is not None and self.tasks.active and self.tasks.active.selected_mask == 1:
                 return
             if task_mode and not latest.enabled:
                 return
             try:
                 source_stamp_ns = _stamp_ns(message.header) if task_mode else None
-                if fcn is not None and self.fcn_session_start_ns is not None and source_stamp_ns < self.fcn_session_start_ns:
-                    return
                 if task_mode and self.drive_config.stop_on_camera_timestamp_invalid and (
                     not _live_source_stamp(
                         source_stamp_ns,
@@ -1937,14 +1867,13 @@ def run_ros2(args: argparse.Namespace) -> int:
             except Exception as error:  # noqa: BLE001 - safe debug boundary.
                 self.camera_conversion_failed(error)
 
-        def accept_image(self, message, source_stamp_ns, *, is_fcn=False):
+        def accept_image(self, message, source_stamp_ns):
             with state_lock:
                 accepted = latest.put(
                     FramePacket(
                         image_message=message,
                         sequence=int(state["sequence"]),
                         source_header=message.header,
-                        fcn_masks=is_fcn,
                     )
                 )
                 if accepted:
@@ -2132,8 +2061,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "connectome360": (dict(state['front_metrics'], command=state['front_command'])
                     if args.connectome360_url and mask_class == 1 else None),
                 "camera_transport": ('direct' if direct_input and mask_class == 1 else 'ros'),
-                "camera_topic": (None if direct_input and mask_class == 1 else mask_topic(args.fcn_sha256) if fcn and mask_class == 1 else
-                    '/line_tracking/connectome360/views' if args.connectome360_url and mask_class == 1 else args.image_topic),
+                "camera_topic": None if direct_input and mask_class == 1 else args.image_topic,
                 "path_mask_class": mask_class,
                 "path_roi_polygon": [] if fcn and mask_class == 1 else list(path_config_for_mode(local_config, mask_class).roi_polygon),
                 "path_roi_exclusion_polygon": [] if fcn and mask_class == 1 else list(path_config_for_mode(local_config, mask_class).roi_exclusion_polygon),
@@ -2289,6 +2217,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     if fcn is not None:
                         fcn.reset()
                     previous_generation = packet.generation
+                fcn_packet = packet.direct_request is not None and fcn is not None
                 inference_started_at = time.monotonic()
                 # Limit start-to-start frequency, including conversion failures.
                 # Slow inference must not incur an extra fixed-period sleep.
@@ -2315,7 +2244,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         header = Image().header
                         header.stamp.sec, header.stamp.nanosec = divmod(result.capture_stamp_ns, 1_000_000_000)
                         header.frame_id = direct_camera_config(args)[1]+'_camera'
-                        packet = replace(packet, source_header=header, fcn_masks=fcn is not None)
+                        packet = replace(packet, source_header=header)
                         arrival = time.monotonic()
                         if state['last_image_at'] is not None:
                             gap = arrival-state['last_image_at']
@@ -2327,8 +2256,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                     if packet.direct_request is not None:
                         if fcn is not None:
                             masks = result.masks
-                    elif packet.fcn_masks:
-                        masks = read_masks(packet.image_message, args.fcn_input_width)
                     else:
                         frame_rgb = camera_image_rgb(packet.image_message, node.bridge)
                 except Exception as error:  # noqa: BLE001 - retain camera fault handling.
@@ -2347,11 +2274,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                     target_xy = guidance_packet['target_xy'] if guidance_packet else None
                     guidance_kwargs = guidance_packet or {}
                 kwargs = {"color_order": "rgb", "path_mask_class": requested_mode}
-                if uses_learned_road_policy(args, requested_mode):
-                    kwargs['source_stamp'] = _stamp_ns(packet.source_header) / 1e9
                 if planner or guided:
                     kwargs['detect_road_hazards'] = True
-                if packet.fcn_masks:
+                if fcn_packet:
                     estimate, fcn_metrics = fcn.plan(masks, stamp=_stamp_ns(packet.source_header)/1e9,
                                                      max_gap=args.fcn_max_age_sec)
                     fcn_metrics['front_path_valid'] = estimate is not None
@@ -2367,20 +2292,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     estimates = response['estimates']
                     planner.metrics = response['planner']
                 else:
-                    try:
-                        result = segmenter.segment(frame_rgb, **kwargs)
-                    except FrontRoadInferenceError as error:
-                        node.get_logger().warning(f'front Road inference failed: {error}')
-                        with state_lock:
-                            # A failed request from a cancelled task must not
-                            # abort a newer Sidewalk (or Road) task.
-                            if latest.is_current(packet):
-                                if task_mode:
-                                    node.abort_active_task(learned_road_backend(args) + '_unavailable')
-                                else:
-                                    state['front_command'] = None
-                                    state['front_metrics'] = {}
-                        continue
+                    result = segmenter.segment(frame_rgb, **kwargs)
                     segmentation_finished_at = time.monotonic()
                 with state_lock:
                     if not latest.is_current(packet):
@@ -2388,7 +2300,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 # The path becomes usable when this result is available. Using
                 # the camera-arrival timestamp here can expire a path before it
                 # is ever published when inference or rate limiting is slow.
-                if packet.fcn_masks or args.inference_process:
+                if fcn_packet or args.inference_process:
                     pass  # The FCN geometry or the child process already supplied the path.
                 elif planner:
                     estimates = planner.plan(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR),
@@ -2401,7 +2313,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         getattr(result, 'road_hazard_mask', np.zeros_like(result.selected_mask)),
                         requested_mode, _stamp_ns(packet.source_header)/1e9, packet.generation, target_xy,
                         robot_pose=guidance_packet['robot_pose'])
-                elif (args.connectome360_url or direct_input) and requested_mode == 1:
+                elif packet.direct_request is not None:
                     # The actor supplies velocity directly. Do not derive a
                     # geometric path from an atlas or invent one for telemetry.
                     estimates = {key: None for key in smoothers}
@@ -2417,7 +2329,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         continue
                     if planner:
                         state['planner_status'] = dict(planner.metrics)
-                    if packet.fcn_masks:
+                    if fcn_packet:
                         state['fcn_metrics'] = fcn_metrics
                         state['planner_status'] = {'backend': 'fcn360-local', 'ready': estimate is not None,
                                                    'reason': fcn_metrics['path_status']}
@@ -2463,7 +2375,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         'segmentation_ms': (segmentation_finished_at-inference_started_at)*1000,
                         'planner_ms': (path_updated_at-segmentation_finished_at)*1000,
                         'source_age_at_completion_sec': ((node.get_clock().now().nanoseconds-
-                            _stamp_ns(packet.source_header))/1e9 if planner or packet.fcn_masks or packet.direct_request else None),
+                            _stamp_ns(packet.source_header))/1e9 if planner or fcn_packet or packet.direct_request else None),
                         'camera_transport': 'direct' if packet.direct_request else 'ros',
                         'cuda_graph': args.cuda_graph,
                         'inference_process': args.inference_process,
@@ -2473,7 +2385,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     state["last_inference_at"] = inference_finished_at
                     if completed_before >= PERFORMANCE_WARMUP_FRAMES:
                         state["performance_inference_seconds"].append(
-                            segmentation_finished_at - inference_started_at if packet.fcn_masks else result.inference_seconds
+                            segmentation_finished_at - inference_started_at if fcn_packet else result.inference_seconds
                         )
                         state["performance_processing_seconds"].append(
                             inference_finished_at - inference_started_at
@@ -2521,8 +2433,6 @@ def run_ros2(args: argparse.Namespace) -> int:
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument('--road-direct-input', action=argparse.BooleanOptionalAction,
-                        default=_env('LINE_TRACKING_ROAD_DIRECT_INPUT', 'false').lower() == 'true')
     parser.add_argument('--fcn-url', default=_env('LINE_TRACKING_FCN_URL', 'http://127.0.0.1:8094/v1/direct-road'))
     parser.add_argument('--fcn-timeout-sec', type=float, default=_env_float('LINE_TRACKING_FCN_TIMEOUT_SEC', 2.))
     parser.add_argument('--connectome360-url', default=_env('LINE_TRACKING_CONNECTOME360_URL', ''))
@@ -2886,8 +2796,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument("--segment-status-topic", default="/line_tracking/segment_status")
             live.add_argument("--segment-velocity-topic", default="/line_tracking/command")
     args = parser.parse_args(argv)
-    if args.road_direct_input:
-        if (args.mode != 'task-drive' or not (args.connectome360_url or args.front_connectome_url or args.fcn_sha256)):
+    if has_road_service(args):
+        if args.mode != 'task-drive':
             parser.error('direct input requires a task-drive Road inference service')
         url, _, _, timeout = direct_camera_config(args)
         if (not url.startswith(('http://127.0.0.1:', 'http://localhost:'))

@@ -27,8 +27,7 @@ class DirectCameraClient:
             else:
                 from front_connectome_client import FrontConnectomeSegmenter
                 cls = FrontConnectomeSegmenter
-            self.validator = cls.__new__(cls)
-            self.validator.expected_sha256 = pin
+            self.validator = cls(pin)
         health = self._request(url.rsplit('/', 2)[0]+'/health')
         if health.get('schema') != SCHEMA or health.get('ready') is not True:
             raise ValueError('camera-owned inference service is not ready')

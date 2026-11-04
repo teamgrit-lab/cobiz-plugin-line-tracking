@@ -35,7 +35,7 @@ def main():
             elif isinstance(node, ast.Import):
                 todo.extend(a.name.split('.')[0] for a in node.names)
     source = dest / 'source'; source.mkdir(exist_ok=True)
-    for pattern in ['tools/*front_connectome*.py', 'tools/validate_front_http.py', 'tools/audit_front_holdout.py', 'tools/filter_front_road_data.py', 'tools/train_connectome_policy.py',
+    for pattern in ['tools/*front_connectome*.py', 'tools/audit_front_holdout.py', 'tools/filter_front_road_data.py', 'tools/train_connectome_policy.py',
                     'tools/dangjin_sensor_faults.py', 'tools/swin_l_local_path_debug.py',
                     'tools/validate_front_drive.mjs', 'tools/watch_front_validation.py', 'test/test_front_connectome.py',
                     'environments/dangjin/*.js', 'environments/dangjin/*.json',

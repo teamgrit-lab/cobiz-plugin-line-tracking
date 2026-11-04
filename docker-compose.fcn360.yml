@@ -10,7 +10,7 @@ services:
     network_mode: host
     ipc: host
     runtime: nvidia
-    command: ["--direct-camera", "--port", "8094"]
+    command: ["--port", "8094"]
     devices:
       - ${FCN360_VIDEO_DEVICE:-/dev/video91}:/dev/video91
     volumes:
@@ -39,7 +39,6 @@ services:
       SWIN_L_PATH_MASK_CLASS: "1"
       SWIN_L_INFERENCE_PROCESS: "false"
       LINE_TRACKING_PATH_PLANNER: local
-      LINE_TRACKING_ROAD_DIRECT_INPUT: "true"
       LINE_TRACKING_FCN_URL: http://127.0.0.1:8094/v1/direct-road
       LINE_TRACKING_FCN_TIMEOUT_SEC: ${LINE_TRACKING_FCN_TIMEOUT_SEC:-2.0}
       LINE_TRACKING_FCN_HEIGHT_M: ${FCN360_HEIGHT_M:-1.6}

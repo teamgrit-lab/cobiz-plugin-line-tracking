@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # The camera-owned FCN service does not consume ROS or the Sidewalk backend.
-if [[ "${SWIN_L_MODE:-}" == "fcn360-detector" && " $* " == *" --direct-camera "* ]]; then
+if [[ "${SWIN_L_MODE:-}" == "fcn360-detector" ]]; then
   exec python3 /workspace/tools/fcn360_detector.py "$@"
 fi
 
@@ -28,13 +28,6 @@ if [[ ! -f "${TEAMGRIT_DDS_ENV}" ]]; then
 fi
 source "${TEAMGRIT_DDS_ENV}"
 set -u
-
-if [[ "${SWIN_L_MODE:-}" == "fcn360-detector" ]]; then
-  exec python3 /workspace/tools/fcn360_detector.py "$@"
-fi
-if [[ "${SWIN_L_MODE:-}" == "connectome360-camera" ]]; then
-  exec python3 /workspace/tools/connectome360_camera.py "$@"
-fi
 
 python3 - <<'PY'
 import sys

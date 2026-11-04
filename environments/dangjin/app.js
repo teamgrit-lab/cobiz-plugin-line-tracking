@@ -132,7 +132,8 @@ function road(points, width, material = M.road, elevation = 0.08, sharedCurve=nu
 function pavedArea(area){
   const contour=area.points.map(([x,y])=>new THREE.Vector2(x,y));
   const indices=THREE.ShapeUtils.triangulateShape(contour,[]).flat();
-  const mesh=surface(area.points.map(([x,y])=>[x,y,.10]),indices,M.apron);
+  const material=area.surface==='asphalt'?M.road:M.apron;
+  const mesh=surface(area.points.map(([x,y])=>[x,y,.10]),indices,material);
   mesh.geometry.setAttribute('uv',new THREE.Float32BufferAttribute(area.points.flatMap(([x,y])=>[x/7,y/7]),2));
   mesh.userData.semantic='road';mesh.userData.pavedArea=area.id;
 }

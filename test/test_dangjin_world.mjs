@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {WorldGeometry,localToSite,stepPose} from '../environments/dangjin/world-geometry.js';
+import {WorldGeometry,localToSite,stepPose,polygonClearance} from '../environments/dangjin/world-geometry.js';
 
 const site=JSON.parse(await readFile(new URL('../environments/dangjin/site.json',import.meta.url)));
 const world=new WorldGeometry(site);
@@ -64,6 +64,21 @@ test('facility road joins the external loop and both old barn roads stop at the 
   assert.equal(world.blocked(180,-13,.65),null);
   assert.equal(world.blocked(145.65,-67,.65),null);
   assert.equal(world.blocked(-5,-40,.65),null);
+});
+test('milking apron joins the southern road with buildings excluded from the pavement',()=>{
+  const area=world.pavedAreas.find(a=>a.id==='milking-south-apron');
+  assert.equal(area.surface,'asphalt');
+  const path=[[5,-30],[40,-35],[95,-35],[95,-58],[145,-58],[180,-50],[220,-48],[230,-50]];
+  for(let i=1;i<path.length;i++)assert.equal(world.swept(
+    {x:path[i-1][0],y:path[i-1][1]},{x:path[i][0],y:path[i][1]},.65),null);
+  assert.equal(world.blocked(115,-20,.65),null);
+  for(const [x,y] of [[120,-32],[118,-46],[150,-30]]){
+    assert.ok(polygonClearance(x,y,area.points)<0,'building footprint cannot be pavement');
+    assert.equal(world.blocked(x,y,.65),'obstacle');
+  }
+  assert.equal(world.blocked(40,-18,.65),'road_edge');
+  assert.equal(world.blocked(145.65,-13,.65),'road_edge');
+  assert.equal(world.blocked(145.65,150,.65),'no_go_zone');
 });
 test('buildings, off-road movement and injected obstacles are rejected',()=>{
   assert.equal(world.blocked(20,20,.65),'obstacle');

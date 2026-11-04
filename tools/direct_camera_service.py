@@ -87,7 +87,7 @@ class RosSource:
 
 
 class DirectCameraService:
-    def __init__(self, model, source, predict, *, idle_sec=1.5, now_ns=time.time_ns):
+    def __init__(self, model, source, predict, *, idle_sec=2.5, now_ns=time.time_ns):
         self.model, self.source, self.predict = model, source, predict
         self.now_ns, self.idle_sec = now_ns, idle_sec
         self.lock = threading.RLock()

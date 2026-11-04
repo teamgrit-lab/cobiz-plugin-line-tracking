@@ -111,8 +111,13 @@ def test_capture_freshness_is_checked_before_and_after_inference_and_on_task_swi
     assert service.process(dict(req, stream_id='next-task', not_before_ns=6_000_000_000))['reason'] == 'inference_source_stale'
     source.capture = None
     assert service.process(dict(req, stream_id='next-task', not_before_ns=6_000_000_000))['reason'] == 'camera_pending'
-    service.used_at = time.monotonic()-2.
+    service.used_at = 100.
+    idle_clock = [102.49]
+    monkeypatch.setattr(time, 'monotonic', lambda: idle_clock[0])
     before = source.closes
+    service.expire_idle()
+    assert source.closes == before and service.stream == 'next-task'
+    idle_clock[0] = 102.5
     service.expire_idle()
     assert source.closes == before+1 and service.stream is None
 

@@ -91,6 +91,15 @@ def test_route_payload_is_rejected_when_hardware_feature_is_disabled(ros):
     ros.run(scenario)
 
 
+def test_enabled_feature_without_tag_ids_keeps_sidewalk_without_opening_tag_camera(ros):
+    def scenario(node):
+        ros.establish_tracking()
+        assert ros.metrics()['drive_reason'] == 'tracking'
+        assert node.tag_route is None and node.tag_route_camera is None
+        assert node.tag_route_pose_subscription is None
+    ros.run(scenario, '--tag-route-enabled')
+
+
 def test_tag_id_outside_selected_family_is_rejected_before_acquiring_motion(ros):
     def scenario(node):
         register(ros, dict(selected_mask=2, start_tag_id=9999, end_tag_id=8))

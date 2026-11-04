@@ -53,21 +53,29 @@ stop-on-any-AprilTag 설정을 사용하지 않고 지정된 두 ID와 순서를
 
 ## 배포와 설정
 
-기존 Compose 목록에 `docker-compose.tag-straight.yml`을 추가하고
-`actual-activate` 이미지를 재빌드한다. 이 overlay가 없으면 기능은 비활성화이며
-ID가 포함된 작업은 `tag_route_disabled`로 거절한다. 기존 작업은 그대로 받는다.
+태그 주행 설정과 360 장치 매핑은 기본 `docker-compose.yml`에 포함돼 있다.
+추가 Compose 파일 없이 `actual-activate` 이미지를 재빌드하고 실행한다.
+출발·도착 ID가 모두 있는 작업에서만 태그 모드를 실행하며, 두 ID가 없는 작업은
+기존 Sidewalk/Road 주행을 유지한다.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.tag-straight.yml build actual-activate
-docker compose -f docker-compose.yml -f docker-compose.tag-straight.yml up -d actual-activate
+docker compose -f docker-compose.yml build actual-activate
+docker compose -f docker-compose.yml up -d actual-activate
 ```
 
-기존 Road/Navigation override가 있다면 같은 목록에 유지한다. FCN과 함께 쓰는
-경우 `-f docker-compose.fcn360.yml`도 추가한다. 위 명령은 배포 예시이며 이번
-구현 과정에서 실제 로봇에 배포하거나 주행하지 않았다.
+기존 Road/Navigation override는 해당 기능을 사용할 때만 유지한다. 태그 기능을
+위한 별도 override는 필요 없다. 이전 설정의 `COMPOSE_FILE`에 태그 전용 파일을
+추가했다면 그 항목을 제거한다. 위 명령은 배포 예시이며 이번 변경 과정에서 실제
+로봇에 배포하거나 주행하지 않았다.
+
+태그 기능을 명시적으로 끄려면 `.env`에서 `LINE_TRACKING_TAG_ROUTE_ENABLED=false`로
+설정한다. 이때 ID가 있는 작업은 `tag_route_disabled`로 거절하고 일반 작업은 받는다.
+기본 Compose는 컨테이너 생성 시 호스트의 `TAG_ROUTE_VIDEO_DEVICE` 장치가 있어야 한다.
+장치 등록과 별개로 실제 카메라 수집은 태그 작업을 시작할 때만 수행한다.
 
 | 설정 | 기본값 | 의미 |
 | --- | --- | --- |
+| `LINE_TRACKING_TAG_ROUTE_ENABLED` | `true` | 기본 Compose의 태그 payload 처리 활성화 |
 | `TAG_ROUTE_VIDEO_DEVICE` | `/dev/video91` | 호스트의 360 MJPEG 장치 |
 | `LINE_TRACKING_TAG_ROUTE_STATE_TOPIC` | `/lf/sportmodestate` | `unitree_go/SportModeState` |
 | `LINE_TRACKING_TAG_ROUTE_FRONT_CENTER_X` | `720` | 2880px 영상의 설치 전방, 잠정값 |

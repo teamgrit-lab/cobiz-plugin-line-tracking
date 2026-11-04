@@ -3,15 +3,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_tag_route_overlay_keeps_camera_optional_and_builds_wire_compatible_feedback():
+def test_base_compose_supports_tag_payloads_and_builds_wire_compatible_feedback():
     import hashlib
     import yaml
 
-    overlay = yaml.safe_load((ROOT / 'docker-compose.tag-straight.yml').read_text())['services']['actual-activate']
     base = yaml.safe_load((ROOT / 'docker-compose.yml').read_text())['services']['actual-activate']
-    assert overlay['environment']['LINE_TRACKING_TAG_ROUTE_ENABLED'] == 'true'
-    assert overlay['devices'] == ['${TAG_ROUTE_VIDEO_DEVICE:-/dev/video91}:/dev/video91']
-    assert not base.get('devices')
+    assert base['environment']['LINE_TRACKING_TAG_ROUTE_ENABLED'] == '${LINE_TRACKING_TAG_ROUTE_ENABLED:-true}'
+    assert base['devices'] == ['${TAG_ROUTE_VIDEO_DEVICE:-/dev/video91}:/dev/video91']
+    assert base['environment']['LINE_TRACKING_TAG_ROUTE_DEVICE'] == '/dev/video91'
+    assert base['environment']['LINE_TRACKING_TAG_ROUTE_STATE_TOPIC'].endswith(':-/lf/sportmodestate}')
     expected = {
         'SportModeState.msg': '4034e8c6805e002c5ad2327912f52219c712853a51a518378acb1d22764d122c',
         'IMUState.msg': '95b5b2aa84fbbea748a560f18cc3950a6091c5822aa1dba326aa183327cb8198',

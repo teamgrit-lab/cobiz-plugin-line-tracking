@@ -38,15 +38,15 @@ Mode 0은 한 작업 안에서 노면·백엔드를 자동으로 바꾸지 않�
   통로를 잃지 않고 건물 반대편 후보를 평가한다. 최장 유효 구간을 먼저 선택한다.
   이는 부드러운 경로 선호도이며 열린 입구 바닥 전체를 진입 금지로 인식하는 기능은 아니다.
   Mode 0·2 경로와 AprilTag, 속도 상한, 감속·정지 검사는 유지한다.
-- Mode 1은 `SWIN_L_ROAD_ROI_POLYGON`의 측면을 확장한 사다리꼴 ROI를 사용한다.
+- Mode 1은 `LINE_TRACKING_ROAD_ROI_POLYGON`의 측면을 확장한 사다리꼴 ROI를 사용한다.
   기본값은 `0.07,1.00,0.93,1.00,0.68,0.45,0.32,0.45`이다.
   위쪽 폭 36%, 아래쪽 폭 86%, 위쪽 높이 45%로, 원래 사다리꼴보다 좌우를
   넓히면서 A2 손잡이 제외 영역과 간격을 둔다.
-  Mode 0·2는 기존 `SWIN_L_ROI_POLYGON`의 사다리꼴을 유지한다. Mode 0이
+  Mode 0·2는 기존 `LINE_TRACKING_ROI_POLYGON`의 사다리꼴을 유지한다. Mode 0이
   차도를 선택해도 ROI는 바뀌지 않는다. 서버 경로 생성과 수신 측 마스크 재검사,
   오버레이 투영 모두 요청 모드의 ROI를 사용한다. 거리 매핑은 기존 전방 3~8m와
   횡방향 ±4m 설정을 유지하며 실제 카메라 장착 자세에 따른 실측 보정은 별도다.
-  `SWIN_L_ROAD_ROI_EXCLUSION_POLYGON`으로 오른쪽 위 카메라 장식물/손잡이 영역을
+  `LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON`으로 오른쪽 위 카메라 장식물/손잡이 영역을
   추가로 제외한다. 이 제외 마스크는 Mode 1의 서버 경로 생성·수신 경로 검사·
   오버레이에 적용하며 네 꼭짓점의 거리 변환과 Mode 0·2 ROI는 바꾸지 않는다.
   원본 카메라 영상과 AprilTag 입력은 유지한다. 빈 문자열로 설정하면 제외를 해제한다.
@@ -93,7 +93,7 @@ HTTP 요청은 사용 중인 차도 모드만 지정하며 다른 모드 응답�
 
 ## Jetson 지연 최적화
 
-CUDA/PyTorch R50에서는 `SWIN_L_CUDA_GRAPH=true`, CUDA Flyvis에서는
+CUDA/PyTorch R50에서는 `LINE_TRACKING_CUDA_GRAPH=true`, CUDA Flyvis에서는
 `CONNECTOME_CUDA_GRAPH=true`로 같은 모델의 반복 실행을 CUDA graph로 재생한다.
 모델·FP16 설정·ROI·프레임 주기·검사 기준은 바꾸지 않는다. R50 전처리와 표면
 후처리는 그대로이며, 재사용되는 GPU 출력과 시간 EMA의 저장 공간은 분리한다.
@@ -121,11 +121,11 @@ hazard는 새로 계산하며 Mode 0과 같은 표면의 후보 평가를 공유
 실행 예시:
 
 ```dotenv
-SWIN_L_CUDA_GRAPH=true
+LINE_TRACKING_CUDA_GRAPH=true
 CONNECTOME_CUDA_GRAPH=true
-SWIN_L_INFERENCE_HZ=2.5
-SWIN_L_TELEMETRY_HZ=5.0
-SWIN_L_INFERENCE_PROCESS=true
+LINE_TRACKING_INFERENCE_HZ=2.5
+LINE_TRACKING_TELEMETRY_HZ=5.0
+LINE_TRACKING_INFERENCE_PROCESS=true
 ```
 
 이 장비의 목표는 매초 최소 1회 새 추론을 완료하는 것이다. 2.5Hz는 마감 여유를
@@ -133,12 +133,12 @@ SWIN_L_INFERENCE_PROCESS=true
 주기를 1Hz로 두면 처리 지연이 더해져 기존 1초 촬영 나이 제한 사이에 정지
 구간이 생길 수 있다. 영상/센서 만료 한계는 늘리지 않는다.
 
-`SWIN_L_TELEMETRY_HZ`는 Path·metrics에만 적용한다(0이면 기존 매 timer 발행).
+`LINE_TRACKING_TELEMETRY_HZ`는 Path·metrics에만 적용한다(0이면 기존 매 timer 발행).
 상태 직렬화·Pose 생성·GPU 메모리 조회는 5Hz로 줄이고, 이동 명령과 모든 정지
 검사는 20Hz로 계속 실행한다. `control_loop.observed_hz`와 `gap_max_sec`로 실제
 제어 간격을 확인한다. OpenCV 형태학 처리의 CPU pool도 2개 스레드로 제한한다.
 
-`SWIN_L_INFERENCE_PROCESS=true`는 R50·HTTP·현재 마스크 재검증을 spawn 자식
+`LINE_TRACKING_INFERENCE_PROCESS=true`는 R50·HTTP·현재 마스크 재검증을 spawn 자식
 프로세스에서 실행한다. 부모는 최신 프레임 하나만 보내고 응답의 generation/sequence를
 검사한 뒤 기존 task/generation/source-age 검사를 적용한다. 자식은 ROS/이동 발행자를
 만들지 않는다. CUDA graph warmup은 ready 이전에 수행하고 모델의 시간 이력은
@@ -161,16 +161,16 @@ AprilTag 6Hz 제한이나 CameraInfo 준비 여부에 묶이지 않는다. April
 동기화된 영상/보정 정보를 전달한다. 검출·확인·인계와 정지 조건은 변경하지 않는다.
 
 ```dotenv
-SWIN_L_APRILTAG_DETECTOR_ENABLED=true
-SWIN_L_APRILTAG_IMAGE_TOPIC=/a2/front_camera/res_360p/image_raw
-SWIN_L_APRILTAG_CAMERA_INFO_TOPIC=/a2/front_camera/res_360p/camera_info
-SWIN_L_SHARED_CAMERA_IMAGE_TOPIC=/line_tracking/camera/image_raw
-SWIN_L_SHARED_CAMERA_INFO_TOPIC=/line_tracking/camera/camera_info
-SWIN_L_IMAGE_TOPIC=/line_tracking/camera/image_raw
+LINE_TRACKING_APRILTAG_DETECTOR_ENABLED=true
+LINE_TRACKING_APRILTAG_IMAGE_TOPIC=/a2/front_camera/res_360p/image_raw
+LINE_TRACKING_APRILTAG_CAMERA_INFO_TOPIC=/a2/front_camera/res_360p/camera_info
+LINE_TRACKING_SHARED_CAMERA_IMAGE_TOPIC=/line_tracking/camera/image_raw
+LINE_TRACKING_SHARED_CAMERA_INFO_TOPIC=/line_tracking/camera/camera_info
+LINE_TRACKING_IMAGE_TOPIC=/line_tracking/camera/image_raw
 ```
 
 기본 Compose의 `actual-activate`는 task-drive다. 검사 용도로 만든 로컬 override의
-`SWIN_L_MODE=ros2` 또는 disabled Sport 토픽이 남아 있으면 주행하지 않는다.
+`LINE_TRACKING_MODE=ros2` 또는 disabled Sport 토픽이 남아 있으면 주행하지 않는다.
 주행 배포는 task-drive와 `/api/sport/request`를 사용하며, 기존 작업 수락 후에만
 명령을 발행한다. `ros2` 성능 검사나 가상 ROS domain 재생은 현장 주행 성공을
 대신하지 않는다.
@@ -208,7 +208,7 @@ docker compose -f docker-compose.yml -f docker-compose.connectome.yml build conn
 docker compose -f docker-compose.yml -f docker-compose.connectome.yml up -d connectome-planner actual-activate
 ```
 
-override가 `actual-activate`와 `debugging-swin-l`을 connectome 모드로 선택한다.
+override가 `actual-activate`와 `debugging-line-tracking`을 connectome 모드로 선택한다.
 기본 Compose는 `local`을 유지한다. 서비스는 127.0.0.1:8091에만 바인드하며 모델이
 준비된 뒤 `/health`를 통과한다. 카메라마다 서비스 하나를 사용한다.
 
@@ -222,7 +222,7 @@ source stamp, 원본 이미지 PNG, 라벨 PNG, 제외 마스크 PNG, ROI/그리
 
 ```bash
 python tools/connectome_server.py --bundle /path/to/flyvis_encoder.pt --sha256 <해시> --device cpu
-python tools/swin_l_local_path_debug.py mcap --path-planner connectome \
+python tools/line_tracking_runtime.py mcap --path-planner connectome \
   --profile r50-fp16-640x360 --input /path/to/input.mcap --output /tmp/connectome.mp4
 ```
 

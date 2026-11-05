@@ -1,7 +1,7 @@
 """Ordered lap accounting and camera-path tracking, independent of perception."""
 import math
 import numpy as np
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 
 
 def wrap(angle):return (angle+math.pi)%(2*math.pi)-math.pi

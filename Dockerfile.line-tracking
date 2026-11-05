@@ -1,14 +1,14 @@
-ARG SWIN_L_BASE_IMAGE=cobiz:jetson-swin-l-l4t-r36.5.0
-FROM ${SWIN_L_BASE_IMAGE}
+ARG LINE_TRACKING_BASE_IMAGE=cobiz:jetson-line-tracking-l4t-r36.5.0
+FROM ${LINE_TRACKING_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/root/.cache/huggingface
 SHELL ["/bin/bash", "-c"]
 
-ARG SWIN_L_TORCHVISION_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126
-ARG SWIN_L_TORCHVISION_VERSION=0.23.0
-ARG SWIN_L_TORCH_TENSORRT_VERSION=2.8.0+cu126
+ARG LINE_TRACKING_TORCHVISION_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126
+ARG LINE_TRACKING_TORCHVISION_VERSION=0.23.0
+ARG LINE_TRACKING_TORCH_TENSORRT_VERSION=2.8.0+cu126
 
 # The base image is built once with jetson-containers and provides the
 # Jetson-compatible PyTorch, CUDA, and ROS stack. torchvision and Transformers
@@ -49,15 +49,15 @@ RUN /opt/venv/bin/python -c \
 # there by jetson-containers under /opt/venv; a separate venv would not see it,
 # even when created with --system-site-packages.
 RUN /opt/venv/bin/python -m pip install --no-cache-dir \
-        --index-url "${SWIN_L_TORCHVISION_INDEX_URL}" \
+        --index-url "${LINE_TRACKING_TORCHVISION_INDEX_URL}" \
         --no-deps \
         --only-binary=torchvision \
-        "torchvision==${SWIN_L_TORCHVISION_VERSION}" \
+        "torchvision==${LINE_TRACKING_TORCHVISION_VERSION}" \
     && /opt/venv/bin/python -m pip install --no-cache-dir \
-        --index-url "${SWIN_L_TORCHVISION_INDEX_URL}" \
+        --index-url "${LINE_TRACKING_TORCHVISION_INDEX_URL}" \
         --no-deps \
         --only-binary=:all: \
-        "torch-tensorrt==${SWIN_L_TORCH_TENSORRT_VERSION}" \
+        "torch-tensorrt==${LINE_TRACKING_TORCH_TENSORRT_VERSION}" \
     && /opt/venv/bin/python -m pip install --no-cache-dir \
         "dllist==2.0.0" \
         "numpy>=1.26,<2" \
@@ -77,7 +77,7 @@ RUN /opt/venv/bin/python -c \
      assert cuda and cuda.startswith("12.6"), f"expected CUDA 12.6 PyTorch, got {cuda!r}"; \
      assert importlib.util.find_spec("tensorrt") is not None, "TensorRT Python bindings are missing"; \
      assert importlib.util.find_spec("torch_tensorrt") is not None, "Torch-TensorRT is missing"; \
-     print(f"[swin-l-debug] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} tensorrt=present torch_tensorrt=present transformers={transformers.__version__} opencv={cv2.__version__}")'
+     print(f"[line-tracking] base torch={torch.__version__} torchvision={torchvision.__version__} cuda={cuda} tensorrt=present torch_tensorrt=present transformers={transformers.__version__} opencv={cv2.__version__}")'
 
 WORKDIR /unitree_ws
 COPY third_party/unitree_msgs/unitree_api /unitree_ws/src/unitree_api
@@ -87,14 +87,14 @@ RUN source /opt/ros/humble/setup.bash \
     && colcon build --merge-install --packages-select unitree_api \
     && source /unitree_ws/install/setup.bash \
     && /opt/venv/bin/python -c \
-       'from unitree_api.msg import Request; from apriltag_msgs.msg import AprilTagDetectionArray; request = Request(); request.header.identity.api_id = 1008; detections = AprilTagDetectionArray(); print("[swin-l-debug] ROS interfaces ready")'
+       'from unitree_api.msg import Request; from apriltag_msgs.msg import AprilTagDetectionArray; request = Request(); request.header.identity.api_id = 1008; detections = AprilTagDetectionArray(); print("[line-tracking] ROS interfaces ready")'
 
 ENV PATH=/opt/venv/bin:${PATH}
 WORKDIR /workspace
 COPY tools /workspace/tools
 COPY environments/dangjin/camera360-profile.json /workspace/environments/dangjin/camera360-profile.json
 COPY docker/apriltag.yaml /workspace/docker/apriltag.yaml
-COPY docker/swin_l_debug_entrypoint.sh /entrypoint-swin-l-debug.sh
-RUN chmod +x /entrypoint-swin-l-debug.sh
+COPY docker/line_tracking_entrypoint.sh /entrypoint-line-tracking.sh
+RUN chmod +x /entrypoint-line-tracking.sh
 
-ENTRYPOINT ["/entrypoint-swin-l-debug.sh"]
+ENTRYPOINT ["/entrypoint-line-tracking.sh"]

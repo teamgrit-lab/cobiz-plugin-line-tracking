@@ -130,7 +130,7 @@ def test_1024_road_task_routes_native_packets_and_sidewalk_still_uses_legacy(mon
     def segment(frame,path_mask_class,**kwargs):
         side_calls.append(path_mask_class)
         return SimpleNamespace(selected_mask=np.full((360,640),2,np.uint8),inference_seconds=.01)
-    monkeypatch.setattr(debug,'BestSoFarSegmenter',lambda _:SimpleNamespace(
+    monkeypatch.setattr(debug,'SegmentationModel',lambda _:SimpleNamespace(
         device=SimpleNamespace(type='cuda'),reset=lambda:None,segment=segment))
     def scenario(node):
         node.destroy_subscription=lambda sub:ros.subscriptions.pop('/line_tracking/fcn360/masks/model_'+SHA)

@@ -20,7 +20,7 @@ def setup(monkeypatch):
     }.items():
         monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_MOTION_' + key, value)
     monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_MAX_FORWARD_MPS', '.80')
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _config: NS(
+    monkeypatch.setattr(debug, 'SegmentationModel', lambda _config: NS(
         device=NS(type='cuda'), reset=lambda: None,
         segment=lambda _frame, **kwargs: NS(
             selected_mask=np.full((360, 640), kwargs['path_mask_class'] or 2, np.uint8),
@@ -56,12 +56,12 @@ def test_commands_do_not_require_motion_sensors_or_restart_acceleration(monkeypa
         assert 'motion_tracking' not in result
         assert '/dog_odom' not in ros.subscriptions
         assert '/dog_imu_raw' not in ros.subscriptions
-        source_stamp = debug._stamp_ns(ros.published['/line_tracking/swin_l/local_path'][-1].header)
+        source_stamp = debug._stamp_ns(ros.published['/line_tracking/local_path'][-1].header)
         ros.now += .4  # Beyond former sensor/extrapolation windows, with no new input.
         node.publish_state()
         assert json.loads(ros.published[SPORT][-1].parameter) == first
         assert ros.metrics()['inference_count'] == result['inference_count']
-        assert debug._stamp_ns(ros.published['/line_tracking/swin_l/local_path'][-1].header) == source_stamp
+        assert debug._stamp_ns(ros.published['/line_tracking/local_path'][-1].header) == source_stamp
         node.release_task_control('cancel')
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
 

@@ -30,7 +30,7 @@ def selected_path_region(selected_mask: np.ndarray, path_mask_class: int) -> np.
 
     if path_mask_class not in PATH_MASK_CLASSES:
         raise ValueError(
-            "SWIN_L_PATH_MASK_CLASS must be 0 (road or sidewalk), "
+            "LINE_TRACKING_PATH_MASK_CLASS must be 0 (road or sidewalk), "
             "1 (road), or 2 (sidewalk)"
         )
     if path_mask_class == 0:

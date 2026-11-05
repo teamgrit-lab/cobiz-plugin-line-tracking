@@ -151,7 +151,7 @@ def test_swept_path_checks_between_waypoints_and_entire_footprint():
 
 
 def test_neural_mode_does_not_override_actor_for_dropout_or_no_go(monkeypatch):
-    from swin_l_drive_control import DriveDecision
+    from drive_control import DriveDecision
     class Surround(TestPerception):
         def predict_views(self,frames):
             return np.ones((4,270,480),np.uint8),{'ms':1.,'road_fraction':1.}

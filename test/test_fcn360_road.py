@@ -65,7 +65,7 @@ def test_tasks_use_only_current_camera_and_stop_on_lost_front(monkeypatch):
     def segment(frame, path_mask_class, **kwargs):
         side_calls.append(path_mask_class)
         return SimpleNamespace(selected_mask=np.full((360, 640), 2, np.uint8), inference_seconds=.01)
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _: SimpleNamespace(
+    monkeypatch.setattr(debug, 'SegmentationModel', lambda _: SimpleNamespace(
         device=SimpleNamespace(type='cuda'), reset=lambda: None, segment=segment))
 
     def drive():

@@ -11,7 +11,7 @@ from fcn360_road import (BINARY_NONROAD, FRONT_ROBOT_COLUMNS, FRONT_ROBOT_ROWS, 
                          FcnRoadPlanner, PLANNER_REVISION, ROAD, apply_front_robot_prior, classify_view, model_shapes,
                          side_recovery_yaw)
 from local_path import LocalPathConfig, LocalPathSmoother
-from swin_l_drive_control import DriveConfig, DriveDecision, decide_drive
+from drive_control import DriveConfig, DriveDecision, decide_drive
 
 
 class FcnPerception:

@@ -30,21 +30,21 @@ def test_camera_info_is_paired_to_image_without_changing_source():
 
 
 def test_detector_uses_same_camera_as_tracking():
-    env = {"SWIN_L_IMAGE_TOPIC": "/a2/front_camera/res_720p/image_raw"}
+    env = {"LINE_TRACKING_IMAGE_TOPIC": "/a2/front_camera/res_720p/image_raw"}
     relay, detector, tracking = child_commands("task-drive", env)
     assert "input_image_topic:=/a2/front_camera/res_720p/image_raw" in relay[1]
     assert "input_camera_info_topic:=/a2/front_camera/res_720p/camera_info" in relay[1]
     assert "detections:=/detections" in detector[1]
     assert detector[1][:4] == ["ros2", "run", "apriltag_ros", "apriltag_node"]
     assert tracking[1][-1] == "task-drive"
-    env.update(SWIN_L_APRILTAG_CAMERA_INFO_TOPIC="/calibrated/info",
-               SWIN_L_APRILTAG_IMAGE_TOPIC="/other/image_raw",
-               SWIN_L_APRILTAG_DETECTIONS_TOPIC="/other/detections")
+    env.update(LINE_TRACKING_APRILTAG_CAMERA_INFO_TOPIC="/calibrated/info",
+               LINE_TRACKING_APRILTAG_IMAGE_TOPIC="/other/image_raw",
+               LINE_TRACKING_APRILTAG_DETECTIONS_TOPIC="/other/detections")
     commands = child_commands("ros2", env)
     assert "input_camera_info_topic:=/calibrated/info" in commands[0][1]
     assert "input_image_topic:=/other/image_raw" in commands[0][1]
     assert "detections:=/other/detections" in commands[1][1]
-    env["SWIN_L_APRILTAG_DETECTOR_ENABLED"] = "false"
+    env["LINE_TRACKING_APRILTAG_DETECTOR_ENABLED"] = "false"
     assert len(child_commands("task-drive", env)) == 1
 
 
@@ -81,11 +81,11 @@ def test_shared_input_continues_when_calibration_size_does_not_match():
 
 
 def test_shared_camera_wiring_keeps_detector_on_and_remote_input_separate():
-    env = {"SWIN_L_APRILTAG_DETECTOR_ENABLED": "true",
-           "SWIN_L_APRILTAG_IMAGE_TOPIC": "/a2/front_camera/res_360p/image_raw",
-           "SWIN_L_SHARED_CAMERA_IMAGE_TOPIC": "/line_tracking/camera/image_raw",
-           "SWIN_L_SHARED_CAMERA_INFO_TOPIC": "/line_tracking/camera/camera_info",
-           "SWIN_L_IMAGE_TOPIC": "/line_tracking/camera/image_raw"}
+    env = {"LINE_TRACKING_APRILTAG_DETECTOR_ENABLED": "true",
+           "LINE_TRACKING_APRILTAG_IMAGE_TOPIC": "/a2/front_camera/res_360p/image_raw",
+           "LINE_TRACKING_SHARED_CAMERA_IMAGE_TOPIC": "/line_tracking/camera/image_raw",
+           "LINE_TRACKING_SHARED_CAMERA_INFO_TOPIC": "/line_tracking/camera/camera_info",
+           "LINE_TRACKING_IMAGE_TOPIC": "/line_tracking/camera/image_raw"}
     relay, detector, tracking = child_commands("task-drive", env)
     assert "input_image_topic:=/a2/front_camera/res_360p/image_raw" in relay[1]
     assert "shared_image_topic:=/line_tracking/camera/image_raw" in relay[1]
@@ -93,15 +93,15 @@ def test_shared_camera_wiring_keeps_detector_on_and_remote_input_separate():
     assert "detections:=/detections" in detector[1]
     assert tracking[1][-1] == "task-drive"
     with pytest.raises(ValueError, match="outputs must differ"):
-        child_commands("task-drive", {**env, "SWIN_L_APRILTAG_IMAGE_TOPIC": env["SWIN_L_IMAGE_TOPIC"]})
+        child_commands("task-drive", {**env, "LINE_TRACKING_APRILTAG_IMAGE_TOPIC": env["LINE_TRACKING_IMAGE_TOPIC"]})
     with pytest.raises(ValueError, match="requires the AprilTag"):
-        child_commands("task-drive", {**env, "SWIN_L_APRILTAG_DETECTOR_ENABLED": "false"})
+        child_commands("task-drive", {**env, "LINE_TRACKING_APRILTAG_DETECTOR_ENABLED": "false"})
 
 
 @pytest.mark.parametrize("env", [
-    {"SWIN_L_APRILTAG_THREADS": "0"}, {"SWIN_L_APRILTAG_DECIMATE": "nan"},
-    {"SWIN_L_APRILTAG_MAX_HZ": "0"}, {"SWIN_L_APRILTAG_MAX_HAMMING": "-1"},
-    {"SWIN_L_APRILTAG_DETECTOR_ENABLED": "typo"},
+    {"LINE_TRACKING_APRILTAG_THREADS": "0"}, {"LINE_TRACKING_APRILTAG_DECIMATE": "nan"},
+    {"LINE_TRACKING_APRILTAG_MAX_HZ": "0"}, {"LINE_TRACKING_APRILTAG_MAX_HAMMING": "-1"},
+    {"LINE_TRACKING_APRILTAG_DETECTOR_ENABLED": "typo"},
 ])
 def test_bad_detector_settings_do_not_start_children(env):
     with pytest.raises(ValueError):
@@ -164,7 +164,7 @@ def test_container_sigterm_reaches_all_children(tmp_path):
 
 def test_detector_configuration_and_compose_use_one_matching_interface():
     import yaml
-    dockerfile = (ROOT / "Dockerfile.swin-l-debug").read_text()
+    dockerfile = (ROOT / "Dockerfile.line-tracking").read_text()
     assert "ros-humble-apriltag-ros" in dockerfile
     assert "COPY third_party/apriltag_msgs" not in dockerfile
     config = yaml.safe_load((ROOT / "docker/apriltag.yaml").read_text())["/**"]["ros__parameters"]
@@ -172,12 +172,12 @@ def test_detector_configuration_and_compose_use_one_matching_interface():
     assert config["pose_estimation_method"] == ""
     assert "tag" not in config
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
-    assert services["actual-activate"]["environment"]["SWIN_L_APRILTAG_DETECTOR_ENABLED"].endswith(":-true}")
-    assert services["debugging-swin-l"]["environment"]["SWIN_L_APRILTAG_DETECTOR_ENABLED"].endswith(":-false}")
+    assert services["actual-activate"]["environment"]["LINE_TRACKING_APRILTAG_DETECTOR_ENABLED"].endswith(":-true}")
+    assert services["debugging-line-tracking"]["environment"]["LINE_TRACKING_APRILTAG_DETECTOR_ENABLED"].endswith(":-false}")
     # The debug-only tracker can consume the running production relay without
     # being asked to own its outputs while its internal detector is disabled.
-    assert "SWIN_L_SHARED_CAMERA_IMAGE_TOPIC" not in services["debugging-swin-l"]["environment"]
-    assert "SWIN_L_SHARED_CAMERA_IMAGE_TOPIC" in services["actual-activate"]["environment"]
-    for name in ("actual-activate", "debugging-swin-l"):
-        assert services[name]["environment"]["SWIN_L_APRILTAG_DETECTIONS_TOPIC"].endswith(":-/detections}")
+    assert "LINE_TRACKING_SHARED_CAMERA_IMAGE_TOPIC" not in services["debugging-line-tracking"]["environment"]
+    assert "LINE_TRACKING_SHARED_CAMERA_IMAGE_TOPIC" in services["actual-activate"]["environment"]
+    for name in ("actual-activate", "debugging-line-tracking"):
+        assert services[name]["environment"]["LINE_TRACKING_APRILTAG_DETECTIONS_TOPIC"].endswith(":-/detections}")
         assert services[name]["stop_grace_period"] == "15s"

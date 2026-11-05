@@ -142,7 +142,7 @@ python tools/segment_mapillary_full_video.py \
 ## 5. Jetson으로 복사
 
 `best/`의 파일 네 개를 포함한 폴더 전체를 Jetson 프로젝트의
-`models/r50-surface-v6/best/`에 복사합니다. `SWIN_L_ENGINE_DIR=./models`일 때
+`models/r50-surface-v6/best/`에 복사합니다. `LINE_TRACKING_MODEL_DIR=./models`일 때
 컨테이너에서는 `/models/r50-surface-v6/best`로 보입니다.
 
 학습 PC와 Jetson이 같은 파일시스템이면 저장소 루트에서:
@@ -166,18 +166,18 @@ Jetson 프로젝트의 `.env`에서 아래 값을 설정합니다. `.env`가 없
 `.env.example`을 복사한 뒤 현장 설정을 적용합니다.
 
 ```dotenv
-SWIN_L_PROFILE=r50-finetuned-fp16-640x360
-SWIN_L_BACKEND=pytorch
-SWIN_L_DEVICE=cuda
-SWIN_L_ENGINE_DIR=./models
-SWIN_L_MODEL_ID=/models/r50-surface-v6/best
-SWIN_L_MODEL_REVISION=
-SWIN_L_CHECKPOINT_SHA256=여기에_checkpoint-manifest.json의_64자리_SHA256
-SWIN_L_TRT_AUTO_BUILD=false
-SWIN_L_ALLOW_BACKEND_FALLBACK=false
+LINE_TRACKING_PROFILE=r50-finetuned-fp16-640x360
+LINE_TRACKING_BACKEND=pytorch
+LINE_TRACKING_DEVICE=cuda
+LINE_TRACKING_MODEL_DIR=./models
+LINE_TRACKING_MODEL_ID=/models/r50-surface-v6/best
+LINE_TRACKING_MODEL_REVISION=
+LINE_TRACKING_CHECKPOINT_SHA256=여기에_checkpoint-manifest.json의_64자리_SHA256
+LINE_TRACKING_TRT_AUTO_BUILD=false
+LINE_TRACKING_ALLOW_BACKEND_FALLBACK=false
 ```
 
-`SWIN_L_CHECKPOINT_SHA256`은 `model.safetensors` 자체가 아니라
+`LINE_TRACKING_CHECKPOINT_SHA256`은 `model.safetensors` 자체가 아니라
 **checkpoint-manifest.json 파일의 해시**입니다. 새 학습 모델로 교체하면
 그 manifest의 해시도 갱신합니다. 모델 경로는 컨테이너 경로를 사용합니다.
 ROI·마스크 선택·조향·정지 설정은 기존 현장 설정을 유지합니다.
@@ -189,14 +189,14 @@ ROI·마스크 선택·조향·정지 설정은 기존 현장 설정을 유지�
 
 ```bash
 docker compose stop actual-activate
-docker compose up -d --build --force-recreate debugging-swin-l
-docker compose logs -f debugging-swin-l
+docker compose up -d --build --force-recreate debugging-line-tracking
+docker compose logs -f debugging-line-tracking
 ```
 
 학습 모델·경로 출력을 확인한 뒤 실제 주행 서비스로 전환합니다.
 
 ```bash
-docker compose stop debugging-swin-l
+docker compose stop debugging-line-tracking
 docker compose up -d --build --force-recreate actual-activate
 docker compose logs -f actual-activate
 ```
@@ -210,13 +210,13 @@ model_id와 checkpoint SHA를 확인하세요.
 기존 R50으로 복귀할 때는 다음 네 항목을 바꾸고 서비스를 재생성합니다.
 
 ```dotenv
-SWIN_L_PROFILE=r50-fp16-640x360
-SWIN_L_MODEL_ID=
-SWIN_L_MODEL_REVISION=
-SWIN_L_CHECKPOINT_SHA256=
+LINE_TRACKING_PROFILE=r50-fp16-640x360
+LINE_TRACKING_MODEL_ID=
+LINE_TRACKING_MODEL_REVISION=
+LINE_TRACKING_CHECKPOINT_SHA256=
 ```
 
-`SWIN_L_BACKEND=pytorch`는 유지합니다. 모델 학습·저장 자체가 로봇을 실행하거나
+`LINE_TRACKING_BACKEND=pytorch`는 유지합니다. 모델 학습·저장 자체가 로봇을 실행하거나
 현재 `.env`를 변경하지는 않습니다.
 
 ## 구현 검증 기록 — 2026-09-29
@@ -228,7 +228,7 @@ SWIN_L_CHECKPOINT_SHA256=
 - 기본 배치 2·누적 4·증강 설정에서도 초기 AMP overflow 후 스케일이 조정되어
   실제 optimizer 갱신과 저장이 완료되는 것을 확인했습니다. 이 저장본에서
   2번째 갱신까지 재개하고 기존 `best/`를 새 모델로 교체하는 것도 통과했습니다.
-- 저장된 safetensors를 주행용 `BestSoFarSegmenter`의 새 프로파일로 읽고,
+- 저장된 safetensors를 주행용 `SegmentationSegmenter`의 새 프로파일로 읽고,
   원본 MP4 2프레임에서 CUDA FP16 추론 및 360×640 결과를 확인했습니다.
   실제 저장본을 사용한 task-drive 사전 검증도 통과했습니다.
 - 전체 테스트 결과는 658 passed / 16 skipped / 4 failed였습니다.

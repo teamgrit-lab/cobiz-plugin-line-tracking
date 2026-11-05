@@ -5,7 +5,7 @@ x-fcn-identity: &fcn-identity
 
 services:
   fcn360-road:
-    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+    image: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
     pull_policy: never
     network_mode: host
     ipc: host
@@ -18,7 +18,7 @@ services:
       - fcn360-engines:/fcn-engine-cache
     environment:
       <<: *fcn-identity
-      SWIN_L_MODE: fcn360-detector
+      LINE_TRACKING_MODE: fcn360-detector
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       OMP_NUM_THREADS: "2"
@@ -35,9 +35,9 @@ services:
         condition: service_started
     environment:
       <<: *fcn-identity
-      SWIN_L_MODE: task-drive
-      SWIN_L_PATH_MASK_CLASS: "1"
-      SWIN_L_INFERENCE_PROCESS: "false"
+      LINE_TRACKING_MODE: task-drive
+      LINE_TRACKING_PATH_MASK_CLASS: "1"
+      LINE_TRACKING_INFERENCE_PROCESS: "false"
       LINE_TRACKING_PATH_PLANNER: local
       LINE_TRACKING_ROAD_DIRECT_INPUT: "true"
       LINE_TRACKING_FCN_URL: http://127.0.0.1:8094/v1/direct-road

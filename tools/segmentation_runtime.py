@@ -54,13 +54,13 @@ from transformers import (
     MaskFormerForInstanceSegmentation,
 )
 
-SWIN_L_PROFILE = "swin-l-best-so-far"
-SWIN_L_ASPECT_PROFILE = "swin-l-aspect-224x384"
-SWIN_L_ASPECT_FP16_PROFILE = "swin-l-aspect-224x384-fp16"
-SWIN_L_ASPECT_QUALITY_PROFILE = "swin-l-aspect-448x768"
+LINE_TRACKING_PROFILE = "swin-l-best-so-far"
+LINE_TRACKING_ASPECT_PROFILE = "swin-l-aspect-224x384"
+LINE_TRACKING_ASPECT_FP16_PROFILE = "swin-l-aspect-224x384-fp16"
+LINE_TRACKING_ASPECT_QUALITY_PROFILE = "swin-l-aspect-448x768"
 R50_PROFILE = "r50-fp16-640x360"
 R50_PROFILES = (R50_PROFILE, FINETUNED_PROFILE)
-DEFAULT_PROFILE = SWIN_L_ASPECT_FP16_PROFILE
+DEFAULT_PROFILE = LINE_TRACKING_ASPECT_FP16_PROFILE
 DEFAULT_EVALUATION_SIZE = (360, 640)
 R50_ROAD_LABELS = tuple(
     label
@@ -94,8 +94,8 @@ class ProfileSpec:
 
 
 PROFILE_SPECS = {
-    SWIN_L_PROFILE: ProfileSpec(
-        name=SWIN_L_PROFILE,
+    LINE_TRACKING_PROFILE: ProfileSpec(
+        name=LINE_TRACKING_PROFILE,
         model_family="mask2former",
         model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
         model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
@@ -105,8 +105,8 @@ PROFILE_SPECS = {
         temporal_alpha=0.62,
         temporal_hysteresis_margin=0.07,
     ),
-    SWIN_L_ASPECT_PROFILE: ProfileSpec(
-        name=SWIN_L_ASPECT_PROFILE,
+    LINE_TRACKING_ASPECT_PROFILE: ProfileSpec(
+        name=LINE_TRACKING_ASPECT_PROFILE,
         model_family="mask2former",
         model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
         model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
@@ -116,8 +116,8 @@ PROFILE_SPECS = {
         temporal_alpha=0.62,
         temporal_hysteresis_margin=0.07,
     ),
-    SWIN_L_ASPECT_FP16_PROFILE: ProfileSpec(
-        name=SWIN_L_ASPECT_FP16_PROFILE,
+    LINE_TRACKING_ASPECT_FP16_PROFILE: ProfileSpec(
+        name=LINE_TRACKING_ASPECT_FP16_PROFILE,
         model_family="mask2former",
         model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
         model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
@@ -127,8 +127,8 @@ PROFILE_SPECS = {
         temporal_alpha=0.62,
         temporal_hysteresis_margin=0.07,
     ),
-    SWIN_L_ASPECT_QUALITY_PROFILE: ProfileSpec(
-        name=SWIN_L_ASPECT_QUALITY_PROFILE,
+    LINE_TRACKING_ASPECT_QUALITY_PROFILE: ProfileSpec(
+        name=LINE_TRACKING_ASPECT_QUALITY_PROFILE,
         model_family="mask2former",
         model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
         model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
@@ -186,7 +186,7 @@ def resolve_profile(
 
 
 @dataclass(frozen=True)
-class BestSoFarConfig:
+class SegmentationConfig:
     """Runtime selection plus shared temporal settings."""
 
     profile: str = DEFAULT_PROFILE
@@ -264,7 +264,7 @@ class BestSoFarConfig:
 
 
 @dataclass(frozen=True)
-class BestSoFarResult:
+class SegmentationResult:
     """One segmentation result and its measured processing stages."""
 
     selected_mask: np.ndarray
@@ -298,10 +298,10 @@ def _changed_pixel_hysteresis_hold_mask(
     return hold_mask
 
 
-class BestSoFarSegmenter:
+class SegmentationModel:
     """Stateful frame segmenter for either pinned Mapillary profile."""
 
-    def __init__(self, config: BestSoFarConfig) -> None:
+    def __init__(self, config: SegmentationConfig) -> None:
         config.validate()
         self.config = config
         self.profile = resolve_profile(
@@ -682,7 +682,7 @@ class BestSoFarSegmenter:
     def segment(
         self, frame: np.ndarray, *, color_order: str = "bgr", detect_road_hazards: bool = False,
         path_mask_class: int | None = None,
-    ) -> BestSoFarResult:
+    ) -> SegmentationResult:
         """Segment BGR/native RGB with surface labels independent of path mode.
 
         Crosswalks remain in the road group (1), including for Mode 2 requests.
@@ -744,7 +744,7 @@ class BestSoFarSegmenter:
         self._previous_selected = selected
 
         finished = time.perf_counter()
-        return BestSoFarResult(
+        return SegmentationResult(
             selected_mask=selected,
             road_hazard_mask=hazard,
             road_building_mask=building,

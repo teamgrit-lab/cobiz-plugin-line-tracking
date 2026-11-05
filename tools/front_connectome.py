@@ -16,7 +16,7 @@ from torch.nn import functional as F
 
 from connectome_flow import FlyvisFlow
 from connectome_road import CircuitFeatures, RoadReadout
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 
 SCHEMA = 'connectum.front.road.v1'
 

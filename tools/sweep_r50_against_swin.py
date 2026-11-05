@@ -26,11 +26,11 @@ import cv2
 import numpy as np
 import torch
 
-from best_so_far_runtime import (
+from segmentation_runtime import (
     R50_PROFILE,
-    SWIN_L_PROFILE,
-    BestSoFarConfig,
-    BestSoFarSegmenter,
+    LINE_TRACKING_PROFILE,
+    SegmentationConfig,
+    SegmentationModel,
 )
 from evaluate_mapillary_label_aggregation import (
     ROAD_LABELS,
@@ -302,11 +302,11 @@ def main() -> int:
         raise RuntimeError("no input videos found")
 
     print("MODEL_LOAD_START profile=swin-l-best-so-far", flush=True)
-    swin = BestSoFarSegmenter(
-        BestSoFarConfig(profile=SWIN_L_PROFILE, device=args.device)
+    swin = SegmentationModel(
+        SegmentationConfig(profile=LINE_TRACKING_PROFILE, device=args.device)
     )
     print("MODEL_LOAD_START profile=r50-fp16-640x360", flush=True)
-    r50 = BestSoFarSegmenter(BestSoFarConfig(profile=R50_PROFILE, device=args.device))
+    r50 = SegmentationModel(SegmentationConfig(profile=R50_PROFILE, device=args.device))
     candidates = candidate_states()
     tuned_road_labels = tuple(
         label

@@ -9,9 +9,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-import swin_l_local_path_debug as debug  # noqa: E402
+import line_tracking_runtime as debug  # noqa: E402
 from local_path import SmoothedPath  # noqa: E402
-from swin_l_drive_control import (  # noqa: E402
+from drive_control import (  # noqa: E402
     DRIVE_STOP_CHECKS,
     DriveConfig,
     decide_drive,
@@ -141,7 +141,7 @@ def test_right_path_turns_right_without_lateral_velocity():
 
 
 def test_unrestricted_mode_does_not_override_enabled_confidence_stop(monkeypatch):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_UNRESTRICTED_PATH_MODE", "true")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_UNRESTRICTED_PATH_MODE", "true")
     args = debug.parse_args(["task-drive"])
     args.stop_on_low_confidence = True
     config = debug._drive_config_from_args(args)
@@ -152,7 +152,7 @@ def test_unrestricted_mode_does_not_override_enabled_confidence_stop(monkeypatch
 
 
 def test_unrestricted_path_mode_is_enabled_by_default(monkeypatch):
-    monkeypatch.delitem(debug.ENV, "SWIN_L_UNRESTRICTED_PATH_MODE", raising=False)
+    monkeypatch.delitem(debug.ENV, "LINE_TRACKING_UNRESTRICTED_PATH_MODE", raising=False)
 
     args = debug.parse_args(["task-drive"])
 
@@ -161,7 +161,7 @@ def test_unrestricted_path_mode_is_enabled_by_default(monkeypatch):
 
 @pytest.mark.parametrize("enabled", [True, False])
 def test_path_quality_stop_switches_come_from_env(monkeypatch, enabled):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_UNRESTRICTED_PATH_MODE", "false")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_UNRESTRICTED_PATH_MODE", "false")
     for check in ("LOW_CONFIDENCE", "LATERAL_TARGET"):
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check, str(enabled))
     config = debug._drive_config_from_args(debug.parse_args(["task-drive"]))
@@ -384,7 +384,7 @@ def test_cobiz_task_listener_pins_swin_profile():
         debug._validate_task_drive_preflight(args)
 
 
-@pytest.mark.parametrize("profile", [debug.SWIN_L_ASPECT_FP16_PROFILE, debug.R50_PROFILE])
+@pytest.mark.parametrize("profile", [debug.LINE_TRACKING_ASPECT_FP16_PROFILE, debug.R50_PROFILE])
 def test_task_drive_prohibits_automatic_backend_fallback(profile):
     args = debug.parse_args(
         ["task-drive", "--profile", profile, "--backend", "pytorch", "--allow-backend-fallback"]
@@ -394,9 +394,9 @@ def test_task_drive_prohibits_automatic_backend_fallback(profile):
 
 
 def test_task_drive_selects_pinned_r50_runtime_from_environment(monkeypatch):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_PROFILE", debug.R50_PROFILE)
-    monkeypatch.setitem(debug.ENV, "SWIN_L_BACKEND", "pytorch")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_DEVICE", "cuda")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PROFILE", debug.R50_PROFILE)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BACKEND", "pytorch")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_DEVICE", "cuda")
     args = debug.parse_args(["task-drive"])
 
     debug._validate_task_drive_preflight(args)
@@ -419,7 +419,7 @@ def test_task_drive_rejects_r50_with_swin_tensorrt_engine():
         debug._validate_task_drive_preflight(args)
 
 
-@pytest.mark.parametrize("profile", [debug.SWIN_L_ASPECT_FP16_PROFILE, debug.R50_PROFILE])
+@pytest.mark.parametrize("profile", [debug.LINE_TRACKING_ASPECT_FP16_PROFILE, debug.R50_PROFILE])
 @pytest.mark.parametrize("field", ["model_id", "model_revision"])
 def test_task_drive_keeps_each_profiles_checkpoint_pinned(profile, field):
     pinned = debug.resolve_profile(profile)

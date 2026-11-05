@@ -13,7 +13,7 @@ import torch
 
 from connectome_server import MAX_BODY, decode_image, encode_image
 from front_connectome_service import PROTOCOL
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 
 
 def validated_command(value):

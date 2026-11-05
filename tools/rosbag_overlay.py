@@ -43,7 +43,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="default: a new folder in rosbag-results/swin-l-tests",
+        help="default: a new folder in rosbag-results/line-tracking-tests",
     )
     parser.add_argument("--image-topic", default=DEFAULT_IMAGE_TOPIC)
     parser.add_argument("--device", default="auto", help="auto, mps, cuda or cpu")
@@ -83,7 +83,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def prepare_outputs(args: argparse.Namespace) -> tuple[Path, Path]:
     if args.output_dir is None:
-        root = Path(__file__).resolve().parents[1] / "rosbag-results" / "swin-l-tests"
+        root = Path(__file__).resolve().parents[1] / "rosbag-results" / "line-tracking-tests"
         root.mkdir(parents=True, exist_ok=True)
         # Jetson's ROS Humble image can still use Python 3.10 (no datetime.UTC).
         now = datetime.now(timezone.utc).astimezone()
@@ -105,9 +105,9 @@ def prepare_outputs(args: argparse.Namespace) -> tuple[Path, Path]:
 def build_debug_arguments(
     args: argparse.Namespace, video: Path, report: Path
 ) -> list[str]:
-    from best_so_far_runtime import SWIN_L_ASPECT_FP16_PROFILE, resolve_profile
+    from segmentation_runtime import LINE_TRACKING_ASPECT_FP16_PROFILE, resolve_profile
 
-    profile = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
+    profile = resolve_profile(LINE_TRACKING_ASPECT_FP16_PROFILE)
     # Pin the model even when a local .env selects R50 or another checkpoint.
     # Geometry settings continue to use the existing local-path configuration.
     arguments = [
@@ -121,7 +121,7 @@ def build_debug_arguments(
         "--overlay-mode",
         args.mode,
         "--profile",
-        SWIN_L_ASPECT_FP16_PROFILE,
+        LINE_TRACKING_ASPECT_FP16_PROFILE,
         "--model-id",
         profile.model_id,
         "--model-revision",
@@ -162,11 +162,11 @@ def open_video(path: Path) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     video, report = prepare_outputs(args)
-    import swin_l_local_path_debug as debug
+    import line_tracking_runtime as debug
 
     debug_args = debug.parse_args(build_debug_arguments(args, video, report))
     print(
-        f"SWIN_L_TEST mode={args.mode} profile={debug_args.profile}\nVIDEO={video}\nREPORT={report}",
+        f"LINE_TRACKING_TEST mode={args.mode} profile={debug_args.profile}\nVIDEO={video}\nREPORT={report}",
         flush=True,
     )
     status = debug.run_mcap(debug_args)

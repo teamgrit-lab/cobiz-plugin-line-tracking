@@ -32,7 +32,7 @@ def test_connectome_path_is_followed_and_failure_never_enters_legacy_recovery(mo
     def segment(frame, **kwargs):
         calls.append(kwargs)
         return NS(selected_mask=selected.copy(), road_hazard_mask=np.zeros_like(selected), inference_seconds=.01)
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _: NS(device=NS(type='cuda'), reset=lambda: None, segment=segment))
+    monkeypatch.setattr(debug, 'SegmentationModel', lambda _: NS(device=NS(type='cuda'), reset=lambda: None, segment=segment))
     def scenario(node):
         ros.start(); ros.now = 2.1
         first = complete_inference(node, ros)
@@ -74,7 +74,7 @@ def test_cancelled_inflight_planner_reply_cannot_repopulate_path_or_move(monkeyp
             returned.set()
             return {m: LocalPathEstimate(p, .95, 1., 3., p) for m in (0, 1, 2)}
     monkeypatch.setattr(debug, 'ConnectomeClient', Client)
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _: NS(device=NS(type='cuda'), reset=lambda: None,
+    monkeypatch.setattr(debug, 'SegmentationModel', lambda _: NS(device=NS(type='cuda'), reset=lambda: None,
         segment=lambda *_a, **_k: NS(selected_mask=np.ones((360, 640), np.uint8), inference_seconds=.01)))
     def scenario(node):
         ros.start(); ros.now = 2.1

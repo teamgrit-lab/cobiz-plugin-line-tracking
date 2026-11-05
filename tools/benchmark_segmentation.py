@@ -44,15 +44,15 @@ from typing import Any
 import cv2
 import numpy as np
 import torch
-from best_so_far_runtime import (
+from segmentation_runtime import (
     DEFAULT_EVALUATION_SIZE,
     DEFAULT_PROFILE,
     INFERENCE_BACKENDS,
     PROFILE_NAMES,
     ROAD_ISLAND_ACTIONS,
-    BestSoFarConfig,
-    BestSoFarResult,
-    BestSoFarSegmenter,
+    SegmentationConfig,
+    SegmentationResult,
+    SegmentationModel,
 )
 
 RAW_IMAGE_TYPE = "sensor_msgs/msg/Image"
@@ -169,7 +169,7 @@ class BenchmarkStats:
     def record_processed(
         self,
         packet: FramePacket,
-        result: BestSoFarResult,
+        result: SegmentationResult,
         *,
         started: float,
         completed: float,
@@ -424,7 +424,7 @@ def _progress_line(stats: BenchmarkStats, overwritten: int) -> str:
 
 
 def _run_throughput(
-    segmenter: BestSoFarSegmenter,
+    segmenter: SegmentationModel,
     packets: Iterable[FramePacket],
     stats: BenchmarkStats,
     *,
@@ -450,7 +450,7 @@ def _run_throughput(
 
 
 def _run_realtime(
-    segmenter: BestSoFarSegmenter,
+    segmenter: SegmentationModel,
     packets: Iterable[FramePacket],
     stats: BenchmarkStats,
     *,
@@ -533,7 +533,7 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
-def _environment_metadata(segmenter: BestSoFarSegmenter) -> dict[str, Any]:
+def _environment_metadata(segmenter: SegmentationModel) -> dict[str, Any]:
     return {
         "platform": platform.platform(),
         "machine": platform.machine(),
@@ -543,7 +543,7 @@ def _environment_metadata(segmenter: BestSoFarSegmenter) -> dict[str, Any]:
     }
 
 
-def run_mcap(args: argparse.Namespace, segmenter: BestSoFarSegmenter) -> dict[str, Any]:
+def run_mcap(args: argparse.Namespace, segmenter: SegmentationModel) -> dict[str, Any]:
     files = resolve_mcap_files(args.input)
     runs: list[dict[str, Any]] = []
     for index, path in enumerate(files, start=1):
@@ -620,7 +620,7 @@ def run_mcap(args: argparse.Namespace, segmenter: BestSoFarSegmenter) -> dict[st
     }
 
 
-def run_ros2(args: argparse.Namespace, segmenter: BestSoFarSegmenter) -> dict[str, Any]:
+def run_ros2(args: argparse.Namespace, segmenter: SegmentationModel) -> dict[str, Any]:
     """Run the same depth-one benchmark against a live ROS 2 image topic."""
 
     try:
@@ -647,7 +647,7 @@ def run_ros2(args: argparse.Namespace, segmenter: BestSoFarSegmenter) -> dict[st
 
     class BenchmarkNode(Node):
         def __init__(self) -> None:
-            super().__init__("best_so_far_segmentation_benchmark")
+            super().__init__("line_tracking_segmentation_benchmark")
             self.bridge = CvBridge()
             reliability = (
                 ReliabilityPolicy.RELIABLE
@@ -709,7 +709,7 @@ def run_ros2(args: argparse.Namespace, segmenter: BestSoFarSegmenter) -> dict[st
         def publish_result(
             self,
             packet: FramePacket,
-            result: BestSoFarResult,
+            result: SegmentationResult,
         ) -> None:
             if self.overlay_publisher is not None:
                 source_hz = (
@@ -944,12 +944,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     ros_parser.add_argument(
         "--overlay-topic",
-        default="/best_so_far/benchmark/overlay",
+        default="/line_tracking/benchmark/overlay",
         help="set to an empty string to disable overlay publishing",
     )
     ros_parser.add_argument(
         "--metrics-topic",
-        default="/best_so_far/benchmark/metrics",
+        default="/line_tracking/benchmark/metrics",
         help="set to an empty string to disable JSON metric publishing",
     )
 
@@ -975,7 +975,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    config = BestSoFarConfig(
+    config = SegmentationConfig(
         profile=args.profile,
         model_id=args.model_id,
         model_revision=args.model_revision,
@@ -995,7 +995,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"MODEL_LOAD_START profile={args.profile} requested_device={args.device}",
         flush=True,
     )
-    segmenter = BestSoFarSegmenter(config)
+    segmenter = SegmentationModel(config)
     print(
         f"MODEL_LOAD_COMPLETE device={segmenter.device} "
         f"elapsed_seconds={segmenter.model_load_seconds:.3f}",

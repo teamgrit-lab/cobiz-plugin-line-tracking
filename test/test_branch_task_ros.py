@@ -12,7 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import local_path
-import swin_l_local_path_debug as debug
+import line_tracking_runtime as debug
 from test_apriltag_task_stop_ros import RosHarness, Message, SPORT
 from test_branch_path import X, Y, corridor, direction, fork
 
@@ -34,7 +34,7 @@ def test_branch_guard_and_task_restart_with_ordinary_stops_disabled(
     scene = {"mask": fork()}
     monkeypatch.setattr(
         debug,
-        "BestSoFarSegmenter",
+        "SegmentationModel",
         lambda _config: SimpleNamespace(
             device=SimpleNamespace(type="cuda"),
             reset=lambda: None,
@@ -72,7 +72,7 @@ def test_branch_guard_and_task_restart_with_ordinary_stops_disabled(
         selected = feed(fork())
         assert selected["branch_selection"]["reason"] == f"{preference}_branch_selected"
         assert selected["branch_selection"]["preference"] == preference
-        path = ros.published["/line_tracking/swin_l/local_path"][-1]
+        path = ros.published["/line_tracking/local_path"][-1]
         assert direction(preference) * path.poses[-1].pose.position.y > 1.5
         assert json.loads(ros.published[SPORT][-1].parameter)["x"] > 0
         lost = feed(corridor(-direction(preference) * np.maximum(X - 4, 0) * 0.55))
@@ -84,7 +84,7 @@ def test_branch_guard_and_task_restart_with_ordinary_stops_disabled(
         }
         assert node.last_valid_yaw_rate is None
         assert node.last_valid_forward_mps is None
-        assert not ros.published["/line_tracking/swin_l/local_path"][-1].poses
+        assert not ros.published["/line_tracking/local_path"][-1].poses
 
         node.on_task_event(
             Message(json.dumps({"type": "TASK_ABORTED", "task_id": "tag-stop-1"}))

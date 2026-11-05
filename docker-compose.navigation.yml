@@ -3,4 +3,4 @@
 services:
   actual-activate:
     environment:
-      SWIN_L_MODE: navigation-worker
+      LINE_TRACKING_MODE: navigation-worker

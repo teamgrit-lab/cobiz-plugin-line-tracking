@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-import swin_l_local_path_debug as debug  # noqa: E402
+import line_tracking_runtime as debug  # noqa: E402
 from local_path import (  # noqa: E402
     DEFAULT_ROAD_ROI_POLYGON,
     DEFAULT_ROAD_ROI_EXCLUSION_POLYGON,
@@ -21,9 +21,9 @@ from cobiz_line_tracking_task import ActiveTask  # noqa: E402
 
 
 def test_live_config_uses_wide_road_roi_only_for_mode1(monkeypatch):
-    monkeypatch.delitem(debug.ENV, 'SWIN_L_ROAD_ROI_POLYGON', raising=False)
-    monkeypatch.delitem(debug.ENV, 'SWIN_L_ROI_POLYGON', raising=False)
-    monkeypatch.delitem(debug.ENV, 'SWIN_L_ROAD_ROI_EXCLUSION_POLYGON', raising=False)
+    monkeypatch.delitem(debug.ENV, 'LINE_TRACKING_ROAD_ROI_POLYGON', raising=False)
+    monkeypatch.delitem(debug.ENV, 'LINE_TRACKING_ROI_POLYGON', raising=False)
+    monkeypatch.delitem(debug.ENV, 'LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON', raising=False)
     config = debug._local_path_config_from_args(debug.parse_args(['task-drive']))
     assert path_config_for_mode(config, 1).roi_polygon == DEFAULT_ROAD_ROI_POLYGON
     assert path_config_for_mode(config, 1).roi_exclusion_polygon == DEFAULT_ROAD_ROI_EXCLUSION_POLYGON
@@ -34,20 +34,20 @@ def test_live_config_uses_wide_road_roi_only_for_mode1(monkeypatch):
 
 @pytest.mark.parametrize('value', ['.8,0,1,0,1', '.8,0,1,0,nan,1', '.8,0,1,0,1,2'])
 def test_invalid_camera_body_exclusion_fails_before_ros(monkeypatch, value):
-    monkeypatch.setitem(debug.ENV, 'SWIN_L_ROAD_ROI_EXCLUSION_POLYGON', value)
+    monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON', value)
     with pytest.raises(SystemExit):
         debug.parse_args(['task-drive'])
 
 
 def test_camera_body_exclusion_can_be_explicitly_disabled(monkeypatch):
-    monkeypatch.setitem(debug.ENV, 'SWIN_L_ROAD_ROI_EXCLUSION_POLYGON', '')
+    monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON', '')
     config = debug._local_path_config_from_args(debug.parse_args(['task-drive']))
     assert path_config_for_mode(config, 1).roi_exclusion_polygon == ()
 
 
 @pytest.mark.parametrize('value', ['nan,1,.98,1,.98,.47,.02,.47', '.02,1,.98,1,.98,.47,.02,2'])
 def test_invalid_mode1_roi_is_rejected_before_ros_starts(monkeypatch, value):
-    monkeypatch.setitem(debug.ENV, 'SWIN_L_ROAD_ROI_POLYGON', value)
+    monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_ROAD_ROI_POLYGON', value)
     with pytest.raises(SystemExit):
         debug.parse_args(['task-drive'])
 
@@ -55,13 +55,13 @@ def test_invalid_mode1_roi_is_rejected_before_ros_starts(monkeypatch, value):
 @pytest.mark.parametrize("mask_class", [0, 1, 2])
 @pytest.mark.parametrize("mode", ["ros2", "task-drive"])
 def test_live_modes_use_the_env_selected_path_class(monkeypatch, mode, mask_class):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", str(mask_class))
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", str(mask_class))
 
     assert debug.parse_args([mode]).path_mask_class == mask_class
 
 
 def test_sidewalk_is_the_default_path_class(monkeypatch):
-    monkeypatch.delitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", raising=False)
+    monkeypatch.delitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", raising=False)
 
     assert debug.parse_args(["ros2"]).path_mask_class == 2
 
@@ -70,7 +70,7 @@ def test_sidewalk_is_the_default_path_class(monkeypatch):
 def test_command_line_can_override_env_for_offline_path_preview(
     monkeypatch, tmp_path, mask_class
 ):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", "2")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", "2")
 
     args = debug.parse_args(
         [
@@ -88,7 +88,7 @@ def test_command_line_can_override_env_for_offline_path_preview(
 
 @pytest.mark.parametrize("value", ["-1", "3", "road", ""])
 def test_invalid_path_class_fails_before_ros_starts(monkeypatch, value):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", value)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", value)
 
     with pytest.raises(SystemExit) as error:
         debug.parse_args(["task-drive"])
@@ -153,11 +153,11 @@ def test_task_paths_are_independent_and_active_task_selects_its_own_path():
 @pytest.mark.parametrize("mode", ["ros2", "task-drive"])
 @pytest.mark.parametrize("preference", ["left", "right", "center"])
 def test_branch_configuration_environment_and_cli(monkeypatch, mode, preference):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_PREFERENCE", "center")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_MIN_WIDTH_M", "0.8")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_MARGIN_M", "0.15")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_CONFIRM_FRAMES", "3")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_HOLD_SEC", "2.5")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_PREFERENCE", "center")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_MIN_WIDTH_M", "0.8")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_MARGIN_M", "0.15")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_CONFIRM_FRAMES", "3")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_HOLD_SEC", "2.5")
     args = debug.parse_args([mode, "--branch-preference", preference])
     cfg = debug._local_path_config_from_args(args)
     assert cfg.branch_preference == preference
@@ -170,7 +170,7 @@ def test_branch_configuration_environment_and_cli(monkeypatch, mode, preference)
 @pytest.mark.parametrize("mode", ["ros2", "task-drive", "mcap"])
 @pytest.mark.parametrize("preference", ["left", "center"])
 def test_preference_from_environment_reaches_path_config(monkeypatch, tmp_path, mode, preference):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_PREFERENCE", preference)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_PREFERENCE", preference)
     arguments = [mode]
     if mode == "mcap":
         arguments += ["--input", str(tmp_path / "input.mcap"), "--output", str(tmp_path / "output.mp4")]
@@ -183,6 +183,6 @@ def test_preference_from_environment_reaches_path_config(monkeypatch, tmp_path, 
     ("CONFIRM_FRAMES", "1"), ("HOLD_SEC", "inf"),
 ])
 def test_invalid_branch_environment_is_rejected_before_startup(monkeypatch, name, value):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_BRANCH_" + name, value)
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_" + name, value)
     with pytest.raises(SystemExit):
         debug.parse_args(["task-drive"])

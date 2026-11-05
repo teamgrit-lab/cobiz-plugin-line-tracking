@@ -25,13 +25,13 @@ from typing import Any
 import cv2
 import numpy as np
 
-from best_so_far_runtime import (
+from segmentation_runtime import (
     DEFAULT_EVALUATION_SIZE,
     DEFAULT_PROFILE,
     PROFILE_NAMES,
     ROAD_ISLAND_ACTIONS,
-    BestSoFarConfig,
-    BestSoFarSegmenter,
+    SegmentationConfig,
+    SegmentationModel,
 )
 from evaluate_sidewalk_road_temporal import binary_iou
 from segment_sidewalk_road import atomic_write_json, discover_videos, utc_now
@@ -154,7 +154,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
 
-    config = BestSoFarConfig(
+    config = SegmentationConfig(
         profile=args.profile,
         model_id=args.model_id,
         model_revision=args.model_revision,
@@ -171,7 +171,7 @@ def main() -> int:
         f"MODEL_LOAD_START profile={args.profile} requested_device={args.device}",
         flush=True,
     )
-    segmenter = BestSoFarSegmenter(config)
+    segmenter = SegmentationModel(config)
     print(
         f"MODEL_LOAD_COMPLETE profile={segmenter.profile.name} "
         f"device={segmenter.device} precision="

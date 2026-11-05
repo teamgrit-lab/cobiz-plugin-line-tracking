@@ -9,7 +9,7 @@ import torch
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
 
-from best_so_far_runtime import (  # noqa: E402
+from segmentation_runtime import (  # noqa: E402
     DEFAULT_PROFILE,
     R50_MAXIMUM_ROAD_ISLAND_AREA,
     R50_MINIMUM_SIDEWALK_RING_RATIO,
@@ -17,19 +17,19 @@ from best_so_far_runtime import (  # noqa: E402
     R50_ROAD_LABELS,
     R50_SIDEWALK_LABELS,
     ROAD_ISLAND_ACTIONS,
-    SWIN_L_ASPECT_FP16_PROFILE,
-    SWIN_L_ASPECT_PROFILE,
-    SWIN_L_ASPECT_QUALITY_PROFILE,
-    SWIN_L_PROFILE,
-    BestSoFarConfig,
-    BestSoFarSegmenter,
+    LINE_TRACKING_ASPECT_FP16_PROFILE,
+    LINE_TRACKING_ASPECT_PROFILE,
+    LINE_TRACKING_ASPECT_QUALITY_PROFILE,
+    LINE_TRACKING_PROFILE,
+    SegmentationConfig,
+    SegmentationModel,
     _changed_pixel_hysteresis_hold_mask,
     resolve_profile,
 )
 
 
 def test_swin_l_aspect_fp16_is_the_selected_default_profile():
-    assert DEFAULT_PROFILE == SWIN_L_ASPECT_FP16_PROFILE
+    assert DEFAULT_PROFILE == LINE_TRACKING_ASPECT_FP16_PROFILE
     profile = resolve_profile(DEFAULT_PROFILE)
     assert profile.model_family == "mask2former"
     assert profile.input_height == 224
@@ -40,8 +40,8 @@ def test_swin_l_aspect_fp16_is_the_selected_default_profile():
 
 
 def test_swin_l_aspect_fp16_changes_only_name_and_precision():
-    fp32 = resolve_profile(SWIN_L_ASPECT_PROFILE)
-    fp16 = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
+    fp32 = resolve_profile(LINE_TRACKING_ASPECT_PROFILE)
+    fp16 = resolve_profile(LINE_TRACKING_ASPECT_FP16_PROFILE)
 
     assert fp16.name == "swin-l-aspect-224x384-fp16"
     assert fp16.precision == "fp16"
@@ -67,7 +67,7 @@ def test_realtime_r50_uses_swin_aligned_surface_mapping_and_cleanup():
 
 
 def test_swin_l_rollback_profile_is_fully_pinned():
-    profile = resolve_profile(SWIN_L_PROFILE)
+    profile = resolve_profile(LINE_TRACKING_PROFILE)
     assert profile.model_family == "mask2former"
     assert profile.model_id == (
         "facebook/mask2former-swin-large-mapillary-vistas-semantic"
@@ -80,8 +80,8 @@ def test_swin_l_rollback_profile_is_fully_pinned():
 
 
 def test_swin_l_aspect_profile_preserves_checkpoint_and_temporal_settings():
-    baseline = resolve_profile(SWIN_L_PROFILE)
-    aspect = resolve_profile(SWIN_L_ASPECT_PROFILE)
+    baseline = resolve_profile(LINE_TRACKING_PROFILE)
+    aspect = resolve_profile(LINE_TRACKING_ASPECT_PROFILE)
     assert aspect.model_family == baseline.model_family
     assert aspect.model_id == baseline.model_id
     assert aspect.model_revision == baseline.model_revision
@@ -92,8 +92,8 @@ def test_swin_l_aspect_profile_preserves_checkpoint_and_temporal_settings():
 
 
 def test_swin_l_quality_profile_preserves_checkpoint_and_temporal_settings():
-    baseline = resolve_profile(SWIN_L_PROFILE)
-    quality = resolve_profile(SWIN_L_ASPECT_QUALITY_PROFILE)
+    baseline = resolve_profile(LINE_TRACKING_PROFILE)
+    quality = resolve_profile(LINE_TRACKING_ASPECT_QUALITY_PROFILE)
     assert quality.model_family == baseline.model_family
     assert quality.model_id == baseline.model_id
     assert quality.model_revision == baseline.model_revision
@@ -116,16 +116,16 @@ def test_profile_checkpoint_can_be_explicitly_overridden():
 
 def test_unknown_profile_is_rejected():
     with pytest.raises(ValueError, match="unsupported profile"):
-        BestSoFarConfig(profile="unknown").validate()
+        SegmentationConfig(profile="unknown").validate()
 
 
 def test_tensorrt_backend_requires_fixed_artifact_paths():
     with pytest.raises(ValueError, match="engine and manifest"):
-        BestSoFarConfig(backend="tensorrt").validate()
+        SegmentationConfig(backend="tensorrt").validate()
 
 
 def test_tensorrt_backend_accepts_pinned_fp16_swin_profile():
-    BestSoFarConfig(
+    SegmentationConfig(
         backend="tensorrt",
         tensorrt_engine_path="model.plan",
         tensorrt_manifest_path="model.plan.json",
@@ -134,8 +134,8 @@ def test_tensorrt_backend_accepts_pinned_fp16_swin_profile():
 
 def test_tensorrt_backend_rejects_fp32_profile():
     with pytest.raises(ValueError, match="FP16 Mask2Former"):
-        BestSoFarConfig(
-            profile=SWIN_L_ASPECT_PROFILE,
+        SegmentationConfig(
+            profile=LINE_TRACKING_ASPECT_PROFILE,
             backend="tensorrt",
             tensorrt_engine_path="model.plan",
             tensorrt_manifest_path="model.plan.json",
@@ -145,18 +145,18 @@ def test_tensorrt_backend_rejects_fp32_profile():
 def test_unknown_road_island_action_is_rejected():
     assert ROAD_ISLAND_ACTIONS == ("drop", "reassign-sidewalk")
     with pytest.raises(ValueError, match="road_island_action"):
-        BestSoFarConfig(road_island_action="unknown").validate()
+        SegmentationConfig(road_island_action="unknown").validate()
 
 
 def test_negative_pedestrian_area_road_expansion_is_rejected():
     with pytest.raises(ValueError, match="pedestrian_area_road_expansion"):
-        BestSoFarConfig(pedestrian_area_road_expansion=-1).validate()
+        SegmentationConfig(pedestrian_area_road_expansion=-1).validate()
 
 
 @pytest.mark.parametrize("ratio", (-0.01, 1.01))
 def test_invalid_minimum_sidewalk_ring_ratio_is_rejected(ratio):
     with pytest.raises(ValueError, match="minimum_sidewalk_ring_ratio"):
-        BestSoFarConfig(minimum_sidewalk_ring_ratio=ratio).validate()
+        SegmentationConfig(minimum_sidewalk_ring_ratio=ratio).validate()
 
 
 @pytest.mark.parametrize(
@@ -164,7 +164,7 @@ def test_invalid_minimum_sidewalk_ring_ratio_is_rejected(ratio):
     (("drop", False), ("reassign-sidewalk", True)),
 )
 def test_small_road_island_action(action, expect_sidewalk):
-    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter = object.__new__(SegmentationModel)
     segmenter.maximum_road_island_area = 16
     segmenter.minimum_sidewalk_ring_ratio = 0.10
     segmenter.road_island_action = action
@@ -184,7 +184,7 @@ def test_small_road_island_action(action, expect_sidewalk):
 
 
 def test_road_expands_only_into_adjacent_pedestrian_area():
-    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter = object.__new__(SegmentationModel)
     segmenter.pedestrian_area_road_expansion = 1
     segmenter.pedestrian_area_id = 7
     selected = np.full((7, 7), 2, dtype=np.uint8)
@@ -241,7 +241,7 @@ class _FakeMask2FormerModel:
 
 
 def test_swin_l_fp16_scores_remain_on_accelerator_in_native_dtype():
-    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter = object.__new__(SegmentationModel)
     segmenter.profile = SimpleNamespace(model_family="mask2former")
     segmenter.config = SimpleNamespace(evaluation_height=4, evaluation_width=6)
     segmenter.device = torch.device("cpu")
@@ -258,7 +258,7 @@ def test_swin_l_fp16_scores_remain_on_accelerator_in_native_dtype():
 
 
 def test_swin_l_fp32_rollback_scores_stay_float32_on_cpu():
-    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter = object.__new__(SegmentationModel)
     segmenter.profile = SimpleNamespace(model_family="mask2former")
     segmenter.config = SimpleNamespace(evaluation_height=4, evaluation_width=6)
     segmenter.device = torch.device("cpu")
@@ -274,7 +274,7 @@ def test_swin_l_fp32_rollback_scores_stay_float32_on_cpu():
 
 
 def test_temporal_history_does_not_retain_hybrid_decoder_graphs():
-    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter = object.__new__(SegmentationModel)
     segmenter.backend = "tensorrt"
     segmenter.device = torch.device("cpu")
     segmenter.temporal_alpha = 0.62
@@ -308,7 +308,7 @@ def test_temporal_history_does_not_retain_hybrid_decoder_graphs():
 def test_native_rgb_matches_bgr_masks_and_skips_unused_tensorrt_inputs(monkeypatch):
     import cv2
 
-    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter = object.__new__(SegmentationModel)
     segmenter.backend = "tensorrt"
     segmenter.device = torch.device("cpu")
     segmenter.use_fp16 = True

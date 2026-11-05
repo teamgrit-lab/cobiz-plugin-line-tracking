@@ -7,7 +7,7 @@
 | 구성 | 카메라 소유 서비스 | 입력 | 제어기가 받는 결과 |
 | --- | --- | --- | --- |
 | 360° + FCN | `fcn360-road` | USB `/dev/video91` 직접 수집 | 네 방향 원래 분류 격자·촬영 시각 |
-| 전면 + Flyvis | `front-connectome` | A2의 `SWIN_L_IMAGE_TOPIC` 직접 구독 | 학습한 전진·회전·정지 명령·촬영 시각 |
+| 전면 + Flyvis | `front-connectome` | A2의 `LINE_TRACKING_IMAGE_TOPIC` 직접 구독 | 학습한 전진·회전·정지 명령·촬영 시각 |
 | 360° + Flyvis | `connectome360` | USB `/dev/video91` 직접 수집 | 학습한 전진·회전·정지 명령·촬영 시각 |
 
 각 구성은 표의 서비스와 `actual-activate` 두 컨테이너를 사용한다.

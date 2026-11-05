@@ -14,9 +14,9 @@ from typing import Any
 from zipfile import ZIP_STORED, ZipFile
 
 import torch
-from best_so_far_runtime import (
+from segmentation_runtime import (
     DEFAULT_EVALUATION_SIZE,
-    SWIN_L_ASPECT_FP16_PROFILE,
+    LINE_TRACKING_ASPECT_FP16_PROFILE,
     resolve_profile,
 )
 from swin_l_tensorrt_model import (
@@ -430,7 +430,7 @@ def _compile_swin_stages(
         gc.collect()
         torch.cuda.empty_cache()
         print(
-            f"[swin-l-debug] compiled Swin stage {index}: "
+            f"[line-tracking] compiled Swin stage {index}: "
             f"TensorRT partitions={stage_partitions}",
             flush=True,
         )
@@ -535,7 +535,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     with lock_path.open("w", encoding="utf-8") as lock_stream:
         fcntl.flock(lock_stream, fcntl.LOCK_EX)
 
-        profile = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
+        profile = resolve_profile(LINE_TRACKING_ASPECT_FP16_PROFILE)
         checkpoint = args.checkpoint.expanduser().resolve()
         checkpoint_manifest = _read_checkpoint_manifest(checkpoint)
         if checkpoint_manifest.get("source_revision") != profile.model_revision:
@@ -675,7 +675,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 artifact_temporary.unlink(missing_ok=True)
 
     print(
-        f"SWIN_L_TENSORRT_READY artifact={output} manifest={manifest_path} "
+        f"LINE_TRACKING_TENSORRT_READY artifact={output} manifest={manifest_path} "
         f"partitions={partition_count}"
     )
     return 0

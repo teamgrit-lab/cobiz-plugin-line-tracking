@@ -24,12 +24,12 @@ from typing import Any
 import cv2
 import numpy as np
 
-from best_so_far_runtime import (
+from segmentation_runtime import (
     PROFILE_NAMES,
     R50_PROFILE,
-    SWIN_L_ASPECT_PROFILE,
-    BestSoFarConfig,
-    BestSoFarSegmenter,
+    LINE_TRACKING_ASPECT_PROFILE,
+    SegmentationConfig,
+    SegmentationModel,
 )
 from evaluate_sidewalk_road_temporal import binary_iou
 from segment_sidewalk_road import atomic_write_json, utc_now
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
         "--profiles",
         choices=PROFILE_NAMES,
         nargs=2,
-        default=(SWIN_L_ASPECT_PROFILE, R50_PROFILE),
+        default=(LINE_TRACKING_ASPECT_PROFILE, R50_PROFILE),
         metavar=("LEFT", "RIGHT"),
     )
     parser.add_argument("--start-frame", type=int, default=0)
@@ -98,7 +98,7 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     segmenters = [
-        BestSoFarSegmenter(BestSoFarConfig(profile=name, device=args.device))
+        SegmentationModel(SegmentationConfig(profile=name, device=args.device))
         for name in args.profiles
     ]
     capture = cv2.VideoCapture(str(input_path))

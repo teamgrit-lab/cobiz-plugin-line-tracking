@@ -29,13 +29,13 @@ from typing import Any
 import cv2
 import numpy as np
 import torch
-from benchmark_best_so_far import DEFAULT_TOPIC, iter_mcap_packets
-from best_so_far_runtime import (
+from benchmark_segmentation import DEFAULT_TOPIC, iter_mcap_packets
+from segmentation_runtime import (
     INFERENCE_BACKENDS,
     PROFILE_NAMES,
-    SWIN_L_ASPECT_PROFILE,
-    BestSoFarConfig,
-    BestSoFarSegmenter,
+    LINE_TRACKING_ASPECT_PROFILE,
+    SegmentationConfig,
+    SegmentationModel,
 )
 from local_path import (
     PATH_MASK_CLASSES,
@@ -154,8 +154,8 @@ def _capture(
         torch.cuda.empty_cache()
         cuda_baseline_allocated = int(torch.cuda.memory_allocated())
         cuda_baseline_reserved = int(torch.cuda.memory_reserved())
-    segmenter = BestSoFarSegmenter(
-        BestSoFarConfig(
+    segmenter = SegmentationModel(
+        SegmentationConfig(
             profile=profile,
             device=device,
             backend=backend,
@@ -370,7 +370,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--topic", default=DEFAULT_TOPIC)
     parser.add_argument(
-        "--profile", choices=PROFILE_NAMES, default=SWIN_L_ASPECT_PROFILE
+        "--profile", choices=PROFILE_NAMES, default=LINE_TRACKING_ASPECT_PROFILE
     )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--backend", choices=INFERENCE_BACKENDS, default="pytorch")

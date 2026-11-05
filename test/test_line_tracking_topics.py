@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-import swin_l_local_path_debug as debug  # noqa: E402
+import line_tracking_runtime as debug  # noqa: E402
 
 
 def test_performance_summary_reports_latency_percentiles_and_completion_rate():
@@ -40,7 +40,7 @@ def test_live_inference_rejects_invalid_rate(value):
 
 def test_task_drive_defaults(monkeypatch):
     for name in tuple(debug.ENV):
-        if name.startswith("SWIN_L_APRILTAG_"):
+        if name.startswith("LINE_TRACKING_APRILTAG_"):
             monkeypatch.delitem(debug.ENV, name)
     monkeypatch.delitem(debug.ENV, "LINE_TRACKING_DEFAULT_DURATION_SEC", raising=False)
     monkeypatch.delitem(debug.ENV, "LINE_TRACKING_MAX_DURATION_SEC", raising=False)
@@ -58,10 +58,10 @@ def test_task_drive_defaults(monkeypatch):
 
 
 def test_task_drive_apriltag_environment_and_cli(monkeypatch):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_DETECTIONS_TOPIC", "/tags")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MAX_AGE_SEC", "0.8")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC", "1.5")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_CONFIRM_MIN_HITS", "4")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_DETECTIONS_TOPIC", "/tags")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_MAX_AGE_SEC", "0.8")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_CONFIRM_WINDOW_SEC", "1.5")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_CONFIRM_MIN_HITS", "4")
     args = debug.parse_args(["task-drive"])
     assert (
         args.apriltag_detections_topic,
@@ -207,7 +207,7 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(
         debug,
-        "BestSoFarSegmenter",
+        "SegmentationModel",
         lambda _config: SimpleNamespace(
             device=debug.torch.device("cpu"),
             segment=lambda _frame, **_kwargs: SimpleNamespace(

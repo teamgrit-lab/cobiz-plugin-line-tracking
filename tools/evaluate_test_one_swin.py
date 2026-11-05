@@ -27,12 +27,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from best_so_far_runtime import (
-    SWIN_L_ASPECT_PROFILE,
-    SWIN_L_ASPECT_QUALITY_PROFILE,
-    SWIN_L_PROFILE,
-    BestSoFarConfig,
-    BestSoFarSegmenter,
+from segmentation_runtime import (
+    LINE_TRACKING_ASPECT_PROFILE,
+    LINE_TRACKING_ASPECT_QUALITY_PROFILE,
+    LINE_TRACKING_PROFILE,
+    SegmentationConfig,
+    SegmentationModel,
 )
 
 
@@ -154,8 +154,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preview-every-frames", type=int, default=0)
     parser.add_argument(
         "--profile",
-        choices=(SWIN_L_PROFILE, SWIN_L_ASPECT_PROFILE, SWIN_L_ASPECT_QUALITY_PROFILE),
-        default=SWIN_L_PROFILE,
+        choices=(LINE_TRACKING_PROFILE, LINE_TRACKING_ASPECT_PROFILE, LINE_TRACKING_ASPECT_QUALITY_PROFILE),
+        default=LINE_TRACKING_PROFILE,
     )
     parser.add_argument("--window-frames", type=int, default=8)
     parser.add_argument(
@@ -190,8 +190,8 @@ def main() -> int:
     directory = args.input_dir.expanduser().resolve()
     output = args.output_dir.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
-    segmenter = BestSoFarSegmenter(
-        BestSoFarConfig(
+    segmenter = SegmentationModel(
+        SegmentationConfig(
             profile=args.profile,
             temporal_alpha=args.temporal_alpha,
             temporal_hysteresis_margin=args.temporal_hysteresis_margin,

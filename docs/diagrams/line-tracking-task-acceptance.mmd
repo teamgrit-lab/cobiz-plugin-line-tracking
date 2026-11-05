@@ -24,7 +24,7 @@ sequenceDiagram
         N->>N: 요청 무시 — /task_state 발행 없음
     else 신규 LINE_TRACKING 작업 등록 요청
         N->>N: handle_event — 활성 작업·payload 검증<br/>selected_mask·duration_sec·제어권 해제 대기 확인
-        Note over N: selected_mask 생략 시 설정된 SWIN_L_PATH_MASK_CLASS 사용<br/>0은 차도와 인도의 합집합이며 배경은 제외
+        Note over N: selected_mask 생략 시 설정된 LINE_TRACKING_PATH_MASK_CLASS 사용<br/>0은 차도와 인도의 합집합이며 배경은 제외
         alt 다른 작업 활성·payload 오류·control_release_pending
             N-->>C: /task_state TASK_REJECTED + reason
             C-->>S: HTTP reject 보고

@@ -5,18 +5,18 @@ services:
       context: .
       dockerfile: Dockerfile.connectome
       args:
-        CONNECTOME_BASE_IMAGE: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+        CONNECTOME_BASE_IMAGE: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
     image: cobiz-plugin-line-tracking-connectome
     entrypoint: ["/entrypoint-connectome-camera.sh", "/workspace/tools/front_connectome_service.py"]
     command: ["--model", "/front-model", "--device", "cuda", "--port", "8092",
-              "--camera-topic", "${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/image_raw}"]
+              "--camera-topic", "${LINE_TRACKING_IMAGE_TOPIC:-/a2/front_camera/image_raw}"]
     network_mode: host
     runtime: nvidia
     volumes:
       - ${CONNECTUM_FRONT_MODEL_DIR:?set the copied front model package directory}:/front-model:ro
       - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
     environment:
-      CONNECTUM_FRONT_CAMERA_TOPIC: ${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/image_raw}
+      CONNECTUM_FRONT_CAMERA_TOPIC: ${LINE_TRACKING_IMAGE_TOPIC:-/a2/front_camera/image_raw}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       OMP_NUM_THREADS: "2"
@@ -35,11 +35,11 @@ services:
         # Road checks /health, identity and each inference response itself.
         condition: service_started
     environment:
-      SWIN_L_MODE: task-drive
+      LINE_TRACKING_MODE: task-drive
       # Default to Road when Cobiz omits selected_mask; explicit Sidewalk=2
       # still routes to the legacy model even if the base .env uses union=0.
-      SWIN_L_PATH_MASK_CLASS: "1"
-      SWIN_L_INFERENCE_PROCESS: "false"
+      LINE_TRACKING_PATH_MASK_CLASS: "1"
+      LINE_TRACKING_INFERENCE_PROCESS: "false"
       LINE_TRACKING_PATH_PLANNER: local
       LINE_TRACKING_ROAD_DIRECT_INPUT: "true"
       LINE_TRACKING_FRONT_CONNECTOME_URL: http://127.0.0.1:8092/v1/direct-road

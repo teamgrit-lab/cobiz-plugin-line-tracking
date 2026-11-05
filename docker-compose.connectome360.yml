@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile.connectome
       args:
-        CONNECTOME_BASE_IMAGE: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+        CONNECTOME_BASE_IMAGE: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
     image: cobiz-plugin-line-tracking-connectome360
     entrypoint: ["/opt/connectome-venv/bin/python", "/workspace/tools/connectome360_service.py"]
     command: ["--model", "/360-model", "--device", "cuda", "--port", "8093", "--direct-camera"]
@@ -32,9 +32,9 @@ services:
       connectome360:
         condition: service_started
     environment:
-      SWIN_L_MODE: task-drive
-      SWIN_L_PATH_MASK_CLASS: "1"
-      SWIN_L_INFERENCE_PROCESS: "false"
+      LINE_TRACKING_MODE: task-drive
+      LINE_TRACKING_PATH_MASK_CLASS: "1"
+      LINE_TRACKING_INFERENCE_PROCESS: "false"
       LINE_TRACKING_PATH_PLANNER: local
       LINE_TRACKING_ROAD_DIRECT_INPUT: "true"
       # Explicitly clear mutually exclusive Road backends from older setups.

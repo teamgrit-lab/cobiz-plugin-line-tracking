@@ -1,4 +1,4 @@
-ARG CONNECTOME_BASE_IMAGE=cobiz-plugin-line-tracking-swin-l-debug
+ARG CONNECTOME_BASE_IMAGE=cobiz-plugin-line-tracking-runtime
 FROM ${CONNECTOME_BASE_IMAGE}
 SHELL ["/bin/bash", "-c"]
 # Reuse CUDA PyTorch from the tracking image, constrain its exact versions so

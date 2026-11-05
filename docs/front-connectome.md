@@ -99,14 +99,14 @@ Jetson 저장소의 `.env`에서 다음 항목을 추가하거나 같은 이름�
 COMPOSE_FILE=docker-compose.yml:docker-compose.front-connectome.yml
 CONNECTUM_FRONT_MODEL_DIR=./models/front-road-v2-road-only-20261027
 CONNECTUM_FRONT_SHA256=43cddf61ba3781b7d241f274d9a6259b1409c0541d650dd3d31aa91b35cf6f88
-SWIN_L_IMAGE_TOPIC=/a2/front_camera/res_360p/image_raw
-SWIN_L_BACKEND=pytorch
-SWIN_L_TRT_AUTO_BUILD=false
+LINE_TRACKING_IMAGE_TOPIC=/a2/front_camera/res_360p/image_raw
+LINE_TRACKING_BACKEND=pytorch
+LINE_TRACKING_TRT_AUTO_BUILD=false
 ```
 
 위 `COMPOSE_FILE`은 기본 파일과 전면 커넥톰 파일을 명시적으로 선택합니다.
 장비별 값은 `.env`에 설정합니다. 지정한 모델 폴더를 추론 컨테이너의
-`/front-model`에 읽기 전용으로 연결합니다. 실제 구독 토픽은 `SWIN_L_IMAGE_TOPIC`이
+`/front-model`에 읽기 전용으로 연결합니다. 실제 구독 토픽은 `LINE_TRACKING_IMAGE_TOPIC`이
 결정합니다. `actual-activate`의 기본 토픽은 `/a2/front_camera/image_raw`이므로
 360p 입력을 사용하려면 위 값을 명시합니다. 토픽의 `360p`는 해상도이며 360도
 파노라마 입력을 의미하지 않습니다.
@@ -141,7 +141,7 @@ Cobiz `LINE_TRACKING` 작업의 `payload.selected_mask`로 모델과 제어기�
 | selected_mask | 인식 | 속도·회전 제어 |
 | --- | --- | --- |
 | `1` (Road) | 전면 커넥톰 | 학습된 행동 출력층 |
-| `2` (Sidewalk) | 기존 `SWIN_L_PROFILE` 모델·체크포인트 | 기존 인도 경로 추종·제어기 |
+| `2` (Sidewalk) | 기존 `LINE_TRACKING_PROFILE` 모델·체크포인트 | 기존 인도 경로 추종·제어기 |
 
 이 구성에서는 혼합 모드 `0`을 거부합니다. 전면 Compose 설정은 기본 모드를 `1`로
 지정하므로 값이 생략되면 Road를 사용합니다. 명시적인 `1` 또는 `2`를 보내면 작업마다 자동으로 전환되므로
@@ -164,7 +164,7 @@ Sidewalk는 시작할 수 있습니다. 전면 모델 응답 오류·해시 불�
 확인해야 합니다. 이 전환 기능의 ROS 테스트는 모의 센서/모델을 사용하며 실기 주행
 성공을 뜻하지 않습니다.
 
-전면 서비스가 `SWIN_L_IMAGE_TOPIC`을 직접 구독하고 내부에서 480×270으로 변환합니다.
+전면 서비스가 `LINE_TRACKING_IMAGE_TOPIC`을 직접 구독하고 내부에서 480×270으로 변환합니다.
 카메라는 A2가 제공하는 ROS 입력이므로 이 최초 ROS 전달은 유지하며,
 `actual-activate`를 거치는 영상의 PNG·HTTP 재전송은 제거했습니다.
 제어기는 `http://127.0.0.1:8092/v1/direct-road`에서 명령·원본 촬영 시각만 받습니다.

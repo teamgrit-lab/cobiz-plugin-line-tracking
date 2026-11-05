@@ -13,7 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'tools'))
 from direct_camera_client import DirectCameraClient
 from direct_camera_service import DirectCameraService, SCHEMA, make_server
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 from test_connectome360_runtime import PIN, details
 
 
@@ -180,7 +180,7 @@ def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend)
     def sidewalk(frame, **kwargs):
         side_calls.append(kwargs['path_mask_class'])
         return NS(selected_mask=np.full((360,640),2,np.uint8), inference_seconds=.01)
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _: NS(
+    monkeypatch.setattr(debug, 'SegmentationModel', lambda _: NS(
         device=NS(type='cuda'), reset=lambda: None, segment=sidewalk))
     def infer(stream, not_before_ns, after_ns, max_age, now_ns):
         road_calls.append((stream, not_before_ns, after_ns))

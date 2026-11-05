@@ -7,9 +7,9 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import torch
-from best_so_far_runtime import (
+from segmentation_runtime import (
     DEFAULT_EVALUATION_SIZE,
-    SWIN_L_ASPECT_FP16_PROFILE,
+    LINE_TRACKING_ASPECT_FP16_PROFILE,
     resolve_profile,
 )
 from tensorrt_backend import TensorRTSemanticBackend
@@ -24,7 +24,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    profile = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
+    profile = resolve_profile(LINE_TRACKING_ASPECT_FP16_PROFILE)
     backend = TensorRTSemanticBackend(
         args.engine.expanduser().resolve(),
         args.manifest.expanduser().resolve(),
@@ -36,7 +36,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     metadata = backend.metadata()
     print(
-        "SWIN_L_TENSORRT_VALID "
+        "LINE_TRACKING_TENSORRT_VALID "
         f"artifact={metadata['engine']} sha256={metadata['engine_sha256']} "
         f"backend={metadata['backend']}"
     )

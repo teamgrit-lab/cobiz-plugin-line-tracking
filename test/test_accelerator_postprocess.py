@@ -9,7 +9,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from best_so_far_runtime import BestSoFarSegmenter  # noqa: E402
+from segmentation_runtime import SegmentationModel  # noqa: E402
 
 
 @pytest.fixture(params=["cpu", "cuda", "mps"])
@@ -23,7 +23,7 @@ def device(request):
 
 
 def make_segmenter(device, *, margin=0.07, expansion=0, action="drop"):
-    segmenter = object.__new__(BestSoFarSegmenter)
+    segmenter = object.__new__(SegmentationModel)
     segmenter.backend = "tensorrt"
     segmenter.device = device
     segmenter.temporal_alpha = 0.62

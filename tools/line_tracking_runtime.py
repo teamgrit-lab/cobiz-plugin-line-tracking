@@ -53,16 +53,16 @@ from apriltag_stop import (
     gate_detections,
     parse_tag_ids,
 )
-from best_so_far_runtime import (
+from segmentation_runtime import (
     DEFAULT_EVALUATION_SIZE,
     FINETUNED_PROFILE,
     INFERENCE_BACKENDS,
     PROFILE_NAMES,
     R50_PROFILE,
     R50_PROFILES,
-    SWIN_L_ASPECT_FP16_PROFILE,
-    BestSoFarConfig,
-    BestSoFarSegmenter,
+    LINE_TRACKING_ASPECT_FP16_PROFILE,
+    SegmentationConfig,
+    SegmentationModel,
     resolve_profile,
 )
 from cobiz_line_tracking_task import (
@@ -101,7 +101,7 @@ from fcn360_road import FcnRoadPlanner, mask_topic, read_masks, side_recovery_ya
 from surface_segmenter import FrontRoadInferenceError, SurfaceSegmenter
 from waypoint_guidance import WaypointGuide
 from r50_checkpoint import validate_checkpoint
-from swin_l_drive_control import (
+from drive_control import (
     DRIVE_STOP_CHECKS,
     MAX_PATH_UNAVAILABLE_INFERENCES,
     MAX_PATH_RECOVERY_INFERENCES,
@@ -121,15 +121,15 @@ from unitree_sport_api import (
 def _segmenter_from_args(args):
     if getattr(args, 'connectome360_url', ''):
         from connectome360_client import Connectome360Segmenter
-        return SurfaceSegmenter(BestSoFarSegmenter(_runtime_config(args)),
+        return SurfaceSegmenter(SegmentationModel(_runtime_config(args)),
             lambda: Connectome360Segmenter(args.connectome360_url,
                 args.connectome360_sha256, args.connectome360_timeout_sec))
     if getattr(args, 'front_connectome_url', ''):
         from front_connectome_client import FrontConnectomeSegmenter
-        return SurfaceSegmenter(BestSoFarSegmenter(_runtime_config(args)),
+        return SurfaceSegmenter(SegmentationModel(_runtime_config(args)),
             lambda: FrontConnectomeSegmenter(args.front_connectome_url,
                 args.front_connectome_sha256, args.front_connectome_timeout_sec))
-    return BestSoFarSegmenter(_runtime_config(args))
+    return SegmentationModel(_runtime_config(args))
 
 
 def uses_learned_road_policy(args, mask_class):
@@ -153,8 +153,8 @@ def direct_camera_config(args):
 DEFAULT_IMAGE_TOPIC = "/a2/front_camera/res_360p/image_raw"
 # Published by apriltag_camera_relay, paired with each detector frame.
 DEFAULT_APRILTAG_CAMERA_INFO_TOPIC = "/line_tracking/apriltag/camera_info"
-DEFAULT_LOCAL_PATH_TOPIC = "/line_tracking/swin_l/local_path"
-DEFAULT_METRICS_TOPIC = "/line_tracking/swin_l/metrics"
+DEFAULT_LOCAL_PATH_TOPIC = "/line_tracking/local_path"
+DEFAULT_METRICS_TOPIC = "/line_tracking/metrics"
 PERFORMANCE_WARMUP_FRAMES = 10
 PERFORMANCE_SAMPLE_WINDOW = 512
 AUTOMATIC_STOP_CHECKS = (*DRIVE_STOP_CHECKS, "apriltag", *TASK_STOP_CHECKS)
@@ -332,9 +332,9 @@ def _parse_polygon(value: str) -> tuple[float, ...]:
             float(item.strip()) for item in value.replace(";", ",").split(",")
         )
     except ValueError as error:
-        raise ValueError("SWIN_L_ROI_POLYGON must be comma-separated floats") from error
+        raise ValueError("LINE_TRACKING_ROI_POLYGON must be comma-separated floats") from error
     if len(values) != 8:
-        raise ValueError("SWIN_L_ROI_POLYGON must contain eight values")
+        raise ValueError("LINE_TRACKING_ROI_POLYGON must contain eight values")
     return values
 
 
@@ -344,7 +344,7 @@ def _parse_exclusion_polygon(value: str) -> tuple[float, ...]:
     try:
         return tuple(float(item.strip()) for item in value.replace(';', ',').split(','))
     except ValueError as error:
-        raise ValueError('SWIN_L_ROAD_ROI_EXCLUSION_POLYGON must be comma-separated floats') from error
+        raise ValueError('LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON must be comma-separated floats') from error
 
 
 def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
@@ -352,7 +352,7 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         args.roi_polygon
         if args.roi_polygon is not None
         else _parse_polygon(
-            _env("SWIN_L_ROI_POLYGON", ",".join(map(str, DEFAULT_ROI_POLYGON)))
+            _env("LINE_TRACKING_ROI_POLYGON", ",".join(map(str, DEFAULT_ROI_POLYGON)))
         )
     )
     return LocalPathConfig(
@@ -362,10 +362,10 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
         search_half_width_m=args.search_half_width_m,
         roi_polygon=polygon,
         road_roi_polygon=tuple(args.road_roi_polygon) if args.road_roi_polygon is not None else _parse_polygon(
-            _env("SWIN_L_ROAD_ROI_POLYGON", ",".join(map(str, DEFAULT_ROAD_ROI_POLYGON)))),
+            _env("LINE_TRACKING_ROAD_ROI_POLYGON", ",".join(map(str, DEFAULT_ROAD_ROI_POLYGON)))),
         road_roi_exclusion_polygon=(tuple(args.road_roi_exclusion_polygon)
             if args.road_roi_exclusion_polygon is not None else _parse_exclusion_polygon(
-                _env('SWIN_L_ROAD_ROI_EXCLUSION_POLYGON',
+                _env('LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON',
                      ','.join(map(str, DEFAULT_ROAD_ROI_EXCLUSION_POLYGON))))),
         path_points=args.path_points,
         bev_width_px=args.bev_width_px,
@@ -404,8 +404,8 @@ def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
     return config
 
 
-def _runtime_config(args: argparse.Namespace) -> BestSoFarConfig:
-    return BestSoFarConfig(
+def _runtime_config(args: argparse.Namespace) -> SegmentationConfig:
+    return SegmentationConfig(
         profile=args.profile,
         model_id=args.model_id,
         model_revision=args.model_revision,
@@ -761,14 +761,14 @@ def run_mcap(args):
             "start_offset_sec": args.start_offset, "output_fps": args.output_fps,
             "inference_policy": "every_frame" if args.unrestricted_path_mode or not with_path else "bag_time_rate",
             "requested_inference_hz": args.inference_hz if with_path and not args.unrestricted_path_mode else None,
-            "image_topic": args.image_topic, "frames_written": count, "swin_l_updates": updates,
+            "image_topic": args.image_topic, "frames_written": count, "segmentation_updates": updates,
             "output": str(args.output.expanduser().resolve()), "model": segmenter.metadata(),
             "path_mask_class": args.path_mask_class if with_path else None,
             "local_path": asdict(local_config) if local_config else None,
             "path_planner": planner.metrics if planner else {"backend": "local"}}
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2)+"\n")
-    print(f"MCAP_COMPLETE frames={count} swin_l_updates={updates} output={args.output}")
+    print(f"MCAP_COMPLETE frames={count} segmentation_updates={updates} output={args.output}")
     return 0
 
 
@@ -840,10 +840,10 @@ def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
     """Reject task-driven control unless its model and calibration are explicit."""
 
     # The original model remains active for Sidewalk, including its pin checks.
-    if args.profile not in (SWIN_L_ASPECT_FP16_PROFILE, *R50_PROFILES):
+    if args.profile not in (LINE_TRACKING_ASPECT_FP16_PROFILE, *R50_PROFILES):
         raise ValueError(
             "task-drive mode requires a pinned FP16 deployment profile: "
-            f"{SWIN_L_ASPECT_FP16_PROFILE}, {R50_PROFILE}, or {FINETUNED_PROFILE}"
+            f"{LINE_TRACKING_ASPECT_FP16_PROFILE}, {R50_PROFILE}, or {FINETUNED_PROFILE}"
         )
     pinned = resolve_profile(args.profile)
     if args.profile == FINETUNED_PROFILE:
@@ -974,8 +974,8 @@ def run_ros2(args: argparse.Namespace) -> int:
     class DebugNode(Node):
         def __init__(self) -> None:
             super().__init__(
-                "swin_l_navigation_worker" if navigation_mode else
-                "swin_l_task_drive" if task_mode else "swin_l_local_path_debug"
+                "line_tracking_navigation_worker" if navigation_mode else
+                "line_tracking_task_drive" if task_mode else "line_tracking_runtime"
             )
             if (
                 task_mode
@@ -1172,7 +1172,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             )
             if args.unrestricted_path_mode:
                 self.get_logger().warning(
-                    "SWIN_L_UNRESTRICTED_PATH_MODE is enabled: path valid-ratio "
+                    "LINE_TRACKING_UNRESTRICTED_PATH_MODE is enabled: path valid-ratio "
                     "and temporal smoothing are bypassed; explicit drive stop checks "
                     "still apply and "
                     "inference rate limiting remains enabled"
@@ -2495,7 +2495,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if rclpy.ok():
                 rclpy.shutdown()
 
-    thread = threading.Thread(target=worker, name="swin-l-inference", daemon=True)
+    thread = threading.Thread(target=worker, name="line-tracking-inference", daemon=True)
     thread.start()
     try:
         rclpy.spin(node)
@@ -2549,134 +2549,134 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=_env_float('LINE_TRACKING_ROAD_BUILDING_COST_WEIGHT', 2.))
     parser.add_argument('--road-building-distance-m', type=float,
         default=_env_float('LINE_TRACKING_ROAD_BUILDING_DISTANCE_M', 2.))
-    parser.add_argument("--path-frame-id", default=_env("SWIN_L_PATH_FRAME_ID", "base_link"))
+    parser.add_argument("--path-frame-id", default=_env("LINE_TRACKING_PATH_FRAME_ID", "base_link"))
     parser.add_argument("--robot-half-width-m", type=float, default=_env_float("LINE_TRACKING_ROBOT_HALF_WIDTH_M", .30))
     parser.add_argument("--path-margin-m", type=float, default=_env_float("LINE_TRACKING_PATH_MARGIN_M", .15))
     parser.add_argument(
         "--profile",
         choices=PROFILE_NAMES,
-        default=_env("SWIN_L_PROFILE", SWIN_L_ASPECT_FP16_PROFILE),
+        default=_env("LINE_TRACKING_PROFILE", LINE_TRACKING_ASPECT_FP16_PROFILE),
     )
-    parser.add_argument("--model-id", default=_env("SWIN_L_MODEL_ID", "") or None)
+    parser.add_argument("--model-id", default=_env("LINE_TRACKING_MODEL_ID", "") or None)
     parser.add_argument(
-        "--model-revision", default=_env("SWIN_L_MODEL_REVISION", "") or None
+        "--model-revision", default=_env("LINE_TRACKING_MODEL_REVISION", "") or None
     )
     parser.add_argument(
         "--checkpoint-sha256",
         dest="checkpoint_manifest_sha256",
-        default=_env("SWIN_L_CHECKPOINT_SHA256", "") or None,
+        default=_env("LINE_TRACKING_CHECKPOINT_SHA256", "") or None,
         help="Local R50 checkpoint manifest SHA-256; required for task-drive",
     )
-    parser.add_argument("--device", default=_env("SWIN_L_DEVICE", "auto"))
+    parser.add_argument("--device", default=_env("LINE_TRACKING_DEVICE", "auto"))
     parser.add_argument('--cuda-graph', action=argparse.BooleanOptionalAction,
-                        default=_env_bool('SWIN_L_CUDA_GRAPH', False))
-    parser.add_argument('--telemetry-hz', type=float, default=_env_float('SWIN_L_TELEMETRY_HZ', 0.),
+                        default=_env_bool('LINE_TRACKING_CUDA_GRAPH', False))
+    parser.add_argument('--telemetry-hz', type=float, default=_env_float('LINE_TRACKING_TELEMETRY_HZ', 0.),
                         help='Path/metrics publication rate; 0 follows the command timer')
     parser.add_argument('--inference-process', action=argparse.BooleanOptionalAction,
-                        default=_env_bool('SWIN_L_INFERENCE_PROCESS', False))
+                        default=_env_bool('LINE_TRACKING_INFERENCE_PROCESS', False))
     parser.add_argument(
         "--backend",
         choices=INFERENCE_BACKENDS,
-        default=_env("SWIN_L_BACKEND", "pytorch"),
+        default=_env("LINE_TRACKING_BACKEND", "pytorch"),
     )
     parser.add_argument(
         "--tensorrt-engine",
-        default=_env("SWIN_L_TRT_ENGINE", "") or None,
+        default=_env("LINE_TRACKING_TRT_ENGINE", "") or None,
     )
     parser.add_argument(
         "--tensorrt-manifest",
-        default=_env("SWIN_L_TRT_MANIFEST", "") or None,
+        default=_env("LINE_TRACKING_TRT_MANIFEST", "") or None,
     )
     parser.add_argument(
         "--allow-backend-fallback",
         action=argparse.BooleanOptionalAction,
-        default=_env_bool("SWIN_L_ALLOW_BACKEND_FALLBACK", False),
+        default=_env_bool("LINE_TRACKING_ALLOW_BACKEND_FALLBACK", False),
     )
     parser.add_argument(
         "--evaluation-size",
         type=int,
         nargs=2,
         default=(
-            _env_int("SWIN_L_EVALUATION_HEIGHT", DEFAULT_EVALUATION_SIZE[0]),
-            _env_int("SWIN_L_EVALUATION_WIDTH", DEFAULT_EVALUATION_SIZE[1]),
+            _env_int("LINE_TRACKING_EVALUATION_HEIGHT", DEFAULT_EVALUATION_SIZE[0]),
+            _env_int("LINE_TRACKING_EVALUATION_WIDTH", DEFAULT_EVALUATION_SIZE[1]),
         ),
         metavar=("HEIGHT", "WIDTH"),
     )
     parser.add_argument(
-        "--image-topic", default=_env("SWIN_L_IMAGE_TOPIC", DEFAULT_IMAGE_TOPIC)
+        "--image-topic", default=_env("LINE_TRACKING_IMAGE_TOPIC", DEFAULT_IMAGE_TOPIC)
     )
     parser.add_argument(
         "--path-mask-class",
         type=int,
         choices=tuple(PATH_MASK_CLASSES),
-        default=_env("SWIN_L_PATH_MASK_CLASS", "2"),
-        help="0=road or sidewalk, 1=road, 2=sidewalk (default from SWIN_L_PATH_MASK_CLASS)",
+        default=_env("LINE_TRACKING_PATH_MASK_CLASS", "2"),
+        help="0=road or sidewalk, 1=road, 2=sidewalk (default from LINE_TRACKING_PATH_MASK_CLASS)",
     )
     parser.add_argument(
         "--near-distance-m",
         type=float,
-        default=_env_float("SWIN_L_NEAR_DISTANCE_M", 3.0),
+        default=_env_float("LINE_TRACKING_NEAR_DISTANCE_M", 3.0),
     )
     parser.add_argument(
-        "--far-distance-m", type=float, default=_env_float("SWIN_L_FAR_DISTANCE_M", 8.0)
+        "--far-distance-m", type=float, default=_env_float("LINE_TRACKING_FAR_DISTANCE_M", 8.0)
     )
     parser.add_argument(
         "--ground-half-width-m",
         type=float,
-        default=_env_float("SWIN_L_GROUND_HALF_WIDTH_M", 4.0),
+        default=_env_float("LINE_TRACKING_GROUND_HALF_WIDTH_M", 4.0),
     )
     parser.add_argument(
         "--search-half-width-m",
         type=float,
-        default=_env_float("SWIN_L_SEARCH_HALF_WIDTH_M", 3.5),
+        default=_env_float("LINE_TRACKING_SEARCH_HALF_WIDTH_M", 3.5),
     )
     parser.add_argument(
-        "--path-points", type=int, default=_env_int("SWIN_L_PATH_POINTS", 20)
+        "--path-points", type=int, default=_env_int("LINE_TRACKING_PATH_POINTS", 20)
     )
     parser.add_argument(
-        "--bev-width-px", type=int, default=_env_int("SWIN_L_BEV_WIDTH_PX", 280)
+        "--bev-width-px", type=int, default=_env_int("LINE_TRACKING_BEV_WIDTH_PX", 280)
     )
     parser.add_argument(
-        "--bev-height-px", type=int, default=_env_int("SWIN_L_BEV_HEIGHT_PX", 160)
+        "--bev-height-px", type=int, default=_env_int("LINE_TRACKING_BEV_HEIGHT_PX", 160)
     )
     parser.add_argument(
         "--min-valid-ratio",
         type=float,
-        default=_env_float("SWIN_L_MIN_VALID_RATIO", 0.35),
+        default=_env_float("LINE_TRACKING_MIN_VALID_RATIO", 0.35),
     )
     parser.add_argument(
         "--min-sidewalk-width-m",
         type=float,
-        default=_env_float("SWIN_L_MIN_SIDEWALK_WIDTH_M", 0.12),
+        default=_env_float("LINE_TRACKING_MIN_SIDEWALK_WIDTH_M", 0.12),
     )
     parser.add_argument(
-        "--close-kernel-px", type=int, default=_env_int("SWIN_L_CLOSE_KERNEL_PX", 5)
+        "--close-kernel-px", type=int, default=_env_int("LINE_TRACKING_CLOSE_KERNEL_PX", 5)
     )
     parser.add_argument(
         "--smoothing-time-constant-sec",
         type=float,
-        default=_env_float("SWIN_L_SMOOTHING_TIME_CONSTANT_SEC", 0.80),
+        default=_env_float("LINE_TRACKING_SMOOTHING_TIME_CONSTANT_SEC", 0.80),
     )
     parser.add_argument(
         "--max-lateral-update-m",
         type=float,
-        default=_env_float("SWIN_L_MAX_LATERAL_UPDATE_M", 0.35),
+        default=_env_float("LINE_TRACKING_MAX_LATERAL_UPDATE_M", 0.35),
     )
     parser.add_argument(
-        "--path-hold-sec", type=float, default=_env_float("SWIN_L_PATH_HOLD_SEC", 0.90)
+        "--path-hold-sec", type=float, default=_env_float("LINE_TRACKING_PATH_HOLD_SEC", 0.90)
     )
     parser.add_argument(
         "--path-duration-sec",
         type=float,
-        default=_env_float("SWIN_L_PATH_DURATION_SEC", 1.50),
+        default=_env_float("LINE_TRACKING_PATH_DURATION_SEC", 1.50),
     )
     parser.add_argument(
-        "--inference-hz", type=float, default=_env_float("SWIN_L_INFERENCE_HZ", 4.0)
+        "--inference-hz", type=float, default=_env_float("LINE_TRACKING_INFERENCE_HZ", 4.0)
     )
     parser.add_argument(
         "--unrestricted-path-mode",
         action=argparse.BooleanOptionalAction,
-        default=_env_bool("SWIN_L_UNRESTRICTED_PATH_MODE", True),
+        default=_env_bool("LINE_TRACKING_UNRESTRICTED_PATH_MODE", True),
         help=(
             "bypass path valid-ratio and temporal smoothing "
             "restrictions; live inference still obeys --inference-hz"
@@ -2684,27 +2684,27 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--branch-preference", choices=("center", "left", "right"),
-        default=_env("SWIN_L_BRANCH_PREFERENCE", "right"),
+        default=_env("LINE_TRACKING_BRANCH_PREFERENCE", "right"),
         help="prefer a confirmed connected left/right fork; center preserves legacy extraction",
     )
     parser.add_argument(
         "--branch-min-width-m", type=float,
-        default=_env_float("SWIN_L_BRANCH_MIN_WIDTH_M", 0.60),
+        default=_env_float("LINE_TRACKING_BRANCH_MIN_WIDTH_M", 0.60),
     )
     parser.add_argument(
         "--branch-margin-m", type=float,
-        default=_env_float("SWIN_L_BRANCH_MARGIN_M", 0.10),
+        default=_env_float("LINE_TRACKING_BRANCH_MARGIN_M", 0.10),
     )
     parser.add_argument(
         "--branch-confirm-frames", type=int,
-        default=_env_int("SWIN_L_BRANCH_CONFIRM_FRAMES", 2),
+        default=_env_int("LINE_TRACKING_BRANCH_CONFIRM_FRAMES", 2),
     )
     parser.add_argument(
         "--branch-hold-sec", type=float,
-        default=_env_float("SWIN_L_BRANCH_HOLD_SEC", 1.50),
+        default=_env_float("LINE_TRACKING_BRANCH_HOLD_SEC", 1.50),
     )
     parser.add_argument(
-        "--output-fps", type=float, default=_env_float("SWIN_L_OUTPUT_FPS", 20.0)
+        "--output-fps", type=float, default=_env_float("LINE_TRACKING_OUTPUT_FPS", 20.0)
     )
     parser.add_argument(
         "--roi-polygon",
@@ -2751,19 +2751,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         _add_common_arguments(live)
         live.add_argument(
             "--local-path-topic",
-            default=_env("SWIN_L_LOCAL_PATH_TOPIC", DEFAULT_LOCAL_PATH_TOPIC),
+            default=_env("LINE_TRACKING_LOCAL_PATH_TOPIC", DEFAULT_LOCAL_PATH_TOPIC),
         )
         live.add_argument(
             "--metrics-topic",
-            default=_env("SWIN_L_METRICS_TOPIC", DEFAULT_METRICS_TOPIC),
+            default=_env("LINE_TRACKING_METRICS_TOPIC", DEFAULT_METRICS_TOPIC),
         )
         live.add_argument(
-            "--output-hz", type=float, default=_env_float("SWIN_L_OUTPUT_HZ", 10.0)
+            "--output-hz", type=float, default=_env_float("LINE_TRACKING_OUTPUT_HZ", 10.0)
         )
         live.add_argument(
             "--reliability",
             choices=("best_effort", "reliable"),
-            default=_env("SWIN_L_INPUT_RELIABILITY", "best_effort"),
+            default=_env("LINE_TRACKING_INPUT_RELIABILITY", "best_effort"),
         )
         if mode in ("task-drive", "navigation-worker"):
             for check in AUTOMATIC_STOP_CHECKS:
@@ -2775,48 +2775,48 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 )
             live.add_argument(
                 "--apriltag-detections-topic",
-                default=_env("SWIN_L_APRILTAG_DETECTIONS_TOPIC", "/detections"),
+                default=_env("LINE_TRACKING_APRILTAG_DETECTIONS_TOPIC", "/detections"),
             )
             live.add_argument(
                 "--apriltag-max-age-sec",
                 type=float,
-                default=_env_float("SWIN_L_APRILTAG_MAX_AGE_SEC", 1.0),
+                default=_env_float("LINE_TRACKING_APRILTAG_MAX_AGE_SEC", 1.0),
             )
             live.add_argument(
                 "--apriltag-confirm-window-sec",
                 type=float,
-                default=_env_float("SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC", 1.0),
+                default=_env_float("LINE_TRACKING_APRILTAG_CONFIRM_WINDOW_SEC", 1.0),
             )
             live.add_argument(
                 "--apriltag-confirm-min-hits",
                 type=int,
-                default=_env_int("SWIN_L_APRILTAG_CONFIRM_MIN_HITS", 3),
+                default=_env_int("LINE_TRACKING_APRILTAG_CONFIRM_MIN_HITS", 3),
             )
             live.add_argument(
                 "--apriltag-max-range-m",
                 type=float,
-                default=_env_float("SWIN_L_APRILTAG_MAX_RANGE_M", 3.0),
+                default=_env_float("LINE_TRACKING_APRILTAG_MAX_RANGE_M", 3.0),
                 help="Only tags within this camera range stop tracking (0 disables)",
             )
             live.add_argument(
                 "--apriltag-min-decision-margin",
                 type=float,
-                default=_env_float("SWIN_L_APRILTAG_MIN_DECISION_MARGIN", 15.0),
+                default=_env_float("LINE_TRACKING_APRILTAG_MIN_DECISION_MARGIN", 15.0),
             )
             live.add_argument(
                 "--apriltag-allowed-ids",
-                default=_env("SWIN_L_APRILTAG_ALLOWED_IDS", ""),
+                default=_env("LINE_TRACKING_APRILTAG_ALLOWED_IDS", ""),
                 help='Ids that may stop tracking, e.g. "0-30"; blank means any',
             )
             live.add_argument(
                 "--apriltag-tag-size-m",
                 type=float,
-                default=_env_float("SWIN_L_APRILTAG_TAG_SIZE_M", 0.167),
+                default=_env_float("LINE_TRACKING_APRILTAG_TAG_SIZE_M", 0.167),
             )
             live.add_argument(
                 "--apriltag-camera-info-topic",
                 default=_env(
-                    "SWIN_L_APRILTAG_RANGE_CAMERA_INFO_TOPIC",
+                    "LINE_TRACKING_APRILTAG_RANGE_CAMERA_INFO_TOPIC",
                     DEFAULT_APRILTAG_CAMERA_INFO_TOPIC,
                 ),
             )
@@ -2941,7 +2941,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         )
     if args.path_mask_class not in PATH_MASK_CLASSES:
         parser.error(
-            "SWIN_L_PATH_MASK_CLASS must be 0 (road or sidewalk), "
+            "LINE_TRACKING_PATH_MASK_CLASS must be 0 (road or sidewalk), "
             "1 (road), or 2 (sidewalk)"
         )
     if not all(

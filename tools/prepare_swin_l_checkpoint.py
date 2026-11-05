@@ -10,13 +10,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from best_so_far_runtime import SWIN_L_ASPECT_FP16_PROFILE, resolve_profile
+from segmentation_runtime import LINE_TRACKING_ASPECT_FP16_PROFILE, resolve_profile
 from tensorrt_backend import sha256_file
 from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    pinned = resolve_profile(SWIN_L_ASPECT_FP16_PROFILE)
+    pinned = resolve_profile(LINE_TRACKING_ASPECT_FP16_PROFILE)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model-id", default=pinned.model_id)
@@ -80,7 +80,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest_path = output_dir / "checkpoint-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(
-        f"SWIN_L_CHECKPOINT_READY path={output_dir} sha256={manifest['safetensors_sha256']}"
+        f"LINE_TRACKING_CHECKPOINT_READY path={output_dir} sha256={manifest['safetensors_sha256']}"
     )
     return 0
 

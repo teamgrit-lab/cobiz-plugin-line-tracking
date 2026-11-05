@@ -27,7 +27,7 @@ from dangjin_camera import panorama_mask
 from validate_fcn_resolution_video import COLORS
 
 MODELS = ("fcn512_finetuned", "fcn1024_finetuned_compat")
-CODE = ("dangjin_fcn.py", "fcn360_road.py", "local_path.py", "swin_l_drive_control.py")
+CODE = ("dangjin_fcn.py", "fcn360_road.py", "local_path.py", "drive_control.py")
 
 
 def sha(path):

@@ -25,7 +25,7 @@ import numpy as np
 from connectome_server import PlannerService, MAX_BODY, decode_image
 from connectome_surface import SurfaceArea, PlannerConfig
 from local_path import LocalPathConfig
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 from dangjin_camera import panorama_mask
 from surround_camera import load_profile,profile_sha256
 from dangjin_sensor_faults import SensorFaults,fault_config

@@ -15,34 +15,34 @@ INFO = "/line_tracking/apriltag/camera_info"
 
 
 def detector_enabled(env):
-    value = env.get("SWIN_L_APRILTAG_DETECTOR_ENABLED", "true").strip().lower()
+    value = env.get("LINE_TRACKING_APRILTAG_DETECTOR_ENABLED", "true").strip().lower()
     if value not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
-        raise ValueError("SWIN_L_APRILTAG_DETECTOR_ENABLED must be true or false")
+        raise ValueError("LINE_TRACKING_APRILTAG_DETECTOR_ENABLED must be true or false")
     return value in ("true", "1", "yes", "on")
 
 
 def child_commands(mode, env):
-    tracking = ("line tracking", [sys.executable, str(ROOT / "tools/swin_l_local_path_debug.py"), mode])
-    shared_image = env.get("SWIN_L_SHARED_CAMERA_IMAGE_TOPIC", "").strip()
-    shared_info = env.get("SWIN_L_SHARED_CAMERA_INFO_TOPIC", "").strip()
+    tracking = ("line tracking", [sys.executable, str(ROOT / "tools/line_tracking_runtime.py"), mode])
+    shared_image = env.get("LINE_TRACKING_SHARED_CAMERA_IMAGE_TOPIC", "").strip()
+    shared_info = env.get("LINE_TRACKING_SHARED_CAMERA_INFO_TOPIC", "").strip()
     if not detector_enabled(env):
         if shared_image or shared_info:
             raise ValueError("shared camera requires the AprilTag camera relay to be enabled")
         return [tracking]
-    image = (env.get("SWIN_L_APRILTAG_IMAGE_TOPIC", "").strip()
-             or env.get("SWIN_L_IMAGE_TOPIC", "").strip()
+    image = (env.get("LINE_TRACKING_APRILTAG_IMAGE_TOPIC", "").strip()
+             or env.get("LINE_TRACKING_IMAGE_TOPIC", "").strip()
              or "/a2/front_camera/res_720p/image_raw")
-    info = (env.get("SWIN_L_APRILTAG_CAMERA_INFO_TOPIC", "").strip()
+    info = (env.get("LINE_TRACKING_APRILTAG_CAMERA_INFO_TOPIC", "").strip()
             or image.rsplit("/", 1)[0] + "/camera_info")
     if ((shared_image and shared_image in (image, IMAGE))
             or (shared_info and shared_info in (info, INFO))):
         raise ValueError("shared camera outputs must differ from source and AprilTag topics")
-    topic = env.get("SWIN_L_APRILTAG_DETECTIONS_TOPIC", "/detections").strip()
-    family = env.get("SWIN_L_APRILTAG_FAMILY", "36h11").strip()
-    threads = int(env.get("SWIN_L_APRILTAG_THREADS", "2"))
-    decimate = float(env.get("SWIN_L_APRILTAG_DECIMATE", "1.0"))
-    max_hz = float(env.get("SWIN_L_APRILTAG_MAX_HZ", "10.0"))
-    hamming = int(env.get("SWIN_L_APRILTAG_MAX_HAMMING", "0"))
+    topic = env.get("LINE_TRACKING_APRILTAG_DETECTIONS_TOPIC", "/detections").strip()
+    family = env.get("LINE_TRACKING_APRILTAG_FAMILY", "36h11").strip()
+    threads = int(env.get("LINE_TRACKING_APRILTAG_THREADS", "2"))
+    decimate = float(env.get("LINE_TRACKING_APRILTAG_DECIMATE", "1.0"))
+    max_hz = float(env.get("LINE_TRACKING_APRILTAG_MAX_HZ", "10.0"))
+    hamming = int(env.get("LINE_TRACKING_APRILTAG_MAX_HAMMING", "0"))
     if (not topic or not family or threads < 1 or hamming < 0
             or not math.isfinite(decimate) or decimate < 1
             or not math.isfinite(max_hz) or max_hz <= 0):

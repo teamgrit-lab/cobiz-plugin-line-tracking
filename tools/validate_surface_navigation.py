@@ -26,7 +26,7 @@ def main():
     sys.path.insert(0, str(args.source.resolve()/'tools'))
     import local_path as lp
     from path_execution import PathExecution, PathExecutionConfig, make_path_tracker
-    from swin_l_drive_control import (DriveConfig, DriveDecision, RoadCenterState,
+    from drive_control import (DriveConfig, DriveDecision, RoadCenterState,
                                       PathLossRecovery, decide_drive)
     has_corners = (args.source/'tools/road_corner.py').exists()
     if has_corners:
@@ -160,8 +160,8 @@ def main():
                 'reasons': dict(Counter(f['command']['reason'] for f in frames))}
         results.append(summary)
         print(summary, flush=True)
-    files = ['local_path.py', 'path_execution.py', 'swin_l_drive_control.py', 'road_curve.py',
-             'swin_l_local_path_debug.py'] + (['road_corner.py'] if has_corners else [])
+    files = ['local_path.py', 'path_execution.py', 'drive_control.py', 'road_curve.py',
+             'line_tracking_runtime.py'] + (['road_corner.py'] if has_corners else [])
     (args.output/'summary.json').write_text(json.dumps({'results': results,
         'source': str(args.source.resolve()), 'odom_available': False,
         'selection_roi': {str(mode): list((config.for_mask_class(mode) if hasattr(config, 'for_mask_class')

@@ -18,7 +18,7 @@ from connectome360_service import Connectome360Service
 from connectome_server import encode_image
 from front_connectome_service import make_server
 from surround_camera import load_profile, profile_sha256
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 
 
 PIN = 'a'*64
@@ -141,7 +141,7 @@ def setup_ros(monkeypatch, road_infer=None):
             return road_infer(frame, **kwargs)
         return NS(selected_mask=np.ones((270, 480), np.uint8), inference_seconds=.01,
                   front_command=asdict(DriveDecision(.8, 0., .08, 'tracking')), front_metrics={})
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _: NS(
+    monkeypatch.setattr(debug, 'SegmentationModel', lambda _: NS(
         device=NS(type='cuda'), reset=lambda: None, segment=legacy))
     monkeypatch.setattr(connectome360_client, 'Connectome360Segmenter', lambda *_: NS(
         device=NS(type='cuda'), reset=lambda: None, segment=road))

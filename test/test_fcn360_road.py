@@ -198,7 +198,7 @@ def test_arm_is_unobserved_independent_of_fcn_class_and_needs_visible_shoulders(
 
 @pytest.mark.parametrize('open_side,expected_sign', [('left',1), ('right',-1)])
 def test_side_recovery_can_rotate_before_forward_turn_confirmation(open_side, expected_sign):
-    from dangjin_fcn import FcnDrive
+    from fcn_replay import FcnDrive
 
     masks = np.full((4, 8, 16), 13, np.uint8)
     masks[:, 4:] = 3

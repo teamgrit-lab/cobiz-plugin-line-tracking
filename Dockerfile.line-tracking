@@ -82,7 +82,7 @@ RUN source /opt/ros/humble/setup.bash \
 ENV PATH=/opt/venv/bin:${PATH}
 WORKDIR /workspace
 COPY tools /workspace/tools
-COPY environments/dangjin/camera360-profile.json /workspace/environments/dangjin/camera360-profile.json
+COPY config/camera360-profile.json /workspace/config/camera360-profile.json
 COPY docker/apriltag.yaml /workspace/docker/apriltag.yaml
 COPY docker/line_tracking_entrypoint.sh /entrypoint-line-tracking.sh
 RUN chmod +x /entrypoint-line-tracking.sh

@@ -16,7 +16,7 @@ RUN PIP_CONFIG_FILE=/dev/null /opt/connectome-venv/bin/python -m pip --isolated 
     && MPLBACKEND=Agg /opt/connectome-venv/bin/python -c "import cv2,torch,json,flyvis,hydra,omegaconf; assert [torch.__file__,torch.__version__,torch.version.cuda]==json.load(open('/tmp/connectome-torch.json')); print('Flyvis',flyvis.__version__,'Hydra',hydra.__version__,'OmegaConf',omegaconf.__version__,'OpenCV',cv2.__version__,'CUDA',torch.version.cuda)"
 ENV MPLBACKEND=Agg MPLCONFIGDIR=/tmp/connectome-matplotlib FLYVIS_ROOT_DIR=/tmp/connectome-flyvis
 COPY tools /workspace/tools
-COPY environments/dangjin/camera360-profile.json /workspace/environments/dangjin/camera360-profile.json
+COPY config/camera360-profile.json /workspace/config/camera360-profile.json
 COPY docker/connectome_camera_entrypoint.sh /entrypoint-connectome-camera.sh
 RUN chmod +x /entrypoint-connectome-camera.sh
 ENTRYPOINT ["/opt/connectome-venv/bin/python", "/workspace/tools/connectome_server.py"]

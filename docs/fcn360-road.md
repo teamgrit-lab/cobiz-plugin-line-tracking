@@ -7,21 +7,10 @@
 `actual-activate`가 기존 FCN 경로·명령을 계산한다. 영상과 마스크의 ROS 중계는
 사용하지 않는다. [공통 직접 입력 안내](direct-camera.md)를 참고한다.
 
-## Mac에서 브라우저 실행
+## 로컬 검증
 
-```bash
-cd /Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking
-./tools/run_dangjin_360.sh
-```
-
-`Ready` 후 <http://127.0.0.1:8775/>에서 로봇 실험을 연다. 기본 모델은 아래 2026-11-03 패키지이며 기본 최대속도는 시뮬레이션 기준 10.0 m/s다. 이후 시뮬레이션은 이 상한을 사용한다. 이미 켜 둔 서버는 종료 후 다시 실행하고 브라우저를 새로고침한다. 다른 포트는 `--port 8776`으로 지정한다.
-
-이전에 모델 경로를 지정했다면 다음처럼 새 모델을 명시할 수 있다.
-
-```bash
-DANGJIN_FCN_MODEL_DIR='/Volumes/MY_HDD/02_학습모델_데이터셋/03_FCN_ResNet18/모델/fcn1024-road-runs/20261103-081851-c90tq27l' \
-  ./tools/run_dangjin_360.sh
-```
+브라우저 시험은 [로컬 시뮬레이션 안내](local-simulation.md)에 따라 별도 실행한다.
+실기 검출·제어 코드는 시뮬레이션 파일 없이 사용할 수 있다.
 
 ## Jetson에 코드와 모델 복사
 

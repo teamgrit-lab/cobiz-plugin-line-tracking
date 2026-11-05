@@ -20,14 +20,14 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from dangjin_fcn import FcnDrive
+from fcn_replay import FcnDrive
 from fcn360_road import (ASPECT, BLIND, EGO, FRONT_ROBOT_COLUMNS, FRONT_ROBOT_ROWS, FRONT_ROBOT_REVISION, ROAD,
                         apply_front_robot_prior, front_robot_mask, ground_sample, observed_classes)
-from dangjin_camera import panorama_mask
+from panorama_mask import panorama_mask
 from validate_fcn_resolution_video import COLORS
 
 MODELS = ("fcn512_finetuned", "fcn1024_finetuned_compat")
-CODE = ("dangjin_fcn.py", "fcn360_road.py", "local_path.py", "drive_control.py")
+CODE = ("fcn_replay.py", "fcn360_road.py", "local_path.py", "drive_control.py")
 
 
 def sha(path):
@@ -95,7 +95,7 @@ def replay(analysis, out, speed, height):
         "scope": "Counterfactual command replay on recorded images, not closed-loop navigation or actual robot motion",
         "source_analysis": str(analysis), "source_provenance": json.loads((analysis / "provenance.json").read_text()),
         "source_input_sha256": {n: source_complete["sha256"][n] for n in ("native-class-masks.npz", "frames.jsonl")},
-        "controller": "Existing dangjin_fcn.FcnDrive -> FcnRoadPlanner -> LocalPathSmoother -> decide_drive",
+        "controller": "Existing fcn_replay.FcnDrive -> FcnRoadPlanner -> LocalPathSmoother -> decide_drive",
         "controller_code_sha256": {name: sha(Path(__file__).parent / name) for name in CODE},
         "drive_config": asdict(controllers[0].drive), "local_path_config": asdict(controllers[0].planner.config),
         "requested_simulation_max_speed_mps": speed,

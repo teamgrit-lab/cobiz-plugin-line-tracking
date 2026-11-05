@@ -30,3 +30,36 @@ rosbag-results/
 # Private deployment migration backups.
 .env.before-line-tracking
 .env.migrating
+
+# Local-only road simulator, scene assets, collectors and browser validation.
+/simulation/
+/environments/dangjin/
+/requirements-dangjin-sim.txt
+/docs/dangjin-360.md
+/tools/dangjin_camera.py
+/tools/dangjin_fcn.py
+/tools/dangjin_sensor_faults.py
+/tools/dangjin_patrol.py
+/tools/dangjin_perception.py
+/tools/dangjin_sim_server.py
+/tools/front_simulation.py
+/tools/run_dangjin_360.sh
+/tools/build_dangjin_evidence.py
+/tools/enrich_dangjin_sources.py
+/tools/export_dangjin_navigation.py
+/tools/prepare_dangjin_road_model.py
+/tools/train_dangjin_perception.py
+/tools/train_connectome_road.py
+/tools/train_connectome_policy.py
+/tools/validate_connectome_road.py
+/tools/validate_connectome_policy.py
+/tools/watch_front_validation.py
+/tools/validate_front_drive.mjs
+/tools/validate_dangjin_sensor_faults.mjs
+/tools/validate_dangjin_neural_drive.mjs
+/tools/validate_dangjin_patrol.mjs
+/tools/validate_dangjin_oncoming.mjs
+/test/local_simulation/
+
+# Local verification cache.
+.pytest_cache/

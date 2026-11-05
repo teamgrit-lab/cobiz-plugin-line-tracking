@@ -22,14 +22,9 @@ detector and learned driving policy on Jetson without a browser. Its default is
 the pre-shadow `connectome360-both-20261103-135251-10mps` package. Road uses the
 four projected camera views; Sidewalk keeps its existing camera/model/controller.
 
-The [Dangjin browser simulator](environments/dangjin/README.md) provides a local
-360° camera robot, road detection read from frozen Flyvis neural activity,
-a trained neural readout that directly selects speed, yaw rate and stopping,
-and camera-only patrol around the five barns, without map goals. Synthetic detection dropouts
-feed the action model; collision/no-go checks only record evaluation results
-in this simulation mode. The original checked planner remains available with
-`--control baseline`.
-Its controller and model adaptation are separate from the physical robot runtime.
+Road simulation sources, browser assets and generated reports are local-only and
+excluded from Git and Docker builds. See [local simulation policy](docs/local-simulation.md).
+The tracked camera profile and shared inference helpers work without that directory.
 
 `actual-activate` is a Cobiz `LINE_TRACKING` task listener for the Unitree A2.
 For an accepted task it follows the selected surface-center path with the pinned

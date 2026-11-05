@@ -11,8 +11,8 @@ import pytest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
 from surround_camera import load_profile,profile_sha256,project_panorama,projection_maps,view_atlas
-from dangjin_camera import _panorama_projection
-from dangjin_sim_server import decode_surround,encode_png
+from panorama_mask import _panorama_projection
+from surround_codec import decode_surround,encode_png
 
 
 def test_landmarks_are_front_left_rear_right_without_mirroring():
@@ -59,21 +59,3 @@ def test_mask_preview_uses_the_same_raw_panorama_direction():
     # x=width/4 is forward; centre is robot-right, matching device imagery.
     assert visible[192,192] and sectors[0][192,192]
     assert sectors[3][192,384] and sectors[2][192,576] and sectors[1][192,0]
-
-
-def test_browser_and_python_agree_on_hash_and_subpixel_sampling_coordinates():
-    script="""
-      import fs from 'node:fs';import {pathToFileURL} from 'node:url';
-      const root=process.cwd(),src=fs.readFileSync('environments/dangjin/camera360.js','utf8')
-        .replace("from 'three'",`from '${pathToFileURL(root+'/environments/dangjin/vendor/three.module.js')}'`);
-      const m=await import('data:text/javascript;base64,'+Buffer.from(src).toString('base64'));
-      const p=JSON.parse(fs.readFileSync('environments/dangjin/camera360-profile.json'));
-      const points=[];for(let s=0;s<4;s++)for(const [x,y] of [[0,0],[479,269],[240,135],[12,98]])
-        points.push({s,x,y,source:m.sourcePixelForView(p,s,x,y)});
-      console.log(JSON.stringify({hash:await m.camera360ProfileHash(p),points}));
-    """
-    result=subprocess.run(['node','--input-type=module','-e',script],cwd=ROOT,capture_output=True,text=True,check=True)
-    value=json.loads(result.stdout);assert value['hash']==profile_sha256(load_profile())
-    for point in value['points']:
-        x,y=projection_maps()[point['s']]
-        np.testing.assert_allclose(point['source'],[x[point['y'],point['x']],y[point['y'],point['x']]],atol=.0003,rtol=0)

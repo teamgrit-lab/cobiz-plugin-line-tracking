@@ -31,6 +31,12 @@ class Camera:
 @pytest.fixture
 def ros(monkeypatch):
     harness = RosHarness(monkeypatch)
+    factory = debug.BestSoFarSegmenter
+    harness.model_loads = 0
+    def load(config):
+        harness.model_loads += 1
+        return factory(config)
+    monkeypatch.setattr(debug, 'BestSoFarSegmenter', load)
     monkeypatch.setitem(sys.modules, 'unitree_go.msg', NS(SportModeState=Message))
     monkeypatch.setattr(debug, 'TagRouteCamera', Camera)
     return harness
@@ -57,8 +63,11 @@ def tag(tag_id=7, error=20., x=.2):
                 range_m=1.5, position_body_m=[x, 1.4, 0.])
 
 
-def begin_tracking(h, node):
-    register(h)
+def begin_tracking(h, node, *, complete_on_end_tag=None):
+    payload = dict(selected_mask=2, start_tag_id=7, end_tag_id=8)
+    if complete_on_end_tag is not None:
+        payload['complete_on_end_tag'] = complete_on_end_tag
+    register(h, payload)
     assert h.task_state()['type'] == 'TASK_STARTED'
     inputs(h, node, 2.1)
     h.camera_ready()
@@ -66,8 +75,8 @@ def begin_tracking(h, node):
     assert h.metrics()['drive_reason'] == 'tracking'
 
 
-def begin_straight(h, node):
-    begin_tracking(h, node)
+def begin_straight(h, node, *, complete_on_end_tag=None):
+    begin_tracking(h, node, complete_on_end_tag=complete_on_end_tag)
     for t in (2.2, 2.4, 2.6):
         inputs(h, node, t, [tag()], yaw_deg=20.)
         node.publish_state()
@@ -123,7 +132,7 @@ def test_start_tag_already_visible_waits_for_first_sidewalk_inference(ros):
 
 def test_start_parallel_turn_straight_and_arrival_use_one_task_and_stop_before_completion(ros):
     def scenario(node):
-        begin_straight(ros, node)
+        begin_straight(ros, node, complete_on_end_tag=True)
         # Global stop-on-any-tag is enabled in this harness, but the route owns
         # its two IDs and must not complete on the start or an unrelated tag.
         ros.detect(tag_id=7, frame=1)
@@ -141,6 +150,82 @@ def test_start_parallel_turn_straight_and_arrival_use_one_task_and_stop_before_c
             if topic == '/task_state' and json.loads(msg.data)['type'] == 'TASK_COMPLETED')
         assert any(topic == SPORT and msg.header.identity.api_id == 1003 for topic, msg in events[:completion])
         assert node.tag_route is None and node.tag_route_camera.idle.is_set()
+    ros.run(scenario, '--tag-route-enabled')
+
+
+@pytest.mark.parametrize('complete_on_end_tag', [None, False])
+def test_arrival_resumes_same_sidewalk_task_after_a_fresh_path_without_retriggering(ros, complete_on_end_tag, monkeypatch):
+    def scenario(node):
+        begin_straight(ros, node, complete_on_end_tag=complete_on_end_tag)
+        active, publisher = node.tasks.active, node.command_publisher
+        old_command = node.drive_readiness(2, ros.now)[1]
+        for t in (3.4, 3.6, 3.8):
+            inputs(ros, node, t, [tag(tag_id=8)])
+            node.publish_state()
+        assert node.tasks.active is active and node.command_publisher is publisher
+        assert node.tag_route is None and node.tag_route_resume is not None
+        assert node.tag_route_camera.idle.is_set()
+        assert ros.task_state()['type'] == 'TASK_STARTED'
+        assert node.publish_drive(old_command).vx == 0  # Pre-arrival command cannot leak.
+        accepted = []
+        original_accept = node.accept_image
+        def accept(message, stamp, **kwargs):
+            accepted.append(stamp)
+            return original_accept(message, stamp, **kwargs)
+        monkeypatch.setattr(node, 'accept_image', accept)
+        ros.now = 3.7
+        buffered = Message()
+        buffered.header.stamp = ros.stamp()
+        ros.now = 3.9
+        node.on_image(buffered)
+        assert not accepted  # A buffered old capture cannot repopulate reset paths.
+        ros.camera_ready()
+        node.publish_state()
+        assert node.tag_route_resume is None
+        assert ros.metrics()['tag_route']['phase'] == 'sidewalk_resumed'
+        assert json.loads(ros.published[SPORT][-1].parameter)['x'] == .5
+        assert node.tasks.active is active  # Original id, duration and start time are retained.
+        assert ros.model_loads == 1
+        ros.now = 4.
+        ros.detect(tag_id=7, frame=11)
+        ros.detect(tag_id=8, frame=12)
+        node.tag_route_camera.packet = dict(session_id=active.key, stamp_ns=ros.clock_ns(),
+                                            detections=[tag(tag_id=8)])
+        register(ros)  # Duplicate registration must not re-arm this segment.
+        node.publish_state()
+        assert node.tasks.active is active and node.tag_route is None
+        assert node.tag_route_camera.idle.is_set()
+        assert ros.task_state()['type'] == 'TASK_STARTED'
+        assert json.loads(ros.published[SPORT][-1].parameter)['x'] == .5
+    ros.run(scenario, '--tag-route-enabled')
+
+
+def test_sidewalk_resume_times_out_without_using_a_pre_arrival_path(ros):
+    def scenario(node):
+        begin_straight(ros, node)
+        for t in (3.4, 3.6, 3.8):
+            inputs(ros, node, t, [tag(tag_id=8)])
+            node.publish_state()
+        ros.now = 9.
+        node.publish_state()
+        assert ros.task_state()['type'] == 'TASK_ABORTED'
+        assert ros.task_state()['reason'] == 'tag_route_sidewalk_resume_timeout'
+        assert node.tag_route_resume is None
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+    ros.run(scenario, '--tag-route-enabled')
+
+
+def test_cancel_during_sidewalk_resume_prevents_continuation(ros):
+    def scenario(node):
+        begin_straight(ros, node)
+        for t in (3.4, 3.6, 3.8):
+            inputs(ros, node, t, [tag(tag_id=8)])
+            node.publish_state()
+        ros.subscriptions['/task_event'](Message(json.dumps(dict(type='TASK_ABORTED', task_id='tag-route'))))
+        node.publish_state()
+        assert node.tag_route is None and node.tag_route_resume is None
+        assert ros.task_state()['type'] == 'TASK_ABORTED'
+        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
     ros.run(scenario, '--tag-route-enabled')
 
 
@@ -202,4 +287,39 @@ def test_navigation_worker_opens_camera_only_after_grant_and_closes_on_lease_los
     ros.rclpy.spin = scenario
     assert debug.run_ros2(debug.parse_args(['navigation-worker', '--tag-route-enabled',
                                           '--inference-hz', '1000'])) == 0
+    assert not ros.errors
+
+
+def test_navigation_worker_retains_task_ownership_when_arrival_continues_sidewalk(ros):
+    from test_navigation_worker_ros import grant_legacy
+    def scenario(node):
+        register(ros)
+        grant_legacy(ros)
+        owner = dict(node.standalone.context)
+        inputs(ros, node, .1)
+        grant_legacy(ros)
+        ros.camera_ready()
+        node.publish_state()
+        for t, tags, yaw in [(.2, [tag()], 20), (.3, [tag()], 20), (.4, [tag()], 20),
+                             (.5, [], 0), (.6, [], 0), (.7, [], 0), (.8, [], 0),
+                             (.9, [tag(tag_id=8)], 0), (1., [tag(tag_id=8)], 0),
+                             (1.1, [tag(tag_id=8)], 0)]:
+            inputs(ros, node, t, tags, yaw_deg=yaw)
+            grant_legacy(ros)
+            node.publish_state()
+        assert node.tag_route is None and node.tag_route_resume is not None
+        assert node.standalone.context == owner and node.standalone.granted
+        assert not any(json.loads(msg.data)['command'] == 'RELEASE'
+                       for msg in ros.published['/line_tracking/task_request'])
+        ros.now = 1.2
+        grant_legacy(ros)
+        ros.camera_ready()
+        node.publish_state()
+        assert node.tag_route_resume is None and node.standalone.context == owner
+        assert ros.model_loads == 1
+        assert ros.task_state()['type'] == 'TASK_STARTED'
+        assert json.loads(ros.published[SPORT][-1].parameter)['x'] == .5
+    ros.rclpy.spin = scenario
+    assert debug.run_ros2(debug.parse_args(['navigation-worker', '--tag-route-enabled',
+        '--no-stop-on-startup-hold', '--inference-hz', '1000'])) == 0
     assert not ros.errors

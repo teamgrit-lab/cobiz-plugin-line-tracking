@@ -1059,6 +1059,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.terminal_apriltag_status: AprilTagDecision | None = None
             self.apriltag_window_resolved_at: float | None = None
             self.tag_route = None
+            self.tag_route_resume = None
             self.tag_route_camera = None
             self.tag_route_pose_subscription = None
             self.tag_route_poses = BodyPoseHistory()
@@ -1288,6 +1289,7 @@ def run_ros2(args: argparse.Namespace) -> int:
 
         def begin_tag_route(self, now):
             active = self.tasks.active
+            self.tag_route_resume = None
             self.terminal_tag_route_status = None
             if active is None or active.tag_route is None:
                 return
@@ -1339,6 +1341,12 @@ def run_ros2(args: argparse.Namespace) -> int:
             return route.control(now=now, pose=pose)
 
         def finish_tag_route_if_terminal(self):
+            if self.tag_route_resume is not None and self.tag_route_resume.get('failure'):
+                reason = self.tag_route_resume['failure']
+                self.terminal_tag_route_status = dict(self.terminal_tag_route_status or {},
+                    phase='aborted', failure=reason)
+                self.abort_active_task(reason)
+                return
             route = self.tag_route
             if route is None or route.phase not in ('complete', 'aborted'):
                 return
@@ -1349,6 +1357,22 @@ def run_ros2(args: argparse.Namespace) -> int:
             reason = f'tag_route_arrived:{route.spec.end_tag_id}'
             if not self.publish_hard_stop(reason):
                 self.abort_active_task('stop_publish_error')
+                return
+            if not route.spec.complete_on_end_tag:
+                # Complete only the tag segment. Keep the same task, model,
+                # Sport publisher and (in worker mode) ownership lease alive.
+                self.tag_route_resume = dict(after_stamp_ns=self.get_clock().now().nanoseconds,
+                    started_at=time.monotonic(), timeout_sec=route.policy.startup_timeout_sec)
+                self.terminal_tag_route_status['phase'] = 'resuming_sidewalk'
+                self.tag_route = None
+                self.tag_route_camera.stop()
+                self.apriltags.reset_task()
+                # Retain model weights but invalidate in-flight input and EMA
+                # paths from before arrival before accepting a fresh frame.
+                self.set_task_inference(False)
+                self.set_task_inference(True)
+                self.tasks.tracking_seen = True
+                self.tasks.unsafe_since = None
                 return
             body = self.tasks.finish('TASK_COMPLETED', reason)
             self.release_task_control(reason)
@@ -1644,6 +1668,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     state['sequence'] += 1
 
         def release_task_control(self, reason: str) -> None:
+            self.tag_route_resume = None
             if self.tag_route is not None:
                 if self.terminal_tag_route_status is None:
                     self.terminal_tag_route_status = dict(self.tag_route.metrics(), termination_reason=reason)
@@ -1723,6 +1748,27 @@ def run_ros2(args: argparse.Namespace) -> int:
             inference_age_sec = _effective_source_age_sec(
                 last_inference_at, last_inference_stamp_ns, now, clock_now_ns
             )
+            if self.tag_route_resume is not None:
+                resume = self.tag_route_resume
+                active = self.tasks.active
+                if active is None or now - active.started_at >= active.duration_sec:
+                    resume['failure'] = 'tag_route_task_timeout'
+                elif now - resume['started_at'] >= resume['timeout_sec']:
+                    resume['failure'] = 'tag_route_sidewalk_resume_timeout'
+                if resume.get('failure'):
+                    return path, DriveDecision.stop(resume['failure'])
+                fresh_path = (
+                    last_inference_stamp_ns is not None
+                    and last_inference_stamp_ns > resume['after_stamp_ns']
+                    and camera_fault_reason is None
+                    and camera_age_sec is not None and 0 <= camera_age_sec <= self.drive_config.max_camera_age_sec
+                    and inference_age_sec is not None and 0 <= inference_age_sec <= self.drive_config.max_inference_age_sec
+                    and path is not None and path.stop_reason is None
+                    and path_target_lateral(path, self.drive_config.lookahead_m) is not None)
+                if not fresh_path:
+                    return path, DriveDecision.stop('tag_route_sidewalk_resume_pending')
+                self.tag_route_resume = None
+                self.terminal_tag_route_status['phase'] = 'sidewalk_resumed'
             if self.tag_route is not None:
                 route_decision = self.update_tag_route(now)
                 if route_decision is not None:
@@ -1913,7 +1959,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             if self.command_publisher is None:
                 return decision
             active = self.tasks.active if self.tasks is not None else None
-            if self.tag_route is not None and (decision.vx or decision.vy or decision.yaw_rate):
+            if (self.tag_route is not None or self.tag_route_resume is not None) and (decision.vx or decision.vy or decision.yaw_rate):
                 _, decision = self.drive_readiness(2, time.monotonic())
             front_road = uses_learned_road_policy(args, active_path_mask_class(active, args.path_mask_class))
             if task_mode and not rclpy.ok():
@@ -2061,6 +2107,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             try:
                 source_stamp_ns = _stamp_ns(message.header) if task_mode else None
+                if (self.tag_route_resume is not None
+                        and source_stamp_ns <= self.tag_route_resume['after_stamp_ns']):
+                    return
                 if fcn is not None and self.fcn_session_start_ns is not None and source_stamp_ns < self.fcn_session_start_ns:
                     return
                 if task_mode and self.drive_config.stop_on_camera_timestamp_invalid and (
@@ -2159,7 +2208,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.stop_slam_localization()
             if self.tag_route is not None:
                 self.update_tag_route(now)
-                self.finish_tag_route_if_terminal()
+            self.finish_tag_route_if_terminal()
             tag_status = None
             if self.apriltags is not None:
                 tag_status = (
@@ -2175,7 +2224,8 @@ def run_ros2(args: argparse.Namespace) -> int:
             drive_decision = None
             if self.drive_config is not None:
                 path, ready_decision = self.drive_readiness(mask_class, now)
-                if self.tag_route is not None and self.tag_route.phase in ('complete', 'aborted'):
+                if ((self.tag_route is not None and self.tag_route.phase in ('complete', 'aborted'))
+                        or (self.tag_route_resume is not None and self.tag_route_resume.get('failure'))):
                     self.finish_tag_route_if_terminal()
                     task_active = self.tasks.active
                     ready_decision = DriveDecision.stop('tag_route_finished')
@@ -2213,7 +2263,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                         )
                         terminal = (
                             None
-                            if lifecycle_now is None or task_active.tag_route is not None
+                            if lifecycle_now is None or self.tag_route is not None or self.tag_route_resume is not None
                             else self.tasks.tick(
                                 now=lifecycle_now, drive_reason=drive_decision.reason
                             )

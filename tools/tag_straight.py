@@ -16,6 +16,7 @@ class TagRouteSpec:
     start_tag_id: int
     end_tag_id: int
     tag_size_m: float = .167
+    complete_on_end_tag: bool = False
 
 
 def parse_tag_route(payload, selected_mask):
@@ -34,7 +35,10 @@ def parse_tag_route(payload, selected_mask):
     size = payload.get('tag_size_m', .167)
     if isinstance(size, bool) or not isinstance(size, (int, float)) or not math.isfinite(size) or not 0 < size <= 2:
         raise ValueError('invalid_tag_size_m')
-    return TagRouteSpec(*ids, float(size))
+    complete = payload.get('complete_on_end_tag', False)
+    if type(complete) is not bool:
+        raise ValueError('invalid_complete_on_end_tag')
+    return TagRouteSpec(*ids, float(size), complete)
 
 
 @dataclass(frozen=True)
@@ -279,5 +283,6 @@ class TagRouteController:
 
     def metrics(self):
         return dict(phase=self.phase, start_tag_id=self.spec.start_tag_id, end_tag_id=self.spec.end_tag_id,
+                    complete_on_end_tag=self.spec.complete_on_end_tag,
                     start_hits=self.start_hits, end_hits=self.end_hits, alignment_hits=self.align_hits,
                     target_yaw_rad=self.target_yaw, cross_track_m=self.cross_track_m, failure=self.failure)

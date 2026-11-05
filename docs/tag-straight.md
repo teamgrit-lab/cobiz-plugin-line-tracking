@@ -15,13 +15,19 @@ COBIZ `LINE_TRACKING` payload에 `selected_mask: 2`, `start_tag_id`, `end_tag_id
     "duration_sec": 300,
     "start_tag_id": 7,
     "end_tag_id": 8,
-    "tag_size_m": 0.167
+    "tag_size_m": 0.167,
+    "complete_on_end_tag": false
   }
 }
 ```
 
 `tag_size_m`는 검출 모서리 사이의 실제 한 변 길이(미터)이며 생략 시 0.167이다.
 두 태그는 같은 크기를 사용한다. 흰 종이 전체의 길이를 넣지 않는다.
+
+`complete_on_end_tag`는 도착 태그 확인 후 전체 작업을 완료할지 결정하는 JSON
+boolean이다. **기본값은 `false`**다. 생략하거나 `false`이면 같은 작업에서 Sidewalk
+주행을 계속하고, `true`이면 정지 후 `TASK_COMPLETED`를 보고한다. 문자열
+`"false"`/`"true"`, 숫자나 `null`은 거절한다. 두 태그 ID가 없으면 이 옵션을 사용하지 않는다.
 
 ## 동작과 완료
 
@@ -33,8 +39,16 @@ COBIZ `LINE_TRACKING` payload에 `selected_mask: 2`, `start_tag_id`, `end_tag_id
 5. 정렬 완료 위치에 직선을 고정한다. 기본 0.30m/s로 이동하며 자세와 발 odometry로
    방향·횡방향 이탈을 보정한다. 태그를 향해 계속 조향하는 방식은 아니다.
 6. 도착 ID가 카메라에서 3m 이내이며, 고정 직선 방향으로 로봇 앞뒤 ±0.5m 안에
-   들어오면 정지하고 새 프레임 3회로 확인한다. 확인되면 StopMove/zero 뒤
-   `TASK_COMPLETED`, `reason: tag_route_arrived:<ID>`를 보고한다.
+   들어오면 정지하고 새 프레임 3회로 확인한다. 확인 후 StopMove/zero를 발행한다.
+   `complete_on_end_tag: true`이면 `TASK_COMPLETED`, `reason: tag_route_arrived:<ID>`를
+   보고한다. 기본값 `false`이면 태그 카메라를 닫고 새 Sidewalk 영상의 유효한 경로를
+   기다렸다가 기존 경로 추종으로 복귀한다.
+
+복귀 시 task ID·시작 시각·duration·Sport publisher·제어권 임대를 유지하며
+새 `TASK_STARTED`나 `TASK_COMPLETED`를 보내지 않는다. 모델은 재로딩하지 않고
+입력 세대와 경로 이력만 초기화한다. 복귀 전에 촬영된 경로나
+이전 직진 명령은 재사용하지 않으며, 5초 안에 새 유효 경로가 없으면 중단한다.
+같은 작업의 출발/도착 태그를 다시 보더라도 태그 구간을 재시작하거나 완료하지 않는다.
 
 직선의 위치는 정렬을 마친 로봇의 위치다. 태그와의 간격을 특정 값으로 옮기는
 횡이동·주차 기능은 포함하지 않는다. 진행 방향은 평행한 두 후보 중 현재 전방에
@@ -47,9 +61,10 @@ stop-on-any-AprilTag 설정을 사용하지 않고 지정된 두 ID와 순서를
 요구하지 않지만 유효한 거리·상대 위치 추정이 필요하다.
 
 출발/도착 확인 제한은 각각 5초, 제자리 정렬 제한은 20초, 직선 이동 제한은
-기본 120초다. payload `duration_sec`도 전체 작업의 상한으로 항상 적용하며
-상한 도달은 `TASK_ABORTED`다. 일반 주행의 duration 완료 스위치로 도착 전에
-성공 처리하지 않는다.
+기본 120초다. 태그 구간과 Sidewalk 복귀 대기 중에는 payload `duration_sec`를
+상한으로 적용하고, 상한 도달 시 `TASK_ABORTED`로 처리한다. 도착 전에 일반 주행의
+duration 완료 스위치로 성공 처리하지 않는다. Sidewalk 복귀 후에는 원래 작업의
+시작 시각과 duration을 유지한 채 기존 Sidewalk의 정지·완료 설정을 따른다.
 
 ## 배포와 설정
 

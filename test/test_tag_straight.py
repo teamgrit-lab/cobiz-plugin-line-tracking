@@ -50,13 +50,26 @@ def straight_route():
 
 
 @pytest.mark.parametrize('as_json', [False, True])
-def test_ids_are_retained_from_object_or_json_cobiz_payload(as_json):
-    payload = dict(selected_mask=2, start_tag_id=7, end_tag_id=8, tag_size_m=.20)
+@pytest.mark.parametrize('complete', [False, True])
+def test_ids_are_retained_from_object_or_json_cobiz_payload(as_json, complete):
+    payload = dict(selected_mask=2, start_tag_id=7, end_tag_id=8, tag_size_m=.20,
+                   complete_on_end_tag=complete)
     tasks = LineTrackingTasks()
     result = tasks.handle_event(dict(type='TASK_REGISTERED', action_name='LINE_TRACKING',
         task_id='route', payload=json.dumps(payload) if as_json else payload), now=0.)
     assert result['type'] == 'TASK_STARTED'
-    assert tasks.active.tag_route == TagRouteSpec(7, 8, .20)
+    assert tasks.active.tag_route == TagRouteSpec(7, 8, .20, complete)
+
+
+def test_arrival_defaults_to_continuing_sidewalk():
+    spec = parse_tag_route(dict(start_tag_id=7, end_tag_id=8), 2)
+    assert spec.complete_on_end_tag is False
+
+
+@pytest.mark.parametrize('value', [None, 'false', 'true', 0, 1, {}, []])
+def test_completion_policy_requires_a_json_boolean(value):
+    with pytest.raises(ValueError, match='invalid_complete_on_end_tag'):
+        parse_tag_route(dict(start_tag_id=7, end_tag_id=8, complete_on_end_tag=value), 2)
 
 
 @pytest.mark.parametrize('payload,mask', [

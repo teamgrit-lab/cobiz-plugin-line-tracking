@@ -11,13 +11,13 @@ Sidewalk → Road도 STOPPED를 확인한 뒤 새 identity와 mask로 START한�
 유지하고, 노면을 찾지 못했을 때의 기존 정지 동작도 유지한다. 모델은 메모리에 유지한다.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.connectome.yml \
+docker compose -f docker-compose.yml -f docker-compose.connectome-flow-planner.yml \
   -f docker-compose.navigation.yml up -d --build actual-activate connectome-planner
 ```
 
 기존 R50 모델 pin, CameraInfo·TF·센서 토픽을 그대로 재사용한다.
 overlay는 `LINE_TRACKING_MODE`만 `navigation-worker`로 변경한다. Connectome을 쓰지 않는
-배포는 중간 `docker-compose.connectome.yml`을 생략한다. 기존 task-drive 인스턴스를
+배포는 중간 `docker-compose.connectome-flow-planner.yml`을 생략한다. 기존 task-drive 인스턴스를
 교체하며 별도 GPU 모델 인스턴스를 추가하지 않는다.
 
 Navigation 구간은 `/api/sport/request`와 `/task_state`에 직접 발행하지 않는다.

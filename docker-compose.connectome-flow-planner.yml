@@ -1,4 +1,4 @@
-# Opt in: docker compose -f docker-compose.yml -f docker-compose.connectome.yml
+# Opt in: docker compose -f docker-compose.yml -f docker-compose.connectome-flow-planner.yml
 # up -d --build connectome-planner actual-activate
 services:
   connectome-planner:

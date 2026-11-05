@@ -203,9 +203,9 @@ Flyvis 설치는 기본 torch·torchvision·NumPy의 정확한 버전을 고정�
 
 ```bash
 docker compose build actual-activate
-docker compose -f docker-compose.yml -f docker-compose.connectome.yml config --quiet
-docker compose -f docker-compose.yml -f docker-compose.connectome.yml build connectome-planner
-docker compose -f docker-compose.yml -f docker-compose.connectome.yml up -d connectome-planner actual-activate
+docker compose -f docker-compose.yml -f docker-compose.connectome-flow-planner.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.connectome-flow-planner.yml build connectome-planner
+docker compose -f docker-compose.yml -f docker-compose.connectome-flow-planner.yml up -d connectome-planner actual-activate
 ```
 
 override가 `actual-activate`와 `debugging-line-tracking`을 connectome 모드로 선택한다.

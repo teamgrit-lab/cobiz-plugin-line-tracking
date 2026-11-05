@@ -16,7 +16,7 @@
 """Run Mapillary surface segmentation and local path smoothing.
 
 The ``mcap`` mode replays the supplied rosbag without ROS 2 and writes a
-camera-rate MP4 overlay.  Swin-L is intentionally scheduled at a lower rate;
+camera-rate MP4 overlay.  Surface is intentionally scheduled at a lower rate;
 the smoothed path is reused between inference frames.  With ``--overlay-mode
 sidewalk``, every camera frame is inferred without path processing.
 The ``ros2`` mode publishes only path and metrics topics. The
@@ -60,7 +60,7 @@ from segmentation_runtime import (
     PROFILE_NAMES,
     R50_PROFILE,
     R50_PROFILES,
-    LINE_TRACKING_ASPECT_FP16_PROFILE,
+    DEFAULT_PROFILE,
     SegmentationConfig,
     SegmentationModel,
     resolve_profile,
@@ -77,7 +77,7 @@ from connectome_client import ConnectomeClient, ConnectomePathTracker, reference
 from connectome_surface import PlannerConfig
 from navigation_segment import NavigationSegment
 from standalone_control import StandaloneControl
-from evaluate_mapillary_temporal import upscale_mask
+from segmentation_utils import upscale_mask
 from local_path import (
     DEFAULT_ROI_POLYGON,
     DEFAULT_ROAD_ROI_POLYGON,
@@ -414,9 +414,6 @@ def _runtime_config(args: argparse.Namespace) -> SegmentationConfig:
         evaluation_width=args.evaluation_size[1],
         device=args.device,
         backend=args.backend,
-        tensorrt_engine_path=args.tensorrt_engine,
-        tensorrt_manifest_path=args.tensorrt_manifest,
-        allow_backend_fallback=args.allow_backend_fallback,
         cuda_graph=args.cuda_graph,
     )
 
@@ -634,7 +631,7 @@ def render_local_path_overlay(
                 )
 
     lines = (
-        f"SWIN-L {PATH_MASK_CLASSES[path_mask_class]} LOCAL PATH",
+        f"SURFACE {PATH_MASK_CLASSES[path_mask_class]} LOCAL PATH",
         f"raw={estimate.confidence:.2f} valid={estimate.valid_ratio:.2f}"
         if estimate
         else "raw=--",
@@ -840,10 +837,10 @@ def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
     """Reject task-driven control unless its model and calibration are explicit."""
 
     # The original model remains active for Sidewalk, including its pin checks.
-    if args.profile not in (LINE_TRACKING_ASPECT_FP16_PROFILE, *R50_PROFILES):
+    if args.profile not in R50_PROFILES:
         raise ValueError(
             "task-drive mode requires a pinned FP16 deployment profile: "
-            f"{LINE_TRACKING_ASPECT_FP16_PROFILE}, {R50_PROFILE}, or {FINETUNED_PROFILE}"
+            f"{R50_PROFILE} or {FINETUNED_PROFILE}"
         )
     pinned = resolve_profile(args.profile)
     if args.profile == FINETUNED_PROFILE:
@@ -862,10 +859,6 @@ def _validate_task_drive_preflight(args: argparse.Namespace) -> None:
         raise ValueError("task-drive mode requires a calibrated base_link path")
     if args.output_hz < 10.0:
         raise ValueError("task-drive mode requires at least 10 Hz zero-command updates")
-    if args.allow_backend_fallback:
-        raise ValueError(
-            "task-drive mode prohibits automatic inference-backend fallback"
-        )
     _drive_config_from_args(args)
     if args.profile == FINETUNED_PROFILE:
         validate_checkpoint(
@@ -1158,7 +1151,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.direct_timer = self.create_timer(1.0 / args.inference_hz, self.request_direct_road)
             self.started = time.monotonic()
             self.get_logger().info(
-                "Swin-L local path debug started | image=%s profile=%s "
+                "Surface local path debug started | image=%s profile=%s "
                 "path_surface=%s inference_hz=%.2f output_hz=%.2f near=%.1fm far=%.1fm"
                 % (
                     args.image_topic,
@@ -1988,7 +1981,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 except Exception:  # noqa: BLE001 - still report task failure.
                     pass
                 self.abort_active_task("publish_error")
-                self.get_logger().error(f"Swin-L output failed: {error}")
+                self.get_logger().error(f"Surface output failed: {error}")
 
         def _publish_state(self) -> None:
             now = time.monotonic()
@@ -2126,7 +2119,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_planner": planner_status,
                 "profile": args.profile,
                 "fcn360": dict(state['fcn_metrics']) if fcn and mask_class == 1 else None,
-                "inference_backend": (f'fcn{args.fcn_input_width}-360' if fcn and mask_class == 1 else learned_road_backend(args).replace('_', '-') if uses_learned_road_policy(args, mask_class) else 'legacy'),
+                "inference_backend": (f'fcn{args.fcn_input_width}-360' if fcn and mask_class == 1 else learned_road_backend(args).replace('_', '-') if uses_learned_road_policy(args, mask_class) else 'r50'),
                 "front_connectome": (dict(state['front_metrics'], command=state['front_command'])
                     if args.front_connectome_url and mask_class == 1 else None),
                 "connectome360": (dict(state['front_metrics'], command=state['front_command'])
@@ -2555,7 +2548,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--profile",
         choices=PROFILE_NAMES,
-        default=_env("LINE_TRACKING_PROFILE", LINE_TRACKING_ASPECT_FP16_PROFILE),
+        default=_env("LINE_TRACKING_PROFILE", DEFAULT_PROFILE),
     )
     parser.add_argument("--model-id", default=_env("LINE_TRACKING_MODEL_ID", "") or None)
     parser.add_argument(
@@ -2578,19 +2571,6 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--backend",
         choices=INFERENCE_BACKENDS,
         default=_env("LINE_TRACKING_BACKEND", "pytorch"),
-    )
-    parser.add_argument(
-        "--tensorrt-engine",
-        default=_env("LINE_TRACKING_TRT_ENGINE", "") or None,
-    )
-    parser.add_argument(
-        "--tensorrt-manifest",
-        default=_env("LINE_TRACKING_TRT_MANIFEST", "") or None,
-    )
-    parser.add_argument(
-        "--allow-backend-fallback",
-        action=argparse.BooleanOptionalAction,
-        default=_env_bool("LINE_TRACKING_ALLOW_BACKEND_FALLBACK", False),
     )
     parser.add_argument(
         "--evaluation-size",
@@ -2885,6 +2865,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             live.add_argument("--segment-command-topic", default="/line_tracking/segment_command")
             live.add_argument("--segment-status-topic", default="/line_tracking/segment_status")
             live.add_argument("--segment-velocity-topic", default="/line_tracking/command")
+    from migrate_tracking_config import validate_environment
+    try:
+        validate_environment(ENV)
+    except ValueError as error:
+        parser.error(str(error))
     args = parser.parse_args(argv)
     if args.road_direct_input:
         if (args.mode != 'task-drive' or not (args.connectome360_url or args.front_connectome_url or args.fcn_sha256)):

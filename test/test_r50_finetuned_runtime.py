@@ -115,9 +115,6 @@ def _fake_hf_loaders(monkeypatch, checkpoint, loading_info=None):
     monkeypatch.setattr(
         runtime.MaskFormerForInstanceSegmentation, "from_pretrained", load_model
     )
-    monkeypatch.setattr(
-        runtime.Mask2FormerForUniversalSegmentation, "from_pretrained", load_model
-    )
     return calls
 
 
@@ -184,7 +181,6 @@ def test_drive_rejects_missing_or_wrong_manifest_pin(checkpoint, pin):
         ("evaluation_size", [720, 1280], "360x640"),
         ("path_frame_id", "camera", "base_link"),
         ("output_hz", 5, "at least 10 Hz"),
-        ("allow_backend_fallback", True, "prohibits"),
     ],
 )
 def test_local_drive_preserves_preflight_requirements(

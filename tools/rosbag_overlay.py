@@ -13,7 +13,7 @@
 #   "transformers==5.16.1",
 # ]
 # ///
-"""One-command MCAP overlay tests with the selected FP16 Swin-L profile.
+"""One-command MCAP overlay tests with the configured R50 profile.
 
 sidewalk: infer every camera frame and overlay Road/Sidewalk segmentation.
 local-path: reuse the existing path smoothing debug pipeline.
@@ -105,11 +105,6 @@ def prepare_outputs(args: argparse.Namespace) -> tuple[Path, Path]:
 def build_debug_arguments(
     args: argparse.Namespace, video: Path, report: Path
 ) -> list[str]:
-    from segmentation_runtime import LINE_TRACKING_ASPECT_FP16_PROFILE, resolve_profile
-
-    profile = resolve_profile(LINE_TRACKING_ASPECT_FP16_PROFILE)
-    # Pin the model even when a local .env selects R50 or another checkpoint.
-    # Geometry settings continue to use the existing local-path configuration.
     arguments = [
         "mcap",
         "--input",
@@ -120,12 +115,6 @@ def build_debug_arguments(
         str(report),
         "--overlay-mode",
         args.mode,
-        "--profile",
-        LINE_TRACKING_ASPECT_FP16_PROFILE,
-        "--model-id",
-        profile.model_id,
-        "--model-revision",
-        profile.model_revision,
         "--evaluation-size",
         "360",
         "640",

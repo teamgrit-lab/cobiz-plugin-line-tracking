@@ -99,7 +99,7 @@ docker compose logs --tail=100 connectome360 actual-activate
 이 명령은 의존 서비스도 시작한다. Cobiz의 `LINE_TRACKING` 작업에
 `selected_mask=1`을 주면 Road, `2`를 주면 Sidewalk다. 실제 로봇 실행은 이 작업을
 수락한 동안에만 이뤄진다. `/line_tracking/metrics`의 `inference_backend`가
-Road에서 `connectome360`, Sidewalk에서 `legacy`인지 확인할 수 있다.
+Road에서 `connectome360`, Sidewalk에서 `r50`인지 확인할 수 있다.
 Road의 `camera_transport`는 `direct`, `camera_topic`은 `null`이다.
 처음 전환할 때는 기존 `connectome360-camera` 컨테이너를 종료·제거해야 한다.
 

@@ -19,7 +19,6 @@ models/*.plan
 models/*.pth
 models/*.pt
 models/*.plan.json
-models/swin-l-checkpoint/
 models/r50-surface-*/
 
 # Local rosbag conversion and inspection artifacts.
@@ -27,3 +26,7 @@ models/r50-surface-*/
 rosbag-results/
 /.cache/
 /.worktrees/
+
+# Private deployment migration backups.
+.env.before-line-tracking
+.env.migrating

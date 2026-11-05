@@ -90,7 +90,7 @@ docker compose logs --tail=100 fcn360-road
 ## 검출과 작업 전환 확인
 
 - 같은 ROS 도메인·DDS 설정의 ROS 2 뷰어에서 `/line_tracking/fcn360/overlay/compressed`를 `CompressedImage`, best-effort QoS로 구독한다. 앞·좌·후·우 순서의 2×2 미리보기이며 초록은 차도, 분홍은 고정 로봇 영역이다. 표시만 512×256 패널로 축소하고 추론·경로 계산은 원래 해상도를 유지한다.
-- Road 작업에서 `/line_tracking/metrics`의 `inference_backend`는 `fcn1024-360`이다. `fcn360.front_path_valid`, `maneuver`, `observed_horizon_m`, `speed_fraction`을 확인한다. Sidewalk 작업의 backend는 `legacy`이며 기존 전면 카메라와 인도 제어기를 사용한다.
+- Road 작업에서 `/line_tracking/metrics`의 `inference_backend`는 `fcn1024-360`이다. `fcn360.front_path_valid`, `maneuver`, `observed_horizon_m`, `speed_fraction`을 확인한다. Sidewalk 작업의 backend는 `r50`이며 기존 전면 카메라와 인도 제어기를 사용한다.
 - 직접 입력 HTTP 응답의 `classes`에는 네 방향의 원래 `4×16×32` 클래스 격자와 원본 촬영 시각이 포함된다. 격자를 축소하지 않는다. 0은 미관측, 1은 고정 로봇, 3은 차도다. ROS 마스크·미리보기 토픽은 기존 검사 CLI를 `--direct-camera` 없이 실행할 때만 제공한다.
 - 전방 고정 팔 영역은 0 기준 14~17열·10~15행, 1 기준 15~18열·11~16행이다. 512 기준 2열×3행과 같은 화면 비율의 4열×6행이며 경로 계산에서는 미관측으로 제외한다. 그 밖의 로봇 예측도 미관측으로 처리한다.
 - 전방과 연결된 노면과 좌우 차도를 기준으로 경로를 선택한다. 작은 중앙 보정은 확인 대기 없이 적용한다. 새 큰 회전은 방향 기울기 0.40(약 22°)에서 확인을 시작하고 0.25(약 14°)까지 유지하는 히스테리시스로 직진·회전 왕복을 줄인다. 새 회전은 마스크 세 장에서 연속 확인한다.

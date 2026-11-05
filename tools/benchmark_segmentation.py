@@ -13,7 +13,7 @@
 #   "transformers==5.16.1",
 # ]
 # ///
-"""Measure best-so-far segmentation Hz from MCAP or a live ROS 2 image topic.
+"""Measure R50 surface segmentation Hz from MCAP or a live ROS 2 image topic.
 
 MCAP mode is portable and needs no ROS installation. ``realtime`` playback
 uses a latest-frame queue, so it reproduces the frame replacement behavior of
@@ -822,8 +822,7 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
         choices=PROFILE_NAMES,
         default=DEFAULT_PROFILE,
         help=(
-            "named runtime profile; use swin-l-best-so-far to restore the "
-            "retained quality baseline"
+            "pinned public or locally fine-tuned R50 profile"
         ),
     )
     parser.add_argument(
@@ -869,8 +868,6 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
         help="auto, cpu, cuda, mps, or another torch device string",
     )
     parser.add_argument("--backend", choices=INFERENCE_BACKENDS, default="pytorch")
-    parser.add_argument("--tensorrt-engine")
-    parser.add_argument("--tensorrt-manifest")
     parser.add_argument("--warmup-frames", type=int, default=2)
     parser.add_argument("--expected-input-hz", type=float, default=20.0)
     parser.add_argument("--report-interval", type=float, default=2.0)
@@ -988,8 +985,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         pedestrian_area_road_expansion=args.pedestrian_area_road_expansion,
         device=args.device,
         backend=args.backend,
-        tensorrt_engine_path=args.tensorrt_engine,
-        tensorrt_manifest_path=args.tensorrt_manifest,
     )
     print(
         f"MODEL_LOAD_START profile={args.profile} requested_device={args.device}",

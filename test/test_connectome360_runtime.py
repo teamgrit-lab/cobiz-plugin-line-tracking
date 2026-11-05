@@ -187,7 +187,7 @@ def test_road_uses_only_360_camera_then_sidewalk_uses_legacy_and_stale_input_sto
         image(ros)
         wait_for_count(ros, 2)
         assert calls == ['road', 'sidewalk']
-        assert ros.metrics()['inference_backend'] == 'legacy'
+        assert ros.metrics()['inference_backend'] == 'r50'
         assert ros.metrics()['connectome360'] is None
         assert json.loads(ros.published[SPORT][-1].parameter)['x'] > 0
     ros.run(scenario, *ARGS)
@@ -222,7 +222,7 @@ def test_cancelled_360_reply_or_failure_cannot_drive_or_abort_the_next_sidewalk(
             release.set()
             wait_for_count(ros, 1)
             assert node.tasks.active.key == 'next-sidewalk'
-            assert ros.metrics()['inference_backend'] == 'legacy'
+            assert ros.metrics()['inference_backend'] == 'r50'
             assert json.loads(ros.published[SPORT][-1].parameter)['x'] > 0
         finally:
             release.set()

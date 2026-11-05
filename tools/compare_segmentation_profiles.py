@@ -27,7 +27,7 @@ import numpy as np
 from segmentation_runtime import (
     PROFILE_NAMES,
     R50_PROFILE,
-    LINE_TRACKING_ASPECT_PROFILE,
+    FINETUNED_PROFILE,
     SegmentationConfig,
     SegmentationModel,
 )
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
         "--profiles",
         choices=PROFILE_NAMES,
         nargs=2,
-        default=(LINE_TRACKING_ASPECT_PROFILE, R50_PROFILE),
+        default=(R50_PROFILE, FINETUNED_PROFILE),
         metavar=("LEFT", "RIGHT"),
     )
     parser.add_argument("--start-frame", type=int, default=0)

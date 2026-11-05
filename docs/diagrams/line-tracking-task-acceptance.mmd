@@ -2,14 +2,14 @@ sequenceDiagram
     title Line tracking — 현재 구현의 작업 수락
     participant Cam as 전방 카메라
     participant Tag as AprilTag 검출기
-    participant V as Swin-L / R50 추론 스레드
+    participant V as R50 추론 스레드
     participant N as actual-activate
     participant R as A2 Sport API
     participant C as cobiz-core
     participant S as Cobiz 서버
 
     Note over V,N: 모델은 시작 시 로드하여 메모리에 유지<br/>작업 전에는 조건 변수로 대기하며 영상 처리·추론 중단<br/>ROS 작업 수신·상태 발행은 유지
-    Note over V,N: Swin-L은 선택한 PyTorch / TensorRT 사용<br/>R50 task-drive는 PyTorch 사용
+    Note over V,N: R50 task-drive는 PyTorch 사용
 
     opt AprilTag 메시지 수신
         Tag-->>N: /detections

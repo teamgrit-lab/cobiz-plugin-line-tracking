@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import line_tracking_runtime as debug
 import rosbag_overlay as cli
-from segmentation_runtime import LINE_TRACKING_ASPECT_FP16_PROFILE, resolve_profile
+from segmentation_runtime import R50_PROFILE, resolve_profile
 
 
 @pytest.mark.parametrize("mode,updates", [("sidewalk", 12), ("local-path", 4)])
@@ -42,7 +42,7 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
             return frame
 
         def metadata(self):
-            return {"profile": LINE_TRACKING_ASPECT_FP16_PROFILE}
+            return {"profile": R50_PROFILE}
 
     def events(path, topics, start_time_ns=0):
         assert path == source
@@ -66,8 +66,6 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
     monkeypatch.setattr(debug, "SegmentationModel", Segmenter)
     monkeypatch.setattr(debug, "_iter_mcap_events", events)
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PROFILE", "r50-fp16-640x360")
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_MODEL_ID", "different/checkpoint")
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_MODEL_REVISION", "different-revision")
     # This case verifies rate-limited replay, independently of the deployment
     # default that intentionally processes every frame in unrestricted mode.
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_UNRESTRICTED_PATH_MODE", "false")
@@ -92,12 +90,12 @@ def test_overlay_modes_keep_the_pinned_model_and_frame_policy(
         )
         == 0
     )
-    profile = resolve_profile(LINE_TRACKING_ASPECT_FP16_PROFILE)
+    profile = resolve_profile(R50_PROFILE)
     config = configurations[0]
     assert (config.profile, config.model_id, config.model_revision) == (
-        LINE_TRACKING_ASPECT_FP16_PROFILE,
-        profile.model_id,
-        profile.model_revision,
+        R50_PROFILE,
+        None,
+        None,
     )
     assert (config.evaluation_height, config.evaluation_width) == (360, 640)
     assert len(calls) == updates

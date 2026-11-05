@@ -363,34 +363,27 @@ def test_endpoint_fallback_still_obeys_lateral_target_limit():
 
 def test_task_drive_preflight_requires_pinned_model():
     args = debug.parse_args(["task-drive"])
-    assert args.profile == "swin-l-aspect-224x384-fp16"
+    assert args.profile == debug.R50_PROFILE
     debug._validate_task_drive_preflight(args)
-    args.profile = "swin-l-best-so-far"
+    args.profile = "unsupported-profile"
     with pytest.raises(ValueError, match="pinned"):
         debug._validate_task_drive_preflight(args)
-    args.profile = "swin-l-aspect-224x384-fp16"
+    args.profile = debug.R50_PROFILE
     args.output_hz = 5.0
     with pytest.raises(ValueError, match="at least 10 Hz"):
         debug._validate_task_drive_preflight(args)
 
 
-def test_cobiz_task_listener_pins_swin_profile():
+def test_cobiz_task_listener_pins_r50_profile():
     args = debug.parse_args(["task-drive"])
     assert args.task_event_topic == "/task_event"
     assert args.task_state_topic == "/task_state"
     debug._validate_task_drive_preflight(args)
-    args.profile = "swin-l-best-so-far"
+    args.profile = "unsupported-profile"
     with pytest.raises(ValueError, match="pinned"):
         debug._validate_task_drive_preflight(args)
 
 
-@pytest.mark.parametrize("profile", [debug.LINE_TRACKING_ASPECT_FP16_PROFILE, debug.R50_PROFILE])
-def test_task_drive_prohibits_automatic_backend_fallback(profile):
-    args = debug.parse_args(
-        ["task-drive", "--profile", profile, "--backend", "pytorch", "--allow-backend-fallback"]
-    )
-    with pytest.raises(ValueError, match="prohibits"):
-        debug._validate_task_drive_preflight(args)
 
 
 def test_task_drive_selects_pinned_r50_runtime_from_environment(monkeypatch):
@@ -411,15 +404,9 @@ def test_task_drive_selects_pinned_r50_runtime_from_environment(monkeypatch):
     assert config.device == "cuda"
 
 
-def test_task_drive_rejects_r50_with_swin_tensorrt_engine():
-    args = debug.parse_args(
-        ["task-drive", "--profile", debug.R50_PROFILE, "--backend", "tensorrt"]
-    )
-    with pytest.raises(ValueError, match="R50.*pytorch"):
-        debug._validate_task_drive_preflight(args)
 
 
-@pytest.mark.parametrize("profile", [debug.LINE_TRACKING_ASPECT_FP16_PROFILE, debug.R50_PROFILE])
+@pytest.mark.parametrize("profile", [debug.R50_PROFILE])
 @pytest.mark.parametrize("field", ["model_id", "model_revision"])
 def test_task_drive_keeps_each_profiles_checkpoint_pinned(profile, field):
     pinned = debug.resolve_profile(profile)
@@ -625,3 +612,8 @@ def test_disabled_path_stops_cannot_invent_first_motion_command():
 def test_drive_stop_flags_require_boolean_values(check):
     with pytest.raises(ValueError, match='boolean'):
         DriveConfig(**{'stop_on_' + check: 'false'}).validate()
+
+
+def test_cli_rejects_an_unsupported_sidewalk_backend():
+    with pytest.raises(SystemExit):
+        debug.parse_args(["task-drive", "--backend", "tensorrt"])

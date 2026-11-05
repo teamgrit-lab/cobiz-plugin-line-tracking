@@ -29,7 +29,7 @@ Road 요청은 계속되지만 영상만 없으면 입력을 기다리며, 기�
 제어기의 신선도 검사로 정지한다. 다음 Road 요청에서는 카메라를 다시 연다.
 HTTP에는 영상·PNG가 없고, 명령 또는 작은 분류 격자와 메타데이터만 전달한다.
 `camera_transport=direct`, `camera_topic=null`이 Road 지표에 표시된다.
-Sidewalk 지표는 `camera_transport=ros`, `inference_backend=legacy`다.
+Sidewalk 지표는 `camera_transport=ros`, `inference_backend=r50`다.
 
 Flyvis 이미지의 패키지 설치는 부모 이미지의 pip 인덱스·제약 환경변수와 설정 파일을
 격리하고 PyPI에서 수행한다. 학습 환경에서 사용한 Hydra 1.3.7·OmegaConf 2.3.1·ANTLR

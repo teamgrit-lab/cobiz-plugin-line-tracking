@@ -101,7 +101,6 @@ CONNECTUM_FRONT_MODEL_DIR=./models/front-road-v2-road-only-20261027
 CONNECTUM_FRONT_SHA256=43cddf61ba3781b7d241f274d9a6259b1409c0541d650dd3d31aa91b35cf6f88
 LINE_TRACKING_IMAGE_TOPIC=/a2/front_camera/res_360p/image_raw
 LINE_TRACKING_BACKEND=pytorch
-LINE_TRACKING_TRT_AUTO_BUILD=false
 ```
 
 위 `COMPOSE_FILE`은 기본 파일과 전면 커넥톰 파일을 명시적으로 선택합니다.

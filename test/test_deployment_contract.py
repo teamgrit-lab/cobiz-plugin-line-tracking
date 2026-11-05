@@ -28,7 +28,7 @@ def test_dds_contract_is_read_only_and_debug_entrypoint_fails_when_missing():
     assert "set -u" in debug_entrypoint
 
 
-def test_swin_l_debug_service_is_explicit_and_has_no_drive_contract():
+def test_r50_debug_service_is_explicit_and_has_no_drive_contract():
     import yaml
 
     compose = (ROOT / "docker-compose.yml").read_text()
@@ -42,14 +42,14 @@ def test_swin_l_debug_service_is_explicit_and_has_no_drive_contract():
     assert "LINE_TRACKING_SPORT_REQUEST_TOPIC" not in debug_service["environment"]
     assert (
         debug_service["environment"]["LINE_TRACKING_PROFILE"]
-        == "${LINE_TRACKING_PROFILE:-swin-l-aspect-224x384-fp16}"
+        == "${LINE_TRACKING_PROFILE:-r50-fp16-640x360}"
     )
     assert "LINE_TRACKING_MODE:-ros2" in entrypoint
     assert 'line_tracking_container.py "${mode}"' in entrypoint
     assert "/workspace/tools" in entrypoint
 
 
-def test_live_swin_l_services_forward_configured_path_mask_class():
+def test_live_r50_services_forward_configured_path_mask_class():
     import yaml
 
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
@@ -72,14 +72,10 @@ def test_default_compose_is_cobiz_task_listener():
     assert "profiles" not in listener
     assert listener["environment"]["LINE_TRACKING_MODE"] == "task-drive"
     assert listener["environment"]["LINE_TRACKING_PROFILE"] == (
-        "${LINE_TRACKING_PROFILE:-swin-l-aspect-224x384-fp16}"
+        "${LINE_TRACKING_PROFILE:-r50-fp16-640x360}"
     )
-    assert listener["environment"]["LINE_TRACKING_BACKEND"].endswith(":-tensorrt}")
-    assert listener["environment"]["LINE_TRACKING_ALLOW_BACKEND_FALLBACK"] == "false"
+    assert listener["environment"]["LINE_TRACKING_BACKEND"].endswith(":-pytorch}")
     assert "LINE_TRACKING_OVERLAY_TOPIC" not in listener["environment"]
-    assert listener["environment"]["LINE_TRACKING_TRT_ENGINE"].endswith(
-        ":-/models/swin-l-224x384-fp16.plan}"
-    )
     assert listener["environment"]["LINE_TRACKING_APRILTAG_DETECTIONS_TOPIC"].endswith(
         "/detections}"
     )
@@ -157,7 +153,7 @@ def test_automatic_stop_switches_are_forwarded_and_default_disabled():
     assert "LINE_TRACKING_BYPASS_PATH_STOPS=" not in example
 
 
-def test_jetson_swin_l_base_build_contract():
+def test_jetson_r50_base_build_contract():
     compose = (ROOT / "docker-compose.yml").read_text()
     env_example = (ROOT / ".env.example").read_text()
     debug_dockerfile = (ROOT / "Dockerfile.line-tracking").read_text()
@@ -170,7 +166,6 @@ def test_jetson_swin_l_base_build_contract():
     assert "LINE_TRACKING_TORCH_VERSION" not in compose
     assert "LINE_TRACKING_TORCHVISION_INDEX_URL" in compose
     assert "LINE_TRACKING_TORCHVISION_VERSION" in compose
-    assert "LINE_TRACKING_TORCH_TENSORRT_VERSION" in compose
     assert "LINE_TRACKING_BASE_IMAGE=cobiz:jetson-line-tracking-l4t-r36.5.0" in env_example
     assert "LINE_TRACKING_TORCH_INDEX_URL" not in env_example
     assert "LINE_TRACKING_TORCH_VERSION" not in env_example
@@ -179,13 +174,10 @@ def test_jetson_swin_l_base_build_contract():
         in env_example
     )
     assert "LINE_TRACKING_TORCHVISION_VERSION=0.23.0" in env_example
-    assert "LINE_TRACKING_TORCH_TENSORRT_VERSION=2.8.0+cu126" in env_example
     assert "ARG LINE_TRACKING_BASE_IMAGE=cobiz:jetson-line-tracking-l4t-r36.5.0" in debug_dockerfile
     assert "pip install" in debug_dockerfile
     assert "torchvision" in debug_dockerfile
     assert '"torchvision==${LINE_TRACKING_TORCHVISION_VERSION}"' in debug_dockerfile
-    assert '"torch-tensorrt==${LINE_TRACKING_TORCH_TENSORRT_VERSION}"' in debug_dockerfile
-    assert '"dllist==2.0.0"' in debug_dockerfile
     assert "--no-deps" in debug_dockerfile
     assert "torch.version.cuda" in debug_dockerfile
     assert "12.6" in debug_dockerfile
@@ -197,41 +189,8 @@ def test_jetson_swin_l_base_build_contract():
     assert "/usr/lib/python3.10/dist-packages" in debug_dockerfile
 
 
-def test_tensorrt_engine_build_services_use_target_gpu_and_artifact_mounts():
-    import yaml
-
-    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
-    prepare = services["prepare-swin-l-checkpoint"]
-    build = services["build-swin-l-engine"]
-
-    assert prepare["profiles"] == ["engine"]
-    assert build["profiles"] == ["engine"]
-    assert prepare["runtime"] == "nvidia"
-    assert build["runtime"] == "nvidia"
-    assert "prepare_swin_l_checkpoint.py" in prepare["entrypoint"][1]
-    assert "build_swin_l_tensorrt.py" in build["entrypoint"][1]
-    assert "torch_tensorrt" in (ROOT / "tools" / "build_swin_l_tensorrt.py").read_text()
-    assert any(mount.endswith(":/models/checkpoint:ro") for mount in build["volumes"])
-    assert any(mount.endswith(":/models/output") for mount in build["volumes"])
 
 
-def test_actual_activate_requires_opt_in_for_startup_engine_builds():
-    import yaml
-
-    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
-    listener = services["actual-activate"]
-    entrypoint = (ROOT / "docker" / "line_tracking_entrypoint.sh").read_text()
-
-    assert listener["environment"]["LINE_TRACKING_TRT_AUTO_BUILD"].endswith(":-false}")
-    assert listener["environment"]["LINE_TRACKING_TRT_CHECKPOINT"].endswith(
-        ":-/models/checkpoint}"
-    )
-    assert any(mount.endswith(":/models") for mount in listener["volumes"])
-    assert not any(mount.endswith(":/models:ro") for mount in listener["volumes"])
-    assert any(mount.endswith(":/models/checkpoint") for mount in listener["volumes"])
-    assert "prepare_swin_l_checkpoint.py" in entrypoint
-    assert "build_swin_l_tensorrt.py" in entrypoint
-    assert '--manifest-output "${manifest_path}"' in entrypoint
 
 
 def test_live_services_forward_unrestricted_path_mode_switch():
@@ -303,7 +262,7 @@ def test_jetson_image_builds_and_sources_unitree_request_interface():
     assert "from apriltag_msgs.msg import AprilTagDetectionArray" in dockerfile
 
 
-def test_offline_swin_l_service_reuses_cuda_without_starting_ros():
+def test_offline_r50_service_reuses_cuda_without_starting_ros():
     import yaml
 
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]

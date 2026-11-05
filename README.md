@@ -32,10 +32,9 @@ in this simulation mode. The original checked planner remains available with
 Its controller and model adaptation are separate from the physical robot runtime.
 
 `actual-activate` is a Cobiz `LINE_TRACKING` task listener for the Unitree A2.
-For an accepted task it follows the selected surface-center path, defaulting to
-the pinned Swin-L FP16 TensorRT profile `swin-l-aspect-224x384-fp16`. The existing
-MaskFormer R50 profile `r50-fp16-640x360` is also supported with the PyTorch
-backend. AprilTag-based stopping and completion can be enabled explicitly. With no
+For an accepted task it follows the selected surface-center path with the pinned
+MaskFormer R50 profile `r50-fp16-640x360` and PyTorch. A validated local checkpoint
+uses `r50-finetuned-fp16-640x360`. AprilTag-based stopping and completion can be enabled explicitly. With no
 accepted task, it publishes
 no Sport Move request. The default path class is sidewalk
 (`LINE_TRACKING_PATH_MASK_CLASS=2`); a task can request road (`1`) or road/sidewalk
@@ -379,12 +378,9 @@ SLAM이 `STOPPED` 또는 `ERROR`를 보고할 때까지 1초 간격으로 재요
 
 ```bash
 cp .env.example .env
-mkdir -p .cache/huggingface models/swin-l-checkpoint models
-docker compose --profile engine build
-docker compose run --rm prepare-swin-l-checkpoint
-docker compose run --rm build-swin-l-engine
+mkdir -p .cache/huggingface models
 docker compose config --quiet
-docker compose up -d actual-activate
+docker compose up -d --build actual-activate
 docker compose logs -f actual-activate
 
 ros2 topic echo /detections
@@ -405,7 +401,7 @@ can produce a path, and adjacent road/sidewalk regions can form one wider
 region. Semantic background pixels (label `0`) are still excluded. This mode
 does not prefer sidewalk over road or run the model a second time.
 
-Mapillary-based Swin-L and R50 profiles keep `Crosswalk - Plain` (class 8)
+Mapillary R50 profiles keep `Crosswalk - Plain` (class 8)
 and `Lane Marking - Crosswalk` (class 23) in the road group (label `1`) for
 every path mode. Sidewalk-only tasks (`selected_mask=2`) exclude these labels.
 
@@ -428,7 +424,7 @@ No process can publish a final command after power loss or `SIGKILL`.
 ## Camera and path calibration
 
 `.env.example` is not a calibrated deployment file. Before operation, validate
-the camera-to-`base_link` geometry and Swin-L path against the installed A2.
+the camera-to-`base_link` geometry and surface path against the installed A2.
 
 The semantic reference Path uses the calibrated ROI homography below.
 
@@ -616,9 +612,9 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 
 잘못된 최상위 이벤트 JSON, 잘못된 task ID/다른 action, 중복 등록 이벤트 등은
 대체로 무시하며 별도 주행 정지 사유가 아니다. 프로세스 실행 전에는 ROS 메시지
-패키지·CUDA·모델/엔진 로딩 실패, TensorRT manifest/체크섬/버전 불일치, 잘못된
+패키지·CUDA·모델 로딩 실패, 체크포인트 manifest/체크섬 불일치, 잘못된
 환경변수·ROI·속도/시간 설정, 허용 profile·고정 checkpoint/360×640 출력/`base_link` 조건 위반,
-출력 주기 10 Hz 미만, `use_sim_time=true`, 자동 backend fallback 허용 등이
+출력 주기 10 Hz 미만, `use_sim_time=true`, 지원하지 않는 backend 등이
 시작 자체를 막을 수 있다. 이 경우 아직 작업을 수락하지 않았으므로
 `/task_state` 대신 컨테이너 시작 로그를 확인한다.
 
@@ -629,50 +625,26 @@ AprilTag 검출 스트림 단절만으로는 별도 정지하지 않는다. 추�
 수 있어 마지막 정지 명령이나 `TASK_ABORTED` 발행을 보장하지 못한다. OC3 같은
 보드 보호 동작은 이 애플리케이션의 reason 코드와 별개다.
 
-## FP16 TensorRT Swin-L and Jetson image
+## Jetson runtime image
 
-The default live task profile is `swin-l-aspect-224x384-fp16`:
-
-- model: `facebook/mask2former-swin-large-mapillary-vistas-semantic`
-- revision: `4772b6bf101d91f2534c106dc524d906aeb3c68a`
-- model input: 224x384; score map: 640x360; FP16 on CUDA/MPS
-- CPU falls back to FP32 for compatibility
-
-Build the CUDA base image once on the Jetson host with jetson-containers, then
-use it as the Compose build base:
+Build the CUDA/PyTorch base once on the Jetson with jetson-containers:
 
 ```bash
 cd ~/tools/jetson-containers
 PYTORCH_VERSION=2.8 CUDA_VERSION=12.6 \
-jetson-containers build \
-  --base=cobiz:jetson \
-  --name=cobiz:jetson-line-tracking \
-  --skip-packages=ffmpeg,opencv,ros \
-  pytorch:2.8
-
+jetson-containers build --base=cobiz:jetson \
+  --name=cobiz:jetson-line-tracking --skip-packages=ffmpeg,opencv,ros pytorch:2.8
 docker image inspect cobiz:jetson-line-tracking-l4t-r36.5.0
-cd /path/to/cobiz-plugin-line-tracking
-mkdir -p .cache/huggingface models/swin-l-checkpoint models
-docker compose --profile engine build
-docker compose run --rm prepare-swin-l-checkpoint
-docker compose run --rm build-swin-l-engine
-docker compose --profile debug up -d --build debugging-line-tracking
-docker compose logs -f debugging-line-tracking
 ```
 
-The image build installs vendored `unitree_api` and the Humble `apriltag_ros`
-package with its matching `apriltag_msgs` interfaces. Checkpoint preparation explicitly loads the pinned Hub
-`model.safetensors`, records any checkpoint-initialized values, and saves one
-complete local safetensors file. The engine build then compiles a static
-`1x3x224x384` FP16 input into a `65x360x640` semantic-score output and writes a
-SHA-256-protected manifest next to the plan. TensorRT plans must be generated on
-the target Jetson class and rebuilt after a TensorRT/CUDA/GPU change.
+`Dockerfile.line-tracking` installs the matching torchvision, ROS interfaces,
+AprilTag detector and inference tools without replacing the Jetson PyTorch stack.
+The R50 runtime uses PyTorch; the optional FCN Road service retains its independent
+TensorRT implementation. Set `LINE_TRACKING_BASE_IMAGE` to the installed base tag
+if the builder chooses a different suffix.
 
-The listener validates the plan checksum, model revision, binding shapes,
-TensorRT version, and GPU compute capability before accepting inference. It
-never falls back automatically in `task-drive` mode. Set
-`LINE_TRACKING_BACKEND=pytorch` explicitly to use the retained FP16 PyTorch rollback;
-`LINE_TRACKING_ALLOW_BACKEND_FALLBACK=true` is allowed only for debug/offline use.
+For existing installations, follow [configuration migration](docs/configuration-migration.md)
+before recreating services. Model paths, hashes and control settings are preserved.
 
 ## MaskFormer R50 on Jetson
 
@@ -688,15 +660,13 @@ To select the existing R50 runtime, set both the profile and backend:
 LINE_TRACKING_PROFILE=r50-fp16-640x360
 LINE_TRACKING_BACKEND=pytorch
 LINE_TRACKING_DEVICE=cuda
-LINE_TRACKING_TRT_AUTO_BUILD=false
-LINE_TRACKING_ALLOW_BACKEND_FALLBACK=false
 ```
 
 R50 uses `facebook/maskformer-resnet50-vistas` at revision
 `ae4b8c2590c0a090fc32d5c217d78738a2dd4b19`. Its PyTorch weights are loaded through
 the existing Hugging Face cache, then run in FP16 on CUDA. The image already
 includes its dependencies; no ONNX conversion or TensorRT engine build is needed.
-An R50/TensorRT combination fails before any startup engine build.
+An unsupported R50 backend fails before ROS startup.
 
 The 720p camera topic can stay unchanged: the processor resizes each selected
 frame to 640x360 before model-specific padding, and the output score map remains
@@ -721,14 +691,8 @@ docker compose logs -f actual-activate
 For inspection without Sport commands, use `debugging-line-tracking` instead of
 `actual-activate`. Avoid running both while comparing inference speed because
 they share the GPU. Check the metrics `profile`, `inference_count`,
-and `performance` together with the generated Path. The Swin-L-specific
-`rosbag_overlay.py` wrapper remains pinned to Swin-L; use
-`line_tracking_runtime.py mcap --profile r50-fp16-640x360 --backend pytorch`
-with the input/output arguments for offline R50 Path inspection.
-
-To restore the default runtime, set `LINE_TRACKING_PROFILE=swin-l-aspect-224x384-fp16`
-and `LINE_TRACKING_BACKEND=tensorrt`, then recreate the service with its matching
-Swin-L engine and manifest.
+and `performance` together with the generated Path. `tools/rosbag_overlay.py`
+uses the configured R50 model, checkpoint pin and geometry for offline inspection.
 
 ## Jetson inference stability
 
@@ -739,8 +703,6 @@ inference does not trigger a burst of catch-up jobs. Rate limiting reduces
 average load, but cannot guarantee latency or cap instantaneous GPU power.
 The first frame of a newly accepted task does not wait for the previous task's
 rate-limit deadline. Task-driven mode sleeps between tasks; debug mode does not.
-TensorRT's one-time startup validation with a synthetic input is retained;
-this is separate from camera inference and can briefly use the GPU at startup.
 
 The camera callback validates timestamps, encoding, dimensions, row stride and
 buffer length, then queues the original ROS image message. Only the selected
@@ -750,8 +712,7 @@ padded rows are made contiguous after selection. Other encodings are converted
 directly to RGB by `cv_bridge`. Camera conversion failures still stop motion.
 Offline BGR image/overlay callers keep the existing default input convention.
 The worker's processing latency now also includes selected-message decoding;
-previously callback decoding was outside that measurement. TensorRT transfers
-only `pixel_values`, leaving the unused processor `pixel_mask` on the CPU.
+previously callback decoding was outside that measurement.
 
 Camera-only BEV projection maps, metric axes and the closing kernel are cached by image
 dimensions and the frozen local-path configuration (up to eight entries).
@@ -759,17 +720,15 @@ Road, sidewalk and union paths share this immutable geometry, but each current
 mask is remapped and each path/smoother is updated independently. ROI,
 calibration, image size, BEV size or kernel changes select a new cache entry.
 
-The hybrid backend and the complete segmentation/temporal pipeline run in
+The complete segmentation/temporal pipeline run in
 `torch.inference_mode()` in the calling worker thread. This prevents the
 PyTorch decoder's autograd graph from being retained across frames by the
 temporal score average. `model.eval()` alone does not disable autograd.
 See the [PyTorch autograd documentation](https://docs.pytorch.org/docs/stable/notes/autograd).
 
 Compose defaults the OpenMP, MKL, and OpenBLAS thread pools to two threads.
-Engine auto-build is disabled by default (`LINE_TRACKING_TRT_AUTO_BUILD=false`);
-prepare artifacts with the engine services during maintenance, with live
-inference stopped. Existing `.env` values still override these defaults.
-Run only one live Swin-L model at a time on the Jetson.
+Run one tracking model process at a time while measuring Jetson inference speed.
+Existing `.env` values override the common R50 defaults.
 
 For an **inference-only** 1 Hz acceptance run, use debug mode with
 `LINE_TRACKING_INFERENCE_HZ=1.25` to leave scheduling margin. Warm up first, then
@@ -810,7 +769,7 @@ uv run --with mcap --with mcap-ros2-support \
   --output rosbag-results/camera.mp4
 ```
 
-Run the Swin-L overlays locally, or use the `test-line-tracking` Compose profile on a
+Run the configured R50 overlays locally, or use the `test-line-tracking` Compose profile on a
 Jetson:
 
 ```bash

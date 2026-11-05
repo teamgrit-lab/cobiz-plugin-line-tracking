@@ -1,27 +1,4 @@
-"""Reusable runtimes for the retained and realtime Mapillary profiles.
-
-Named profiles are intentionally kept here:
-
-* ``swin-l-best-so-far`` is the immutable quality baseline. Selecting it
-  restores the exact model revision, 384x384 model input, 640x360 score map,
-  temporal alpha 0.62, and hysteresis margin 0.07 used by the retained
-  full-video results.
-* ``swin-l-aspect-224x384`` is the FP32 rollback profile. It keeps the same
-  checkpoint and temporal settings while preserving the wide camera aspect
-  ratio.
-* ``swin-l-aspect-224x384-fp16`` is the CUDA/MPS deployment default. It changes
-  only model/input precision and preserves the FP32 profile as a rollback.
-* ``swin-l-aspect-448x768`` is a slower, quality-first experimental profile
-  validated on the two test-one videos; it retains the same Swin-L contract.
-* ``r50-fp16-640x360`` is the previous realtime candidate. It uses MaskFormer R50 at
-  the native 640x360 camera size, FP16 on MPS/CUDA, Swin-aligned surface label
-  aggregation, and a zero-cost temporal margin selected by direct comparison.
-* ``r50-finetuned-fp16-640x360`` loads a validated local R50 checkpoint with
-  operational road labels including manholes and the same R50 cleanup.
-
-Each profile pins its own validated aggregation and temporal defaults so MCAP,
-live ROS 2, and full-video tests remain reproducible.
-"""
+"""Pinned R50 surface inference with unchanged label cleanup and temporal smoothing."""
 
 from __future__ import annotations
 
@@ -34,33 +11,22 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as functional
-from evaluate_mapillary_label_aggregation import (
-    ROAD_LABELS,
-    SIDEWALK_LABELS,
-    resolve_ids,
-)
-from evaluate_mapillary_temporal import aggregated_selected_mask, upscale_mask
-from evaluate_sidewalk_road_temporal import remove_small_components
+from segmentation_utils import (ROAD_LABELS, SIDEWALK_LABELS, resolve_ids,
+                                aggregated_selected_mask, upscale_mask, remove_small_components,
+                                choose_device, render_overlay)
 from r50_checkpoint import (
     FINETUNED_PROFILE,
     checkpoint_manifest_sha256,
     validate_checkpoint,
 )
-from segment_sidewalk_road import choose_device, render_overlay
-from tensorrt_backend import TensorRTSemanticBackend
 from transformers import (
     AutoImageProcessor,
-    Mask2FormerForUniversalSegmentation,
     MaskFormerForInstanceSegmentation,
 )
 
-LINE_TRACKING_PROFILE = "swin-l-best-so-far"
-LINE_TRACKING_ASPECT_PROFILE = "swin-l-aspect-224x384"
-LINE_TRACKING_ASPECT_FP16_PROFILE = "swin-l-aspect-224x384-fp16"
-LINE_TRACKING_ASPECT_QUALITY_PROFILE = "swin-l-aspect-448x768"
 R50_PROFILE = "r50-fp16-640x360"
 R50_PROFILES = (R50_PROFILE, FINETUNED_PROFILE)
-DEFAULT_PROFILE = LINE_TRACKING_ASPECT_FP16_PROFILE
+DEFAULT_PROFILE = R50_PROFILE
 DEFAULT_EVALUATION_SIZE = (360, 640)
 R50_ROAD_LABELS = tuple(
     label
@@ -75,7 +41,7 @@ R50_FINETUNED_SIDEWALK_LABELS = tuple(
 R50_MAXIMUM_ROAD_ISLAND_AREA = 2560
 R50_MINIMUM_SIDEWALK_RING_RATIO = 0.10
 ROAD_ISLAND_ACTIONS = ("drop", "reassign-sidewalk")
-INFERENCE_BACKENDS = ("pytorch", "tensorrt")
+INFERENCE_BACKENDS = ("pytorch",)
 
 
 @dataclass(frozen=True)
@@ -94,50 +60,6 @@ class ProfileSpec:
 
 
 PROFILE_SPECS = {
-    LINE_TRACKING_PROFILE: ProfileSpec(
-        name=LINE_TRACKING_PROFILE,
-        model_family="mask2former",
-        model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
-        model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
-        input_height=384,
-        input_width=384,
-        precision="fp32",
-        temporal_alpha=0.62,
-        temporal_hysteresis_margin=0.07,
-    ),
-    LINE_TRACKING_ASPECT_PROFILE: ProfileSpec(
-        name=LINE_TRACKING_ASPECT_PROFILE,
-        model_family="mask2former",
-        model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
-        model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
-        input_height=224,
-        input_width=384,
-        precision="fp32",
-        temporal_alpha=0.62,
-        temporal_hysteresis_margin=0.07,
-    ),
-    LINE_TRACKING_ASPECT_FP16_PROFILE: ProfileSpec(
-        name=LINE_TRACKING_ASPECT_FP16_PROFILE,
-        model_family="mask2former",
-        model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
-        model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
-        input_height=224,
-        input_width=384,
-        precision="fp16",
-        temporal_alpha=0.62,
-        temporal_hysteresis_margin=0.07,
-    ),
-    LINE_TRACKING_ASPECT_QUALITY_PROFILE: ProfileSpec(
-        name=LINE_TRACKING_ASPECT_QUALITY_PROFILE,
-        model_family="mask2former",
-        model_id="facebook/mask2former-swin-large-mapillary-vistas-semantic",
-        model_revision="4772b6bf101d91f2534c106dc524d906aeb3c68a",
-        input_height=448,
-        input_width=768,
-        precision="fp32",
-        temporal_alpha=0.62,
-        temporal_hysteresis_margin=0.07,
-    ),
     R50_PROFILE: ProfileSpec(
         name=R50_PROFILE,
         model_family="maskformer",
@@ -202,9 +124,6 @@ class SegmentationConfig:
     pedestrian_area_road_expansion: int = 0
     device: str = "auto"
     backend: str = "pytorch"
-    tensorrt_engine_path: str | None = None
-    tensorrt_manifest_path: str | None = None
-    allow_backend_fallback: bool = False
     cuda_graph: bool = False
 
     def validate(self) -> None:
@@ -249,18 +168,6 @@ class SegmentationConfig:
             raise ValueError("pedestrian_area_road_expansion must be non-negative")
         if self.backend not in INFERENCE_BACKENDS:
             raise ValueError(f"backend must be one of {', '.join(INFERENCE_BACKENDS)}")
-        if self.backend == "tensorrt":
-            profile = resolve_profile(
-                self.profile,
-                model_id=self.model_id,
-                model_revision=self.model_revision,
-            )
-            if profile.model_family != "mask2former" or profile.precision != "fp16":
-                raise ValueError(
-                    "TensorRT backend requires an FP16 Mask2Former profile"
-                )
-            if not self.tensorrt_engine_path or not self.tensorrt_manifest_path:
-                raise ValueError("TensorRT backend requires engine and manifest paths")
 
 
 @dataclass(frozen=True)
@@ -358,48 +265,8 @@ class SegmentationModel:
             "width": self.profile.input_width,
         }
         self.backend = config.backend
-        self.backend_fallback_reason: str | None = None
-        self.tensorrt_backend: TensorRTSemanticBackend | None = None
-        self.model: Any | None = None
-        id2label: dict[int, str]
-        if self.backend == "tensorrt":
-            try:
-                self.tensorrt_backend = TensorRTSemanticBackend(
-                    Path(config.tensorrt_engine_path or ""),
-                    Path(config.tensorrt_manifest_path or ""),
-                    profile=self.profile.name,
-                    model_revision=self.profile.model_revision,
-                    input_shape=(
-                        1,
-                        3,
-                        self.profile.input_height,
-                        self.profile.input_width,
-                    ),
-                    output_shape=(
-                        65,
-                        config.evaluation_height,
-                        config.evaluation_width,
-                    ),
-                    device=self.device,
-                )
-                raw_id2label = self.tensorrt_backend.manifest["model"].get("id2label")
-                if not isinstance(raw_id2label, dict):
-                    raise RuntimeError("TensorRT manifest does not contain id2label")
-                id2label = {int(key): str(value) for key, value in raw_id2label.items()}
-            except Exception as error:
-                if not config.allow_backend_fallback:
-                    raise
-                self.backend = "pytorch"
-                self.backend_fallback_reason = str(error)
-                self.tensorrt_backend = None
-                self.model = self._load_pytorch_model()
-                id2label = self.model.config.id2label
-        else:
-            self.model = self._load_pytorch_model()
-            id2label = self.model.config.id2label
-        if self.backend == "tensorrt":
-            assert self.tensorrt_backend is not None
-            assert self.model is None
+        self.model = self._load_pytorch_model()
+        id2label = self.model.config.id2label
         if self.profile.name in R50_PROFILES:
             self.road_labels = (
                 R50_FINETUNED_ROAD_LABELS
@@ -448,12 +315,6 @@ class SegmentationModel:
             }
             if problems:
                 raise ValueError(f"Local R50 checkpoint did not load strictly: {problems}")
-        elif self.profile.model_family == "mask2former":
-            model = Mask2FormerForUniversalSegmentation.from_pretrained(
-                self.profile.model_id,
-                revision=self.profile.model_revision,
-                use_safetensors=True,
-            )
         elif self.profile.model_family == "maskformer":
             model = MaskFormerForInstanceSegmentation.from_pretrained(
                 self.profile.model_id,
@@ -493,12 +354,6 @@ class SegmentationModel:
             cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if color_order == "bgr" else frame
         )
         inputs = self.processor(images=frame_rgb, return_tensors="pt")
-        if getattr(self, "backend", "pytorch") == "tensorrt":
-            assert self.tensorrt_backend is not None
-            # The fixed-shape TensorRT adapter consumes only pixel_values.
-            # Avoid transferring the processor's unused pixel_mask to CUDA.
-            inputs = self._move_inputs({"pixel_values": inputs["pixel_values"]})
-            return self.tensorrt_backend.semantic_scores(inputs["pixel_values"])
         inputs = self._move_inputs(inputs)
         if getattr(self.config, 'cuda_graph', False):
             from cuda_replay import CudaReplay
@@ -508,21 +363,6 @@ class SegmentationModel:
         with torch.inference_mode():
             assert self.model is not None
             outputs = self.model(**inputs)
-            if self.profile.model_family == "mask2former":
-                processed = self.processor.post_process_semantic_segmentation(
-                    outputs,
-                    target_sizes=[self.evaluation_size],
-                    return_segmentation_scores=True,
-                )[0]
-                scores = processed["segmentation_scores"].detach()
-                if self.use_fp16:
-                    # Keep deployment scores on the accelerator in their native
-                    # FP16 dtype. Temporal smoothing and argmax then run without
-                    # copying the full class-score tensor to CPU every frame.
-                    return scores.to(device=self.device, dtype=torch.float16)
-                # Preserve the exact retained FP32 rollback behavior.
-                return scores.float().cpu()
-
             scores = self._r50_output_scores(outputs)
         # Keep R50 scores on MPS/CUDA. Only maps needed by CPU morphology are
         # transferred in segment(), avoiding a 65-channel copy per frame.
@@ -717,9 +557,9 @@ class SegmentationModel:
             building = building_tensor.detach().cpu().numpy()
 
         if self._previous_scores is None:
-            # TensorRT owns and reuses its output allocation. Keep temporal
+            # CUDA replay reuses its output allocation. Keep temporal
             # state in a separate buffer so the next enqueue cannot overwrite it.
-            smooth_scores = scores.clone() if self.backend == "tensorrt" or getattr(self.config, 'cuda_graph', False) else scores
+            smooth_scores = scores.clone() if getattr(self.config, 'cuda_graph', False) else scores
         else:
             smooth_scores = (
                 self.temporal_alpha * scores
@@ -784,7 +624,6 @@ class SegmentationModel:
             "device": str(self.device),
             "precision": "fp16" if self.use_fp16 else "fp32",
             "backend": self.backend,
-            "backend_fallback_reason": self.backend_fallback_reason,
             "model_load_seconds": self.model_load_seconds,
             "settings": {
                 "surface_aggregate": True,
@@ -806,8 +645,6 @@ class SegmentationModel:
                 "pedestrian_area_road_expansion": (self.pedestrian_area_road_expansion),
             },
         }
-        if self.tensorrt_backend is not None:
-            metadata["tensorrt"] = self.tensorrt_backend.metadata()
         if self.checkpoint_manifest is not None:
             metadata["checkpoint_manifest_sha256"] = self.checkpoint_manifest_sha256
             # Live metrics need identity, not the potentially large validation

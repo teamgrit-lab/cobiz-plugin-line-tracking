@@ -32,7 +32,6 @@ services:
         LINE_TRACKING_BASE_IMAGE: ${LINE_TRACKING_BASE_IMAGE:-cobiz:jetson-line-tracking-l4t-r36.5.0}
         LINE_TRACKING_TORCHVISION_INDEX_URL: ${LINE_TRACKING_TORCHVISION_INDEX_URL:-https://pypi.jetson-ai-lab.io/jp6/cu126}
         LINE_TRACKING_TORCHVISION_VERSION: ${LINE_TRACKING_TORCHVISION_VERSION:-0.23.0}
-        LINE_TRACKING_TORCH_TENSORRT_VERSION: ${LINE_TRACKING_TORCH_TENSORRT_VERSION:-2.8.0+cu126}
     image: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
     container_name: cobiz-plugin-line-tracking-debugging-line-tracking
     network_mode: host
@@ -51,16 +50,13 @@ services:
       LINE_TRACKING_IMAGE_TOPIC: ${LINE_TRACKING_IMAGE_TOPIC:-/a2/front_camera/res_360p/image_raw}
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
-      LINE_TRACKING_PROFILE: ${LINE_TRACKING_PROFILE:-swin-l-aspect-224x384-fp16}
+      LINE_TRACKING_PROFILE: ${LINE_TRACKING_PROFILE:-r50-fp16-640x360}
       LINE_TRACKING_MODEL_ID: ${LINE_TRACKING_MODEL_ID:-}
       LINE_TRACKING_MODEL_REVISION: ${LINE_TRACKING_MODEL_REVISION:-}
       LINE_TRACKING_CHECKPOINT_SHA256: ${LINE_TRACKING_CHECKPOINT_SHA256:-}
       LINE_TRACKING_PATH_MASK_CLASS: ${LINE_TRACKING_PATH_MASK_CLASS:-2}
       LINE_TRACKING_DEVICE: ${LINE_TRACKING_DEVICE:-cuda}
-      LINE_TRACKING_BACKEND: ${LINE_TRACKING_BACKEND:-tensorrt}
-      LINE_TRACKING_TRT_ENGINE: ${LINE_TRACKING_TRT_ENGINE:-/models/swin-l-224x384-fp16.plan}
-      LINE_TRACKING_TRT_MANIFEST: ${LINE_TRACKING_TRT_MANIFEST:-/models/swin-l-224x384-fp16.plan.json}
-      LINE_TRACKING_ALLOW_BACKEND_FALLBACK: ${LINE_TRACKING_ALLOW_BACKEND_FALLBACK:-false}
+      LINE_TRACKING_BACKEND: ${LINE_TRACKING_BACKEND:-pytorch}
       LINE_TRACKING_UNRESTRICTED_PATH_MODE: ${LINE_TRACKING_UNRESTRICTED_PATH_MODE:-true}
       LINE_TRACKING_BRANCH_PREFERENCE: ${LINE_TRACKING_BRANCH_PREFERENCE:-right}
       LINE_TRACKING_BRANCH_MIN_WIDTH_M: ${LINE_TRACKING_BRANCH_MIN_WIDTH_M:-0.60}
@@ -75,7 +71,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 15s
 
-  # Swin-L or R50 task-driving mode. It listens for Cobiz custom actions and creates
+  # R50 task-driving mode. It listens for Cobiz custom actions and creates
   # direct Sport requests only for an accepted LINE_TRACKING task.
   actual-activate:
     cpu_shares: ${LINE_TRACKING_CPU_SHARES:-1024}
@@ -87,10 +83,10 @@ services:
     runtime: nvidia
     shm_size: "2gb"
     volumes:
+      - ./.env:/workspace/.env:ro
       - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
       - ${LINE_TRACKING_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
       - ${LINE_TRACKING_MODEL_DIR:-./models}:/models
-      - ${LINE_TRACKING_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint
     environment:
       <<: [*tracking-environment, *apriltag-environment]
       LINE_TRACKING_APRILTAG_DETECTOR_ENABLED: ${LINE_TRACKING_APRILTAG_DETECTOR_ENABLED:-true}
@@ -99,18 +95,13 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
       LINE_TRACKING_MODE: task-drive
-      LINE_TRACKING_PROFILE: ${LINE_TRACKING_PROFILE:-swin-l-aspect-224x384-fp16}
+      LINE_TRACKING_PROFILE: ${LINE_TRACKING_PROFILE:-r50-fp16-640x360}
       LINE_TRACKING_MODEL_ID: ${LINE_TRACKING_MODEL_ID:-}
       LINE_TRACKING_MODEL_REVISION: ${LINE_TRACKING_MODEL_REVISION:-}
       LINE_TRACKING_CHECKPOINT_SHA256: ${LINE_TRACKING_CHECKPOINT_SHA256:-}
       LINE_TRACKING_PATH_MASK_CLASS: ${LINE_TRACKING_PATH_MASK_CLASS:-2}
       LINE_TRACKING_DEVICE: ${LINE_TRACKING_DEVICE:-cuda}
-      LINE_TRACKING_BACKEND: ${LINE_TRACKING_BACKEND:-tensorrt}
-      LINE_TRACKING_TRT_ENGINE: ${LINE_TRACKING_TRT_ENGINE:-/models/swin-l-224x384-fp16.plan}
-      LINE_TRACKING_TRT_MANIFEST: ${LINE_TRACKING_TRT_MANIFEST:-/models/swin-l-224x384-fp16.plan.json}
-      LINE_TRACKING_TRT_AUTO_BUILD: ${LINE_TRACKING_TRT_AUTO_BUILD:-false}
-      LINE_TRACKING_TRT_CHECKPOINT: ${LINE_TRACKING_TRT_CHECKPOINT:-/models/checkpoint}
-      LINE_TRACKING_ALLOW_BACKEND_FALLBACK: "false"
+      LINE_TRACKING_BACKEND: ${LINE_TRACKING_BACKEND:-pytorch}
       LINE_TRACKING_UNRESTRICTED_PATH_MODE: ${LINE_TRACKING_UNRESTRICTED_PATH_MODE:-true}
       LINE_TRACKING_BRANCH_PREFERENCE: ${LINE_TRACKING_BRANCH_PREFERENCE:-right}
       LINE_TRACKING_BRANCH_MIN_WIDTH_M: ${LINE_TRACKING_BRANCH_MIN_WIDTH_M:-0.60}
@@ -182,43 +173,6 @@ services:
     restart: unless-stopped
     stop_grace_period: 15s
 
-  # Freeze checkpoint-initialized values into a reproducible local safetensors
-  # artifact before compiling for the target Jetson.
-  prepare-swin-l-checkpoint:
-    profiles: [engine]
-    build: *line-tracking-build
-    image: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
-    runtime: nvidia
-    working_dir: /workspace
-    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/prepare_swin_l_checkpoint.py"]
-    command:
-      - --output-dir
-      - /models/checkpoint
-      - --allow-initialized-weights
-    volumes:
-      - ${LINE_TRACKING_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
-      - ${LINE_TRACKING_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint
-    environment:
-      HF_HOME: /root/.cache/huggingface
-
-  # TensorRT plans are target-GPU/runtime-specific, so build this one-shot
-  # artifact on the same Jetson class used by actual-activate.
-  build-swin-l-engine:
-    profiles: [engine]
-    build: *line-tracking-build
-    image: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
-    runtime: nvidia
-    working_dir: /workspace
-    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/build_swin_l_tensorrt.py"]
-    command:
-      - --checkpoint
-      - /models/checkpoint
-      - --output
-      - /models/output/swin-l-224x384-fp16.plan
-    volumes:
-      - ${LINE_TRACKING_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint:ro
-      - ${LINE_TRACKING_MODEL_DIR:-./models}:/models/output
-
   # One-shot offline MCAP tests using the same Jetson CUDA image as live debug.
   # Override its ROS/DDS entrypoint and keep files owned by the host user.
   test-line-tracking:
@@ -239,7 +193,6 @@ services:
       - ${LINE_TRACKING_MODEL_DIR:-./models}:/models:ro
     environment:
       HF_HOME: /cache/huggingface
+      LINE_TRACKING_PROFILE: ${LINE_TRACKING_PROFILE:-r50-fp16-640x360}
       PYTHONDONTWRITEBYTECODE: "1"
-      LINE_TRACKING_BACKEND: ${LINE_TRACKING_BACKEND:-tensorrt}
-      LINE_TRACKING_TRT_ENGINE: ${LINE_TRACKING_TRT_ENGINE:-/models/swin-l-224x384-fp16.plan}
-      LINE_TRACKING_TRT_MANIFEST: ${LINE_TRACKING_TRT_MANIFEST:-/models/swin-l-224x384-fp16.plan.json}
+      LINE_TRACKING_BACKEND: ${LINE_TRACKING_BACKEND:-pytorch}

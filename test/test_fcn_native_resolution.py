@@ -144,7 +144,7 @@ def test_1024_road_task_routes_native_packets_and_sidewalk_still_uses_legacy(mon
         ros.now+=1.2;node.publish_state()
         assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
         cancel(ros,'native-road');start(ros,2,'legacy-sidewalk');image(ros);wait_for_count(ros,2)
-        assert side_calls==[2] and ros.metrics()['inference_backend']=='legacy'
+        assert side_calls==[2] and ros.metrics()['inference_backend']=='r50'
     ros.run(scenario,'--fcn-sha256',SHA,'--path-mask-class','1','--path-planner','local')
 
 

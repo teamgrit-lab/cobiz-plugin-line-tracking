@@ -213,7 +213,7 @@ def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend)
         image(ros)
         wait_for_count(ros, 2)
         assert side_calls == [2] and len(road_calls) == 1
-        assert ros.metrics()['inference_backend'] == 'legacy'
+        assert ros.metrics()['inference_backend'] == 'r50'
         assert ros.metrics()['camera_transport'] == 'ros'
     ros.run(scenario, '--road-direct-input', '--path-mask-class', '1', '--path-planner', 'local', *args)
 
@@ -248,7 +248,7 @@ def test_cancelled_direct_inference_cannot_move_or_abort_next_sidewalk(monkeypat
         release.set()
         wait_for_count(ros, 1)
         assert node.tasks.active.task_id == 'sidewalk'
-        assert ros.metrics()['inference_backend'] == 'legacy'
+        assert ros.metrics()['inference_backend'] == 'r50'
         assert ros.metrics()['connectome360'] is None
     ros.run(scenario, '--road-direct-input', '--path-mask-class', '1', '--path-planner', 'local',
             '--connectome360-url', 'http://127.0.0.1:8093/v1/direct-road', '--connectome360-sha256', PIN)
@@ -282,6 +282,6 @@ def test_current_direct_service_failure_aborts_only_road(monkeypatch):
         ros.now += 2.1
         image(ros)
         wait_for_count(ros, 1)
-        assert ros.metrics()['inference_backend'] == 'legacy'
+        assert ros.metrics()['inference_backend'] == 'r50'
     ros.run(scenario, '--road-direct-input', '--path-mask-class', '1', '--path-planner', 'local',
             '--connectome360-url', 'http://127.0.0.1:8093/v1/direct-road', '--connectome360-sha256', PIN)

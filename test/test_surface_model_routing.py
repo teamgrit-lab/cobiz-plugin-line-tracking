@@ -102,7 +102,7 @@ def test_sidewalk_road_sidewalk_tasks_route_both_inference_and_control(monkeypat
                 assert metrics['inference_backend'] == 'front-connectome'
             else:
                 assert move['x'] > 0 and move['z'] == pytest.approx(0.)
-                assert metrics['inference_backend'] == 'legacy'
+                assert metrics['inference_backend'] == 'r50'
                 assert metrics['front_connectome'] is None
             cancel(ros, task_id)
         assert calls == ['load_sidewalk', 'sidewalk', 'load_road', 'road', 'sidewalk', 'road']

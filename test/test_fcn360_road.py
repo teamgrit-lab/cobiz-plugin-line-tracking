@@ -101,7 +101,7 @@ def test_tasks_use_only_current_camera_and_stop_on_lost_front(monkeypatch):
         ros.now += 2.1
         image(ros)
         wait_for_count(ros, 3)
-        assert side_calls == [2] and ros.metrics()['inference_backend'] == 'legacy'
+        assert side_calls == [2] and ros.metrics()['inference_backend'] == 'r50'
         cancel(ros, 'sidewalk')
         start(ros, 1, 'new-fcn')
         ros.subscriptions[mask_topic(SHA)](old_packet)
@@ -169,7 +169,7 @@ def test_inflight_road_result_is_discarded_on_switch_to_sidewalk(monkeypatch):
             ros.now += 2.1
             image(ros)
             wait_for_count(ros, 1)
-            assert ros.metrics()['inference_backend'] == 'legacy'
+            assert ros.metrics()['inference_backend'] == 'r50'
             assert ros.metrics()['fcn360'] is None
         finally:
             release.set()

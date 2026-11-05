@@ -112,12 +112,12 @@ def test_capture_freshness_is_checked_before_and_after_inference_and_on_task_swi
     source.capture = None
     assert service.process(dict(req, stream_id='next-task', not_before_ns=6_000_000_000))['reason'] == 'camera_pending'
     service.used_at = 100.
-    idle_clock = [102.49]
+    idle_clock = [104.99]
     monkeypatch.setattr(time, 'monotonic', lambda: idle_clock[0])
     before = source.closes
     service.expire_idle()
     assert source.closes == before and service.stream == 'next-task'
-    idle_clock[0] = 102.5
+    idle_clock[0] = 105.
     service.expire_idle()
     assert source.closes == before+1 and service.stream is None
 
@@ -130,6 +130,26 @@ def test_invalid_request_never_opens_camera(change):
     with pytest.raises(ValueError):
         service.process(request(5_000_000_000, **change))
     assert source.reads == 0
+
+
+def test_pending_camera_requests_renew_the_five_second_idle_deadline(monkeypatch):
+    clock = [100.]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    source = Source(None)
+    service = DirectCameraService(NS(details={}, reset=lambda: None), source, lambda _: {},
+                                  now_ns=lambda: 5_000_000_000)
+    assert service.process(request(5_000_000_000))['reason'] == 'camera_pending'
+    before = source.closes
+    clock[0] = 104.99
+    service.expire_idle()
+    assert source.closes == before
+    service.process(request(5_000_000_000))
+    clock[0] = 105.01
+    service.expire_idle()
+    assert source.closes == before  # No images, but a recent inference request.
+    clock[0] = 110.
+    service.expire_idle()
+    assert source.closes == before+1 and service.stream is None
 
 
 def test_usb_capture_without_ros_keeps_original_buffer_time(monkeypatch):
@@ -165,7 +185,7 @@ def test_client_rejects_untrusted_stamp_identity_and_class_packets(change):
             client.infer('task', started, 0, 1.5, time.time_ns)
 
 
-@pytest.mark.parametrize('backend', ['connectome360', 'front_connectome', 'fcn360'])
+@pytest.mark.parametrize('backend', ['connectome360', 'front_connectome', 'fcn360', 'r50_360_policy'])
 def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend):
     from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
     from test_surface_model_routing import start, cancel
@@ -191,8 +211,10 @@ def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend)
     if backend == 'fcn360':
         args = ('--fcn-sha256', PIN)
     else:
-        name = 'connectome360' if backend == 'connectome360' else 'front-connectome'
+        name = 'connectome360' if backend in ('connectome360', 'r50_360_policy') else 'front-connectome'
         args = (f'--{name}-url', 'http://127.0.0.1:8093/v1/direct-road', f'--{name}-sha256', PIN)
+        if backend == 'r50_360_policy':
+            args += ('--connectome360-detector-sha256', 'e'*64)
     def scenario(node):
         start(ros, 1, 'road')
         ros.now += 2.1
@@ -200,6 +222,8 @@ def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend)
         assert not side_calls
         assert json.loads(ros.published[SPORT][-1].parameter)['x'] > 0
         assert ros.metrics()['camera_transport'] == 'direct'
+        if backend == 'r50_360_policy':
+            assert ros.metrics()['inference_backend'] == 'r50-360-policy'
         assert ros.metrics()['camera_topic'] is None
         assert '/line_tracking/connectome360/views' not in ros.subscriptions
         assert debug.DEFAULT_IMAGE_TOPIC not in ros.subscriptions
@@ -219,7 +243,8 @@ def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend)
 
 
 @pytest.mark.parametrize('failure', [False, True])
-def test_cancelled_direct_inference_cannot_move_or_abort_next_sidewalk(monkeypatch, failure):
+@pytest.mark.parametrize('detector_pin', ['', 'e'*64])
+def test_cancelled_direct_inference_cannot_move_or_abort_next_sidewalk(monkeypatch, failure, detector_pin):
     from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
     from test_surface_model_routing import start, cancel
     from test_task_inference_lifecycle_ros import image, wait_for_count
@@ -251,7 +276,8 @@ def test_cancelled_direct_inference_cannot_move_or_abort_next_sidewalk(monkeypat
         assert ros.metrics()['inference_backend'] == 'r50'
         assert ros.metrics()['connectome360'] is None
     ros.run(scenario, '--road-direct-input', '--path-mask-class', '1', '--path-planner', 'local',
-            '--connectome360-url', 'http://127.0.0.1:8093/v1/direct-road', '--connectome360-sha256', PIN)
+            '--connectome360-url', 'http://127.0.0.1:8093/v1/direct-road', '--connectome360-sha256', PIN,
+            '--connectome360-detector-sha256', detector_pin)
 
 
 def test_current_direct_service_failure_aborts_only_road(monkeypatch):

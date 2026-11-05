@@ -10,13 +10,16 @@ from direct_camera_service import MAX_BODY, SCHEMA
 
 
 class DirectCameraClient:
-    def __init__(self, url, backend, pin, timeout, input_width=1024):
+    def __init__(self, url, backend, pin, timeout, input_width=1024, *, detector_sha256=''):
         if not url.startswith(('http://127.0.0.1:', 'http://localhost:')):
             raise ValueError('direct camera service must be loopback')
         if (len(pin) != 64 or any(c not in '0123456789abcdef' for c in pin)
                 or not math.isfinite(timeout) or timeout <= 0 or input_width not in (512, 1024)
                 or backend not in ('connectome360', 'front_connectome', 'fcn360')):
             raise ValueError('pinned supported model, resolution and positive timeout required')
+        if detector_sha256 and (backend != 'connectome360' or len(detector_sha256) != 64
+                                or any(c not in '0123456789abcdef' for c in detector_sha256)):
+            raise ValueError('R50 detector override requires a pinned 360 learned policy')
         self.url, self.backend, self.pin = url, backend, pin
         self.timeout, self.input_width, self.sequence = timeout, input_width, 0
         self.validator = None
@@ -29,6 +32,7 @@ class DirectCameraClient:
                 cls = FrontConnectomeSegmenter
             self.validator = cls.__new__(cls)
             self.validator.expected_sha256 = pin
+            self.validator.detector_sha256 = detector_sha256
         health = self._request(url.rsplit('/', 2)[0]+'/health')
         if health.get('schema') != SCHEMA or health.get('ready') is not True:
             raise ValueError('camera-owned inference service is not ready')

@@ -643,6 +643,11 @@ before recreating services. Model paths, hashes and control settings are preserv
 
 ## MaskFormer R50 on Jetson
 
+For **360° Road perception with R50 v7 and the unchanged learned 360 driving
+policy**, use the separate [R50 360 + retained policy configuration](docs/r50-360-policy.md).
+It preserves the configured Sidewalk detector/controller and pins the R50
+checkpoint separately from the original actor package. Select only one Road override.
+
 For partial-label fine-tuning and deploying a local R50 checkpoint, follow
 [R50 fine-tuning and Jetson deployment](docs/r50-finetuning.md). The separate
 `r50-finetuned-fp16-640x360` profile verifies an exported checkpoint manifest;

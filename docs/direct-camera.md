@@ -1,6 +1,6 @@
 # Road 추론 서비스의 카메라 직접 입력
 
-세 가지 Road Compose override 모두 `LINE_TRACKING_ROAD_DIRECT_INPUT=true`를
+Road Compose override 모두 `LINE_TRACKING_ROAD_DIRECT_INPUT=true`를
 지정한다. 학습 가중치·카메라 투영·속도 제한·FCN 경로 생성 방식은 유지하고,
 추론할 영상을 제어기에 보낸 뒤 다시 HTTP로 보내던 과정을 제거한다.
 
@@ -9,6 +9,7 @@
 | 360° + FCN | `fcn360-road` | USB `/dev/video91` 직접 수집 | 네 방향 원래 분류 격자·촬영 시각 |
 | 전면 + Flyvis | `front-connectome` | A2의 `LINE_TRACKING_IMAGE_TOPIC` 직접 구독 | 학습한 전진·회전·정지 명령·촬영 시각 |
 | 360° + Flyvis | `connectome360` | USB `/dev/video91` 직접 수집 | 학습한 전진·회전·정지 명령·촬영 시각 |
+| 360° + R50 v7 + 기존 주행 모델 | `r50-360-policy` | USB `/dev/video91` 직접 수집 | 기존 주행 모델의 전진·회전·정지 명령·촬영 시각 |
 
 각 구성은 표의 서비스와 `actual-activate` 두 컨테이너를 사용한다.
 `actual-activate`는 CoBiz 작업과 실제 로봇 명령을 담당한다. Sidewalk(2)는
@@ -22,7 +23,7 @@ Road(1) 작업에서만 요청하며, 최신 프레임 하나만 처리한다. �
 입력이 없으면 기존 결과의 촬영 시각을 갱신하지 않으며, 제어기의 신선도 검사로
 0 명령을 발행한다. 연결·추론·응답 검증 실패는 해당 Road 작업을 중단한다.
 
-카메라/전면 구독은 첫 Road 요청에서 열며 요청 중단 후 유휴 2.5초에 해제한다.
+카메라/전면 구독은 첫 Road 요청에서 열며 요청 중단 후 유휴 5초에 해제한다.
 이 시간은 카메라 프레임 간격이 아니라 **추론 요청이 없는 시간**이다.
 Road 종료·Sidewalk 전환 때 장치나 구독을 닫을 뿐, 컨테이너·프로그램을 종료하지 않는다.
 Road 요청은 계속되지만 영상만 없으면 입력을 기다리며, 기존 촬영 시각을 갱신하지 않아
@@ -64,7 +65,9 @@ docker compose build actual-activate
 
 선택한 추론 서비스만 먼저 실행하고 `/health`의 `ready`, 모델 해시와
 `schema=line_tracking.direct_camera.v1`을 확인한다. 포트는 360° Flyvis 8093,
-전면 Flyvis 8092, FCN 8094다. 상태 확인 자체는 카메라를 열거나 명령을 보내지 않는다.
+전면 Flyvis 8092, FCN 8094다. R50 + 기존 주행 모델은 8093을 사용하므로 360° Flyvis와
+동시에 실행하지 않는다. [R50 구성 사용법](r50-360-policy.md)을 참고한다.
+상태 확인 자체는 카메라를 열거나 명령을 보내지 않는다.
 
 ```bash
 # 아래는 360° Flyvis의 예다.

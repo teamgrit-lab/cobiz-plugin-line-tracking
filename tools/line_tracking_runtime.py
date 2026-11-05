@@ -121,9 +121,11 @@ from unitree_sport_api import (
 def _segmenter_from_args(args):
     if getattr(args, 'connectome360_url', ''):
         from connectome360_client import Connectome360Segmenter
+        override = ({'detector_sha256': args.connectome360_detector_sha256}
+                    if getattr(args, 'connectome360_detector_sha256', '') else {})
         return SurfaceSegmenter(SegmentationModel(_runtime_config(args)),
             lambda: Connectome360Segmenter(args.connectome360_url,
-                args.connectome360_sha256, args.connectome360_timeout_sec))
+                args.connectome360_sha256, args.connectome360_timeout_sec, **override))
     if getattr(args, 'front_connectome_url', ''):
         from front_connectome_client import FrontConnectomeSegmenter
         return SurfaceSegmenter(SegmentationModel(_runtime_config(args)),
@@ -138,6 +140,8 @@ def uses_learned_road_policy(args, mask_class):
 
 
 def learned_road_backend(args):
+    if getattr(args, 'connectome360_url', '') and getattr(args, 'connectome360_detector_sha256', ''):
+        return 'r50_360_policy'
     return 'connectome360' if getattr(args, 'connectome360_url', '') else 'front_connectome'
 
 
@@ -2290,7 +2294,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                     try:
                         from direct_camera_client import DirectCameraClient
                         if direct_client is None:
-                            direct_client = DirectCameraClient(*direct_camera_config(args), input_width=args.fcn_input_width)
+                            direct_client = DirectCameraClient(*direct_camera_config(args), input_width=args.fcn_input_width,
+                                detector_sha256=args.connectome360_detector_sha256)
                         max_age = args.fcn_max_age_sec if fcn else args.connectome_max_age_sec
                         result = direct_client.infer(*packet.direct_request, max_age,
                             now_ns=lambda: node.get_clock().now().nanoseconds)
@@ -2298,7 +2303,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                         node.get_logger().warning(f'direct Road inference failed: {error}')
                         with state_lock:
                             if latest.is_current(packet):
-                                node.abort_active_task(direct_camera_config(args)[1]+'_unavailable')
+                                backend = learned_road_backend(args) if uses_learned_road_policy(args, 1) else direct_camera_config(args)[1]
+                                node.abort_active_task(backend+'_unavailable')
                         continue
                     with state_lock:
                         if not latest.is_current(packet) or result is None:
@@ -2520,6 +2526,9 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--fcn-timeout-sec', type=float, default=_env_float('LINE_TRACKING_FCN_TIMEOUT_SEC', 2.))
     parser.add_argument('--connectome360-url', default=_env('LINE_TRACKING_CONNECTOME360_URL', ''))
     parser.add_argument('--connectome360-sha256', default=_env('LINE_TRACKING_CONNECTOME360_SHA256', ''))
+    parser.add_argument('--connectome360-detector-sha256',
+                        default=_env('LINE_TRACKING_CONNECTOME360_DETECTOR_SHA256', ''),
+                        help='Explicit R50 manifest pin; keep the 360 package actor unchanged')
     parser.add_argument('--connectome360-timeout-sec', type=float,
                         default=_env_float('LINE_TRACKING_CONNECTOME360_TIMEOUT_SEC', 2.))
     parser.add_argument('--fcn-sha256', default=_env('LINE_TRACKING_FCN_SHA256', ''))
@@ -2878,6 +2887,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         if (not url.startswith(('http://127.0.0.1:', 'http://localhost:'))
                 or not math.isfinite(timeout) or timeout <= 0):
             parser.error('direct camera requires a loopback URL and a positive timeout')
+    if args.connectome360_detector_sha256:
+        if (not args.connectome360_url or not args.road_direct_input
+                or len(args.connectome360_detector_sha256) != 64
+                or any(c not in '0123456789abcdef' for c in args.connectome360_detector_sha256)):
+            parser.error('R50 detector override requires direct 360 Road input and a lowercase manifest SHA256')
     if args.connectome360_url:
         if (args.mode != 'task-drive' or args.path_mask_class not in (1, 2)
                 or args.path_planner != 'local' or args.inference_process

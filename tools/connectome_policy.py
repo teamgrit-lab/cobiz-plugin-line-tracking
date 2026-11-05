@@ -42,19 +42,41 @@ class DriveReadout(nn.Module):
 
 class ConnectomeDrivePolicy:
     def __init__(self,path,perception,device='cpu',*,max_speed_mps=10.):
+        self._load(path, perception.details['weights_sha256'],
+                   perception.details['encoder_sha256'], device, max_speed_mps)
+
+    @classmethod
+    def with_detector_override(cls, path, training_package, detector, device='cpu'):
+        """Retain the actor, explicitly recording a different inference detector.
+
+        training_package must come from package_config's hash validation. The
+        checkpoint remains paired with its ORIGINAL training detector; the
+        override does not claim R50 was used to train these actor weights.
+        """
+        policy = cls.__new__(cls)
+        policy._load(path, training_package['road_sha256'], training_package['encoder_sha256'],
+                     device, training_package['simulation_max_speed_mps'])
+        if policy.details['weights_sha256'] != training_package['policy_sha256']:
+            raise ValueError('retained policy SHA-256 mismatch')
+        policy.details.update(input='four R50 binary camera road masks only',
+            detector_override=True, inference_detector=dict(detector),
+            training_road_sha256=training_package['road_sha256'])
+        return policy
+
+    def _load(self,path,road_sha256,encoder_sha256,device,max_speed_mps):
         if not .1 <= max_speed_mps <= 20.:
             raise ValueError('simulation maximum speed must be 0.1 to 20.0 m/s')
         self.max_speed_mps=float(max_speed_mps)
         path=Path(path);checkpoint=torch.load(path/'drive-readout.pt',map_location='cpu',weights_only=True)
         if checkpoint.get('schema')!='dangjin.drive_readout.vision.v2':
             raise ValueError('vision-only policy checkpoint required; retrain without goal inputs')
-        if checkpoint['road_sha256']!=perception.details['weights_sha256']:
+        if checkpoint['road_sha256']!=road_sha256:
             raise ValueError('drive policy requires its trained Flyvis road model')
         self.model=DriveReadout().to(device).eval().requires_grad_(False)
         self.model.load_state_dict(checkpoint['state_dict'],strict=True);self.device=device
         self.details={'backend':'flyvis-drive-readout','schema':'dangjin.neural_policy.vision.v2',
             'weights_sha256':hashlib.sha256((path/'drive-readout.pt').read_bytes()).hexdigest(),
-            'road_sha256':checkpoint['road_sha256'],'encoder_sha256':perception.details['encoder_sha256'],
+            'road_sha256':checkpoint['road_sha256'],'encoder_sha256':encoder_sha256,
             'input':'four damaged Flyvis camera road masks only',
             'outputs':['vx','yaw_rate','learned_stop'],'runtime_planner':False,'runtime_pure_pursuit':False,
             'max_speed_mps':self.max_speed_mps,

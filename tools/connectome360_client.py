@@ -12,9 +12,15 @@ from drive_control import DriveDecision
 class Connectome360Segmenter(FrontConnectomeSegmenter):
     protocol = PROTOCOL
 
+    def __init__(self, url, expected_sha256, timeout=1., *, detector_sha256=''):
+        self.detector_sha256 = detector_sha256
+        super().__init__(url, expected_sha256, timeout)
+
     def validate_model(self, model):
         scale = model.get('trained_max_speed_mps')
-        if (model.get('backend') != 'flyvis360-road-policy'
+        detector_pin = getattr(self, 'detector_sha256', '')
+        backend = 'r50-360-road-policy' if detector_pin else 'flyvis360-road-policy'
+        if (model.get('backend') != backend
                 or model.get('camera_views') != ['front', 'left', 'rear', 'right']
                 or model.get('weights_sha256') != self.expected_sha256
                 or model.get('camera_profile_sha256') != profile_sha256(load_profile())
@@ -22,14 +28,24 @@ class Connectome360Segmenter(FrontConnectomeSegmenter):
                 or model.get('pose_input') is not False or model.get('goal_input') is not False
                 or type(scale) not in (int, float) or not math.isfinite(scale) or not .1 <= scale <= 20):
             raise ValueError('360 model identity/input contract mismatch')
-        for key in ['road_sha256', 'policy_sha256', 'encoder_sha256']:
+        keys = ['road_sha256', 'policy_sha256', 'encoder_sha256']
+        if detector_pin:
+            if (model.get('detector_sha256') != detector_pin
+                    or model.get('detector_override') is not True
+                    or model.get('runtime_planner') is not False
+                    or model.get('road_mask_shape') != [4, 270, 480]
+                    or model.get('actor_input_chw') != [4, 32, 64]
+                    or model.get('actor_crop_rows') != [135, 257]):
+                raise ValueError('R50 detector override/input contract mismatch')
+            keys = ['detector_sha256', 'policy_sha256', 'training_road_sha256', 'training_encoder_sha256']
+        for key in keys:
             value = model.get(key, '')
             if len(value) != 64 or any(c not in '0123456789abcdef' for c in value):
                 raise ValueError('360 paired weight identity required')
         # A response cannot silently swap the detector or actor behind the pin.
-        if hasattr(self, '_paired_hashes') and self._paired_hashes != [model[k] for k in ['road_sha256', 'policy_sha256', 'encoder_sha256']]:
+        if hasattr(self, '_paired_hashes') and self._paired_hashes != [model[k] for k in keys]:
             raise ValueError('360 paired weights changed during stream')
-        self._paired_hashes = [model[k] for k in ['road_sha256', 'policy_sha256', 'encoder_sha256']]
+        self._paired_hashes = [model[k] for k in keys]
 
     def prepare_frame(self, bgr):
         if bgr.dtype != np.uint8 or bgr.shape != (540, 960, 3):

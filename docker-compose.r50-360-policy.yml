@@ -1,0 +1,55 @@
+# Choose this override alone: R50 v7 detects Road; the original 360 actor drives.
+# Sidewalk keeps the base profile, camera topic, and controller.
+services:
+  r50-360-policy:
+    build:
+      context: .
+      dockerfile: Dockerfile.line-tracking
+      args:
+        LINE_TRACKING_BASE_IMAGE: ${LINE_TRACKING_BASE_IMAGE:-cobiz:jetson-line-tracking-l4t-r36.5.0}
+        LINE_TRACKING_TORCHVISION_INDEX_URL: ${LINE_TRACKING_TORCHVISION_INDEX_URL:-https://pypi.jetson-ai-lab.io/jp6/cu126}
+        LINE_TRACKING_TORCHVISION_VERSION: ${LINE_TRACKING_TORCHVISION_VERSION:-0.23.0}
+    image: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
+    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/r50_360_policy_service.py"]
+    command: ["--detector", "/r50-model", "--policy-package", "/360-model", "--device", "cuda", "--port", "8093"]
+    network_mode: host
+    ipc: host
+    runtime: nvidia
+    shm_size: "2gb"
+    devices:
+      - ${CONNECTUM_360_VIDEO_DEVICE:-/dev/video91}:/dev/video91
+    volumes:
+      - ${R50_360_MODEL_DIR:-./models/r50-surface-v7/best}:/r50-model:ro
+      - ${CONNECTUM_360_MODEL_DIR:-./models/connectome360-both-20261103-135251-10mps}:/360-model:ro
+    environment:
+      R50_360_MODEL_SHA256: ${R50_360_MODEL_SHA256:-1fab9a4d1e6ca4b9d1bd6efc9d6a6367daff42d0e40a6c3bcda2045a6b9a31a8}
+      CONNECTUM_360_MODEL_SHA256: ${CONNECTUM_360_MODEL_SHA256:-1dd52c0e04834aaaf21f863201b1208ecb3725eb7ea49b84d1b7ee27f5d2b4e0}
+      HF_HUB_OFFLINE: "1"
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+    healthcheck:
+      test: ["CMD", "/opt/venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8093/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      start_period: 180s
+      retries: 3
+    restart: unless-stopped
+
+  actual-activate:
+    depends_on:
+      r50-360-policy:
+        condition: service_started
+    environment:
+      LINE_TRACKING_MODE: task-drive
+      LINE_TRACKING_PATH_MASK_CLASS: "1"
+      LINE_TRACKING_INFERENCE_PROCESS: "false"
+      LINE_TRACKING_PATH_PLANNER: local
+      LINE_TRACKING_ROAD_DIRECT_INPUT: "true"
+      LINE_TRACKING_FRONT_CONNECTOME_URL: ""
+      LINE_TRACKING_FCN_SHA256: ""
+      LINE_TRACKING_CONNECTOME360_URL: http://127.0.0.1:8093/v1/direct-road
+      LINE_TRACKING_CONNECTOME360_SHA256: ${CONNECTUM_360_MODEL_SHA256:-1dd52c0e04834aaaf21f863201b1208ecb3725eb7ea49b84d1b7ee27f5d2b4e0}
+      LINE_TRACKING_CONNECTOME360_DETECTOR_SHA256: ${R50_360_MODEL_SHA256:-1fab9a4d1e6ca4b9d1bd6efc9d6a6367daff42d0e40a6c3bcda2045a6b9a31a8}
+      LINE_TRACKING_CONNECTOME360_TIMEOUT_SEC: ${LINE_TRACKING_CONNECTOME360_TIMEOUT_SEC:-2.0}
+      LINE_TRACKING_CONNECTOME_MAX_AGE_SEC: ${LINE_TRACKING_CONNECTOME_MAX_AGE_SEC:-1.5}
+      LINE_TRACKING_MAX_FORWARD_MPS: ${LINE_TRACKING_MAX_FORWARD_MPS:-0.80}

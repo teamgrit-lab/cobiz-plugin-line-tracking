@@ -22,7 +22,7 @@ def run_recovery(monkeypatch, scenario, *, extra_args=()):
     good = np.zeros((360, 640), np.uint8)
     good[:, :320] = 2
     detection = NS(mask=good.copy())
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _: NS(
+    monkeypatch.setattr(debug, "SegmentationModel", lambda _: NS(
         device=NS(type="cuda"), reset=lambda: None,
         segment=lambda _frame, **kwargs: NS(
             selected_mask=detection.mask.copy(), inference_seconds=.01)))

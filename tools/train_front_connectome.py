@@ -16,8 +16,8 @@ from torch.nn import functional as F
 from front_connectome import SCHEMA, FrontDriveReadout, front_pixels, sha256
 from connectome_flow import FlyvisFlow
 from connectome_road import CircuitFeatures, RoadReadout
-from dangjin_sensor_faults import SensorFaults
-from train_connectome_policy import teacher
+from sensor_faults import SensorFaults
+from training_geometry import teacher, load_simulation_world
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE_SHA = '97f853183f79d2e987532ca2716ce3c33c2f41f875af05396e0cd8b14a7bc3c2'
@@ -27,7 +27,7 @@ def save_json(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + '\n')
 
 
-def entries(root, exclusions=None):
+def entries(root, exclusions=None, simulation_dir=None):
     samples = {r['id']: r for r in map(json.loads, (root / 'samples.jsonl').read_text().splitlines())}
     assignment = json.loads((root / 'splits/policy.json').read_text())['assignments']
     result = []
@@ -38,24 +38,25 @@ def entries(root, exclusions=None):
         result.append({'id': label['id'], 'image': str(root / samples[label['id']]['camera']['image']),
             'source': 'real_pseudo', 'split': split, 'label': label['labels']['road'],
             'command': label['estimated_command']})
-    folder = ROOT / '.cache/dangjin-connectome-training'
-    for p in sorted(folder.glob('[0-9][0-9][0-9].json')):
-        m = json.loads(p.read_text())
-        if m['sector'] != 0:
-            continue
-        result.append({'id': 'sim-road-' + p.stem, 'source': 'simulation_road',
-            'split': 'val' if m['pose_group'] % 5 == 0 else 'train',
-            'image': str(p.with_name(p.stem + '-rgb.png')),
-            'mask_image': str(p.with_name(p.stem + '-road.png')), 'command': None})
-    route = np.asarray(json.loads((ROOT / 'environments/dangjin/world.json').read_text())['perimeter_route'])
-    folder = ROOT / '.cache/dangjin-policy-training'
-    for p in sorted(folder.glob('[0-9][0-9][0-9][0-9].json')):
-        m = json.loads(p.read_text()); action = teacher(m, route)
-        result.append({'id': 'sim-policy-' + p.stem, 'source': 'simulation_policy',
-            'split': 'val' if m['pose_group'] % 5 == 0 else 'train',
-            'image': str(p.with_name(p.stem + '-0-rgb.png')),
-            'command': {'linear_x_mps': float(action[0] * .8), 'angular_z_radps': float(action[1] * .35),
-                        'stop': False, 'is_estimated': True, 'teacher': 'offline simulation geometry'}})
+    if simulation_dir is not None:
+        folder = ROOT / '.cache/dangjin-connectome-training'
+        for p in sorted(folder.glob('[0-9][0-9][0-9].json')):
+            m = json.loads(p.read_text())
+            if m['sector'] != 0:
+                continue
+            result.append({'id': 'sim-road-' + p.stem, 'source': 'simulation_road',
+                'split': 'val' if m['pose_group'] % 5 == 0 else 'train',
+                'image': str(p.with_name(p.stem + '-rgb.png')),
+                'mask_image': str(p.with_name(p.stem + '-road.png')), 'command': None})
+        route = np.asarray(load_simulation_world(simulation_dir)['perimeter_route'])
+        folder = ROOT / '.cache/dangjin-policy-training'
+        for p in sorted(folder.glob('[0-9][0-9][0-9][0-9].json')):
+            m = json.loads(p.read_text()); action = teacher(m, route)
+            result.append({'id': 'sim-policy-' + p.stem, 'source': 'simulation_policy',
+                'split': 'val' if m['pose_group'] % 5 == 0 else 'train',
+                'image': str(p.with_name(p.stem + '-0-rgb.png')),
+                'command': {'linear_x_mps': float(action[0] * .8), 'angular_z_radps': float(action[1] * .35),
+                            'stop': False, 'is_estimated': True, 'teacher': 'offline simulation geometry'}})
     if exclusions:
         excluded = set(json.loads(Path(exclusions).read_text())['excluded_ids'])
         result = [r for r in result if r['id'] not in excluded]
@@ -232,13 +233,14 @@ def train_actor(args, rows, road, x, device, threshold):
         'real_labels_weight': .35, 'sim_labels_weight': 1., 'frame_history': 1}
     for source in ['real_pseudo', 'simulation_policy']:
         ids = np.array([i for i in valid if rows[i]['source'] == source])
-        report['evaluation'][source] = evaluate(ids)
+        report['evaluation'][source] = evaluate(ids) if len(ids) else {'frames': 0}
     save_json(args.output / 'actor-training.json', report)
     return model
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--simulation-dir', type=Path, help='optional local scene directory; omit for real-data-only training')
     p.add_argument('--dataset', type=Path, default=Path('/Volumes/MY_HDD/connectum_data'))
     p.add_argument('--output', type=Path, default=Path('/Volumes/MY_HDD/connectum_models/front-road-v1-20261027'))
     p.add_argument('--cache', type=Path, default=ROOT / '.cache/front-road-v1')
@@ -248,12 +250,12 @@ def main():
     p.add_argument('--exclusions', type=Path, help='audited frame exclusion manifest; original dataset is unchanged')
     args = p.parse_args(); args.output.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(8427); np.random.seed(8427); torch.set_num_threads(2); cv2.setNumThreads(2)
-    start = time.monotonic(); rows = entries(args.dataset, args.exclusions)
+    start = time.monotonic(); rows = entries(args.dataset, args.exclusions, args.simulation_dir)
     save_json(args.output / 'training-inputs.json', {'counts': dict(Counter(r['source'] + ':' + r['split'] for r in rows)),
         'dataset_manifest_sha256': sha256(args.dataset / 'dataset.json'), 'front_only': True, 'encoder_frozen': True,
         'real_control_targets': 'unverified pseudo labels, not executed/expert commands',
         'exclusions_sha256': sha256(args.exclusions) if args.exclusions else None,
-        'simulation_layout': json.loads((ROOT / 'environments/dangjin/site.json').read_text())['layout_revision']})
+        'simulation_layout': load_simulation_world(args.simulation_dir)['layout_revision'] if args.simulation_dir is not None else None})
     if args.stage in ['all', 'features']:
         build_features(args, rows)
     if args.stage == 'features':

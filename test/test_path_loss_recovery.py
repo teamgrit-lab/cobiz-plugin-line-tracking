@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from swin_l_drive_control import DriveConfig, DriveDecision, PathLossRecovery
+from drive_control import DriveConfig, DriveDecision, PathLossRecovery
 from local_path import SmoothedPath
 
 

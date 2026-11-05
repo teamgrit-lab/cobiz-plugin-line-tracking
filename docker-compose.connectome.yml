@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile.connectome
       args:
-        CONNECTOME_BASE_IMAGE: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+        CONNECTOME_BASE_IMAGE: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
     image: cobiz-plugin-line-tracking-connectome
     network_mode: host
     runtime: nvidia
@@ -41,7 +41,7 @@ services:
       LINE_TRACKING_ROAD_CORRIDOR_SMOOTHING_M: ${LINE_TRACKING_ROAD_CORRIDOR_SMOOTHING_M:-0.30}
       LINE_TRACKING_ROAD_BUILDING_COST_WEIGHT: ${LINE_TRACKING_ROAD_BUILDING_COST_WEIGHT:-2.0}
       LINE_TRACKING_ROAD_BUILDING_DISTANCE_M: ${LINE_TRACKING_ROAD_BUILDING_DISTANCE_M:-2.0}
-  debugging-swin-l:
+  debugging-line-tracking:
     environment:
       LINE_TRACKING_PATH_PLANNER: connectome
       LINE_TRACKING_CONNECTOME_URL: http://127.0.0.1:8091/v1/plan

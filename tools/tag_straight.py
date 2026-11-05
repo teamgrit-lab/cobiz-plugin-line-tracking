@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import math
 import threading
 
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 
 
 def wrap(angle):

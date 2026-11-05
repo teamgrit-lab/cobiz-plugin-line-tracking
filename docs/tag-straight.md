@@ -102,8 +102,8 @@ docker compose -f docker-compose.yml up -d actual-activate
 | `LINE_TRACKING_TAG_ROUTE_ARRIVAL_AHEAD_M` | `0.5` | 도착 태그의 진행축상 앞뒤 허용 거리 |
 | `LINE_TRACKING_TAG_ROUTE_STRAIGHT_TIMEOUT_SEC` | `120` | 직선 구간 제한 시간 |
 
-family는 `SWIN_L_APRILTAG_FAMILY`, 확인 횟수와 촬영 유효 시간은
-`SWIN_L_APRILTAG_CONFIRM_MIN_HITS` / `SWIN_L_APRILTAG_MAX_AGE_SEC`를 사용한다.
+family는 `LINE_TRACKING_APRILTAG_FAMILY`, 확인 횟수와 촬영 유효 시간은
+`LINE_TRACKING_APRILTAG_CONFIRM_MIN_HITS` / `LINE_TRACKING_APRILTAG_MAX_AGE_SEC`를 사용한다.
 회전 상한도 기존 주행 설정을 따른다. 후방은 전방에서 180도 반대 방향이다.
 
 360 장치는 태그 payload를 가진 단독 Sidewalk 작업에서만 연다. Road 서비스가

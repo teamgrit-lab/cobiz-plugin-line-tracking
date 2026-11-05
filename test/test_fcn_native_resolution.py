@@ -9,15 +9,14 @@ import cv2
 import numpy as np
 import pytest
 
-from dangjin_fcn import FcnPerception, FcnDrive, apply_class_faults
-from dangjin_sensor_faults import SensorFaults, fault_config
-from dangjin_sim_server import decode_surround, encode_png, SimulationService
+from fcn_replay import FcnPerception, FcnDrive, apply_class_faults
+from sensor_faults import SensorFaults, fault_config
+from surround_codec import decode_surround, encode_png
 from fcn360_road import (BLIND, EGO, FRAME_ID, FcnRoadPlanner, ROAD, apply_front_robot_prior,
                          camera_maps, classify_panorama, front_robot_mask, model_shapes,
                          observed_classes, read_masks)
 from local_path import LocalPathConfig
 from surround_camera import load_profile, profile_sha256
-from test_dangjin_sim import ROOT, request
 from test_fcn360_road import lane, packet, SHA
 from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
 from test_surface_model_routing import start, cancel
@@ -130,7 +129,7 @@ def test_1024_road_task_routes_native_packets_and_sidewalk_still_uses_legacy(mon
     def segment(frame,path_mask_class,**kwargs):
         side_calls.append(path_mask_class)
         return SimpleNamespace(selected_mask=np.full((360,640),2,np.uint8),inference_seconds=.01)
-    monkeypatch.setattr(debug,'BestSoFarSegmenter',lambda _:SimpleNamespace(
+    monkeypatch.setattr(debug,'SegmentationModel',lambda _:SimpleNamespace(
         device=SimpleNamespace(type='cuda'),reset=lambda:None,segment=segment))
     def scenario(node):
         node.destroy_subscription=lambda sub:ros.subscriptions.pop('/line_tracking/fcn360/masks/model_'+SHA)
@@ -144,7 +143,7 @@ def test_1024_road_task_routes_native_packets_and_sidewalk_still_uses_legacy(mon
         ros.now+=1.2;node.publish_state()
         assert json.loads(ros.published[SPORT][-1].parameter)==ZERO
         cancel(ros,'native-road');start(ros,2,'legacy-sidewalk');image(ros);wait_for_count(ros,2)
-        assert side_calls==[2] and ros.metrics()['inference_backend']=='legacy'
+        assert side_calls==[2] and ros.metrics()['inference_backend']=='r50'
     ros.run(scenario,'--fcn-sha256',SHA,'--path-mask-class','1','--path-planner','local')
 
 

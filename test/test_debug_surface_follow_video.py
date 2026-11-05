@@ -13,7 +13,7 @@ from debug_surface_follow_video import (  # noqa: E402
     video_path_config,
 )
 from local_path import LocalPathConfig, SmoothedPath  # noqa: E402
-from swin_l_drive_control import DriveConfig  # noqa: E402
+from drive_control import DriveConfig  # noqa: E402
 
 
 def test_road_is_used_when_no_sidewalk_is_visible():

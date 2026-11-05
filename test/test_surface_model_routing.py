@@ -11,7 +11,7 @@ import pytest
 from test_apriltag_task_stop_ros import Message, RosHarness, SPORT, ZERO, debug
 from test_task_inference_lifecycle_ros import image, wait_for_count
 from surface_segmenter import SurfaceSegmenter, FrontRoadInferenceError
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 
 
 FRONT_ARGS = ('--front-connectome-url', 'http://127.0.0.1:8092/v1/front-road',
@@ -74,7 +74,7 @@ def setup_models(monkeypatch, ros, road_segment=None, road_factory=None):
             road_factory()
         return NS(device=NS(type='cuda'), reset=lambda: None, segment=front_segment)
 
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', legacy_factory)
+    monkeypatch.setattr(debug, 'SegmentationModel', legacy_factory)
     monkeypatch.setattr(front_connectome_client, 'FrontConnectomeSegmenter', front_factory)
     return calls
 
@@ -102,7 +102,7 @@ def test_sidewalk_road_sidewalk_tasks_route_both_inference_and_control(monkeypat
                 assert metrics['inference_backend'] == 'front-connectome'
             else:
                 assert move['x'] > 0 and move['z'] == pytest.approx(0.)
-                assert metrics['inference_backend'] == 'legacy'
+                assert metrics['inference_backend'] == 'r50'
                 assert metrics['front_connectome'] is None
             cancel(ros, task_id)
         assert calls == ['load_sidewalk', 'sidewalk', 'load_road', 'road', 'sidewalk', 'road']
@@ -195,7 +195,7 @@ def test_old_motion_env_does_not_gate_road_or_sidewalk(monkeypatch):
         for mode, task_id in [(1, 'road-without-odom'), (2, 'sidewalk-without-odom')]:
             start(ros, mode, task_id)
             ros.now += 2.1
-            before = ros.metrics()['inference_count'] if ros.published.get('/line_tracking/swin_l/metrics') else 0
+            before = ros.metrics()['inference_count'] if ros.published.get('/line_tracking/metrics') else 0
             image(ros)
             wait_for_count(ros, before + 1)
             command = json.loads(ros.published[SPORT][-1].parameter)

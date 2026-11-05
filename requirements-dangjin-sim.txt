@@ -1,3 +1,0 @@
-# Local synthetic-scene experiment. Keep this separate from the robot runtime.
--r requirements-connectome.txt
-transformers==5.19.0

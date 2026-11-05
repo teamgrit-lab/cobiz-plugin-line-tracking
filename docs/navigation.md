@@ -15,8 +15,8 @@ docker compose -f docker-compose.yml -f docker-compose.connectome.yml \
   -f docker-compose.navigation.yml up -d --build actual-activate connectome-planner
 ```
 
-기존 R50/Swin 모델 pin, CameraInfo·TF·센서 토픽을 그대로 재사용한다.
-overlay는 `SWIN_L_MODE`만 `navigation-worker`로 변경한다. Connectome을 쓰지 않는
+기존 R50 모델 pin, CameraInfo·TF·센서 토픽을 그대로 재사용한다.
+overlay는 `LINE_TRACKING_MODE`만 `navigation-worker`로 변경한다. Connectome을 쓰지 않는
 배포는 중간 `docker-compose.connectome.yml`을 생략한다. 기존 task-drive 인스턴스를
 교체하며 별도 GPU 모델 인스턴스를 추가하지 않는다.
 

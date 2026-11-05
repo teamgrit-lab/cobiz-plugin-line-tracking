@@ -206,7 +206,7 @@ def test_pose_age_does_not_reject_a_fresh_heartbeat_or_extend_an_expired_control
 
 
 def test_perception_child_uses_waypoint_and_camera_pose_without_contacting_road_service(monkeypatch):
-    import best_so_far_runtime
+    import segmentation_runtime
     import connectome_client
     from perception_process import perception_worker
     class Client:
@@ -215,7 +215,7 @@ def test_perception_child_uses_waypoint_and_camera_pose_without_contacting_road_
         def plan(self, *_args, **_kwargs): pytest.fail("sidewalk contacted road service")
     monkeypatch.setattr(connectome_client, "ConnectomeClient", Client)
     mask = fork_mask()
-    monkeypatch.setattr(best_so_far_runtime, "BestSoFarSegmenter", lambda _cfg: SimpleNamespace(
+    monkeypatch.setattr(segmentation_runtime, "SegmentationModel", lambda _cfg: SimpleNamespace(
         device=SimpleNamespace(type="cpu"), reset=lambda: None,
         segment=lambda *_a, **_kw: SimpleNamespace(selected_mask=mask, road_hazard_mask=np.zeros_like(mask))))
     requests = iter([dict(reset=sequence == 1, rgb=np.zeros((360, 640, 3), np.uint8),
@@ -238,7 +238,7 @@ def test_real_worker_follows_waypoint_branch_without_camera_pose_time_matching(m
     ros = RosHarness(monkeypatch)
     args = debug.parse_args(["navigation-worker", "--inference-hz", "1000"])
     mask = fork_mask(surface, config=path_config_for_mode(debug._local_path_config_from_args(args), surface))
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _cfg: SimpleNamespace(
+    monkeypatch.setattr(debug, "SegmentationModel", lambda _cfg: SimpleNamespace(
         device=SimpleNamespace(type="cuda"), reset=lambda: None,
         segment=lambda *_a, **_kw: SimpleNamespace(selected_mask=mask, inference_seconds=.01)))
     def scenario(node):
@@ -278,7 +278,7 @@ def test_waypoint_path_gaps_follow_env_stop_setting_in_readiness_and_final_outpu
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "false")
     args = debug.parse_args(["navigation-worker", "--inference-hz", "1000", "--path-planner", "local"])
     mask = fork_mask(config=debug._local_path_config_from_args(args))
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _cfg: SimpleNamespace(
+    monkeypatch.setattr(debug, "SegmentationModel", lambda _cfg: SimpleNamespace(
         device=SimpleNamespace(type="cuda"), reset=lambda: None,
         segment=lambda *_a, **_kw: SimpleNamespace(selected_mask=mask, inference_seconds=.01)))
     original = debug.WaypointGuide.local_plan

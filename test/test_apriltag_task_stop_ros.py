@@ -14,10 +14,10 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-import swin_l_local_path_debug as debug
+import line_tracking_runtime as debug
 
 SPORT = "/api/sport/request"
-METRICS = "/line_tracking/swin_l/metrics"
+METRICS = "/line_tracking/metrics"
 ZERO = {"x": 0.0, "y": 0.0, "z": 0.0}
 
 
@@ -67,9 +67,9 @@ class RosHarness:
             monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "true")
         # The id-only scenarios feed bare detections; the range gate has its own
         # scenarios below that enable it with real corners and calibration.
-        monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MAX_RANGE_M", "0")
-        monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MIN_DECISION_MARGIN", "0")
-        monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_ALLOWED_IDS", "")
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_MAX_RANGE_M", "0")
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_MIN_DECISION_MARGIN", "0")
+        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_ALLOWED_IDS", "")
         self.now = 0.0
         self.external_publishers = 0
         self.published = {}
@@ -186,7 +186,7 @@ class RosHarness:
         monkeypatch.setattr(debug.time, "monotonic", lambda: self.now)
         monkeypatch.setattr(
             debug,
-            "BestSoFarSegmenter",
+            "SegmentationModel",
             lambda _config: SimpleNamespace(
                 device=SimpleNamespace(type="cuda"),
             reset=lambda: None,
@@ -333,9 +333,9 @@ def a2_camera_info():
 
 
 def enable_range_gate(monkeypatch):
-    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MAX_RANGE_M", "3.0")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MIN_DECISION_MARGIN", "15")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_ALLOWED_IDS", "0-30")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_MAX_RANGE_M", "3.0")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_MIN_DECISION_MARGIN", "15")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_ALLOWED_IDS", "0-30")
 
 
 def test_far_tag_keeps_tracking_and_tag_within_range_stops(ros, monkeypatch):
@@ -418,7 +418,7 @@ def test_r50_task_drive_accepts_720p_rgb_and_keeps_camera_stop(ros, monkeypatch)
         configurations.append(config)
         return SimpleNamespace(device=SimpleNamespace(type="cuda"), segment=segment, reset=lambda: None)
 
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", create_segmenter)
+    monkeypatch.setattr(debug, "SegmentationModel", create_segmenter)
 
     def scenario(node):
         camera = Message(bytes([20, 30, 40]) * 720 * 1280)
@@ -441,7 +441,7 @@ def test_r50_task_drive_accepts_720p_rgb_and_keeps_camera_stop(ros, monkeypatch)
 
         assert ros.metrics()["profile"] == debug.R50_PROFILE
         assert ros.metrics()["path_tracked"] is True
-        assert ros.published["/line_tracking/swin_l/local_path"][-1].poses
+        assert ros.published["/line_tracking/local_path"][-1].poses
         ros.now = 2.1
         node.publish_state()
         assert ros.metrics()["drive_reason"] == "tracking"
@@ -590,7 +590,7 @@ def test_disabled_path_stop_holds_last_yaw_and_never_reuses_it_in_another_task(r
             assert ros.metrics()["path_yaw_held"] is True
             assert ros.metrics()["stop_checks"]["path_unavailable"] is False
             assert ros.metrics()["path_tracked"] is False
-            assert ros.published["/line_tracking/swin_l/local_path"][-1].poses == []
+            assert ros.published["/line_tracking/local_path"][-1].poses == []
             assert json.loads(ros.published[SPORT][-1].parameter) == previous
             assert node.tasks.active is not None
         assert {key: ros.metrics()["stop_checks"][key] for key in ("camera_freshness", "inference_freshness", "path_available", "low_confidence", "lateral_target", "apriltag")} == {
@@ -781,11 +781,11 @@ def test_missing_path_streak_counts_inferences_between_control_ticks_and_resets(
 def test_missing_path_streak_uses_the_task_selected_surface(ros, monkeypatch, mask_class):
     for check in ("PATH_UNAVAILABLE", "LOW_CONFIDENCE", "LATERAL_TARGET"):
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check, "false")
-    monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", str(mask_class))
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", str(mask_class))
     initial_label = 1 if mask_class == 1 else 2
     mask = np.full((360, 640), initial_label, np.uint8)
     monkeypatch.setattr(
-        debug, "BestSoFarSegmenter",
+        debug, "SegmentationModel",
         lambda _config: SimpleNamespace(
             device=SimpleNamespace(type="cuda"),
             reset=lambda: None,
@@ -903,10 +903,10 @@ def test_combined_surface_tracks_either_class_and_stops_on_background(
     ros, monkeypatch, from_payload
 ):
     mask = np.ones((360, 640), np.uint8)
-    monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", "2" if from_payload else "0")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", "2" if from_payload else "0")
     monkeypatch.setattr(
         debug,
-        "BestSoFarSegmenter",
+        "SegmentationModel",
         lambda _config: SimpleNamespace(
             device=SimpleNamespace(type="cuda"),
             reset=lambda: None,
@@ -954,7 +954,7 @@ def test_combined_surface_tracks_either_class_and_stops_on_background(
             assert metrics["inference_count"] == count + 1
             assert metrics["path_mask_class"] == 0
             assert metrics["path_surface"] == "ROAD_OR_SIDEWALK"
-            path = ros.published["/line_tracking/swin_l/local_path"][-1]
+            path = ros.published["/line_tracking/local_path"][-1]
             move = json.loads(ros.published[SPORT][-1].parameter)
             if surface == 0:
                 assert metrics["drive_reason"] == "path_unavailable"
@@ -1324,7 +1324,7 @@ def test_tag_metrics_report_verification_and_confirmation(ros):
             "candidate_ranges_m": {"7": None},
             "confirmed_range_m": None,
         }
-        assert "/line_tracking/swin_l/overlay" not in ros.published
+        assert "/line_tracking/overlay" not in ros.published
         ros.now = 0.2
         ros.detect(tag_id=7, frame=3)
         ros.now = 1.0
@@ -1370,7 +1370,7 @@ def test_callback_confirmation_state_survives_detections_until_publisher_release
         assert ros.metrics()["apriltag"]["state"] == "no_tag"
         assert ros.metrics()["apriltag"]["confirmed_id"] is None
         assert ros.metrics()["drive_reason"] == "task_idle"
-        assert "/line_tracking/swin_l/overlay" not in ros.published
+        assert "/line_tracking/overlay" not in ros.published
         assert len(ros.published["/task_state"]) == 2
         assert all(
             message.header.identity.api_id == 1008
@@ -1721,7 +1721,7 @@ def test_verification_state_clears_without_refreshing_heartbeat(ros, source):
             2.0 if source == "expired" else 1.01
         )
         assert ros.metrics()["apriltag"]["stream_ready"] is False
-        assert "/line_tracking/swin_l/overlay" not in ros.published
+        assert "/line_tracking/overlay" not in ros.published
 
     ros.run(scenario, "--apriltag-confirm-window-sec", "2.0")
 
@@ -1830,7 +1830,7 @@ def test_conversion_fault_cannot_be_cleared_by_older_inflight_inference(
             assert release.wait(timeout=3.0)
         return SimpleNamespace(selected_mask=np.full((360, 640), 2, np.uint8), inference_seconds=0.01)
 
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _config: SimpleNamespace(
+    monkeypatch.setattr(debug, 'SegmentationModel', lambda _config: SimpleNamespace(
         device=SimpleNamespace(type='cuda'), segment=segment, reset=lambda: None,
     ))
 
@@ -1915,7 +1915,7 @@ def test_inference_error_stops_even_with_all_automatic_stops_disabled(
             raise RuntimeError('injected model failure')
         return SimpleNamespace(selected_mask=np.full((360, 640), 2, np.uint8), inference_seconds=0.01)
 
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _config: SimpleNamespace(
+    monkeypatch.setattr(debug, 'SegmentationModel', lambda _config: SimpleNamespace(
         device=SimpleNamespace(type='cuda'), segment=segment, reset=lambda: None,
     ))
 

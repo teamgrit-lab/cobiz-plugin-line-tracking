@@ -16,8 +16,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-import best_so_far_runtime as runtime
-import swin_l_local_path_debug as debug
+import segmentation_runtime as runtime
+import line_tracking_runtime as debug
 from local_path import selected_path_region
 
 PROFILE = "r50-finetuned-fp16-640x360"
@@ -115,9 +115,6 @@ def _fake_hf_loaders(monkeypatch, checkpoint, loading_info=None):
     monkeypatch.setattr(
         runtime.MaskFormerForInstanceSegmentation, "from_pretrained", load_model
     )
-    monkeypatch.setattr(
-        runtime.Mask2FormerForUniversalSegmentation, "from_pretrained", load_model
-    )
     return calls
 
 
@@ -138,11 +135,11 @@ def test_environment_and_cli_pin_reach_runtime(monkeypatch):
         debug,
         "ENV",
         {
-            "SWIN_L_PROFILE": PROFILE,
-            "SWIN_L_MODEL_ID": "/models/custom/best",
-            "SWIN_L_MODEL_REVISION": "",
-            "SWIN_L_CHECKPOINT_SHA256": "a" * 64,
-            "SWIN_L_BACKEND": "pytorch",
+            "LINE_TRACKING_PROFILE": PROFILE,
+            "LINE_TRACKING_MODEL_ID": "/models/custom/best",
+            "LINE_TRACKING_MODEL_REVISION": "",
+            "LINE_TRACKING_CHECKPOINT_SHA256": "a" * 64,
+            "LINE_TRACKING_BACKEND": "pytorch",
         },
     )
     config = debug._runtime_config(debug.parse_args(["task-drive"]))
@@ -184,7 +181,6 @@ def test_drive_rejects_missing_or_wrong_manifest_pin(checkpoint, pin):
         ("evaluation_size", [720, 1280], "360x640"),
         ("path_frame_id", "camera", "base_link"),
         ("output_hz", 5, "at least 10 Hz"),
-        ("allow_backend_fallback", True, "prohibits"),
     ],
 )
 def test_local_drive_preserves_preflight_requirements(
@@ -209,13 +205,13 @@ def test_local_load_is_offline_strict_and_records_verified_identity(
     pin_required,
 ):
     calls = _fake_hf_loaders(monkeypatch, checkpoint)
-    config = runtime.BestSoFarConfig(
+    config = runtime.SegmentationConfig(
         profile=PROFILE,
         model_id=str(checkpoint.path),
         device="cpu",
         checkpoint_manifest_sha256=checkpoint.pin if pin_required else None,
     )
-    segmenter = runtime.BestSoFarSegmenter(config)
+    segmenter = runtime.SegmentationModel(config)
     assert calls == [
         ("processor", str(checkpoint.path), {"local_files_only": True}),
         (
@@ -262,8 +258,8 @@ def test_bad_checkpoint_is_rejected_before_either_hf_loader(
     else:
         model_id = "facebook/maskformer-resnet50-vistas"
     with pytest.raises((ValueError, FileNotFoundError)):
-        runtime.BestSoFarSegmenter(
-            runtime.BestSoFarConfig(
+        runtime.SegmentationModel(
+            runtime.SegmentationConfig(
                 profile=PROFILE,
                 model_id=model_id,
                 device="cpu",
@@ -287,8 +283,8 @@ def test_local_load_rejects_incomplete_or_incompatible_weights(
 ):
     _fake_hf_loaders(monkeypatch, checkpoint, {problem: ["bad_tensor"]})
     with pytest.raises(ValueError, match=problem):
-        runtime.BestSoFarSegmenter(
-            runtime.BestSoFarConfig(
+        runtime.SegmentationModel(
+            runtime.SegmentationConfig(
                 profile=PROFILE,
                 model_id=str(checkpoint.path),
                 device="cpu",
@@ -307,8 +303,8 @@ def test_manhole_mapping_and_other_r50_groups(
     monkeypatch, checkpoint, profile, manhole_surface
 ):
     _fake_hf_loaders(monkeypatch, checkpoint)
-    segmenter = runtime.BestSoFarSegmenter(
-        runtime.BestSoFarConfig(
+    segmenter = runtime.SegmentationModel(
+        runtime.SegmentationConfig(
             profile=profile,
             model_id=str(checkpoint.path),
             device="cpu",
@@ -330,7 +326,7 @@ def test_manhole_mapping_and_other_r50_groups(
 
 def test_building_plane_is_current_frame_and_does_not_change_surface_labels(monkeypatch, checkpoint):
     _fake_hf_loaders(monkeypatch, checkpoint)
-    segmenter = runtime.BestSoFarSegmenter(runtime.BestSoFarConfig(
+    segmenter = runtime.SegmentationModel(runtime.SegmentationConfig(
         profile=PROFILE, model_id=str(checkpoint.path), device="cpu"))
     labels = segmenter.model.config.id2label
     road = next(k for k, v in labels.items() if v == 'Road')
@@ -359,7 +355,7 @@ def test_crosswalks_remain_road_and_are_excluded_from_sidewalk_paths(
     monkeypatch, checkpoint, accelerator, mode, profile,
 ):
     _fake_hf_loaders(monkeypatch, checkpoint)
-    segmenter = runtime.BestSoFarSegmenter(runtime.BestSoFarConfig(
+    segmenter = runtime.SegmentationModel(runtime.SegmentationConfig(
         profile=profile, model_id=str(checkpoint.path), device='cpu'))
     # Exercise both reduction implementations, including the accelerator LUT.
     if accelerator:
@@ -393,7 +389,7 @@ def test_crosswalks_remain_road_across_mode_switches(
     monkeypatch, checkpoint, accelerator, profile,
 ):
     _fake_hf_loaders(monkeypatch, checkpoint)
-    segmenter = runtime.BestSoFarSegmenter(runtime.BestSoFarConfig(
+    segmenter = runtime.SegmentationModel(runtime.SegmentationConfig(
         profile=profile, model_id=str(checkpoint.path), device='cpu',
         temporal_hysteresis_margin=0.07))
     if accelerator:
@@ -411,7 +407,7 @@ def test_crosswalks_remain_road_across_mode_switches(
 
 def test_crosswalk_seeds_road_expansion(monkeypatch, checkpoint):
     _fake_hf_loaders(monkeypatch, checkpoint)
-    segmenter = runtime.BestSoFarSegmenter(runtime.BestSoFarConfig(
+    segmenter = runtime.SegmentationModel(runtime.SegmentationConfig(
         profile=PROFILE, model_id=str(checkpoint.path), device='cpu',
         pedestrian_area_road_expansion=1))
     scores = torch.zeros((65, 7, 7))
@@ -429,11 +425,11 @@ def test_crosswalk_seeds_road_expansion(monkeypatch, checkpoint):
 @pytest.mark.parametrize("profile", [PROFILE, runtime.R50_PROFILE])
 def test_shell_rejects_wrong_r50_backend_before_ros_setup(profile):
     result = subprocess.run(
-        ["bash", str(ROOT / "docker/swin_l_debug_entrypoint.sh")],
+        ["bash", str(ROOT / "docker/line_tracking_entrypoint.sh")],
         env={
             "PATH": os.environ["PATH"],
-            "SWIN_L_PROFILE": profile,
-            "SWIN_L_BACKEND": "tensorrt",
+            "LINE_TRACKING_PROFILE": profile,
+            "LINE_TRACKING_BACKEND": "tensorrt",
         },
         text=True,
         capture_output=True,
@@ -441,14 +437,14 @@ def test_shell_rejects_wrong_r50_backend_before_ros_setup(profile):
         check=False,
     )
     assert result.returncode != 0
-    assert "R50 requires SWIN_L_BACKEND=pytorch" in result.stderr
+    assert "R50 requires LINE_TRACKING_BACKEND=pytorch" in result.stderr
     assert "ROS_DISTRO" not in result.stderr
 
 
-@pytest.mark.parametrize("service", ["actual-activate", "debugging-swin-l"])
+@pytest.mark.parametrize("service", ["actual-activate", "debugging-line-tracking"])
 def test_live_services_forward_local_checkpoint_identity(service):
     environment = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"][
         service
     ]["environment"]
-    for key in ("SWIN_L_MODEL_ID", "SWIN_L_MODEL_REVISION", "SWIN_L_CHECKPOINT_SHA256"):
+    for key in ("LINE_TRACKING_MODEL_ID", "LINE_TRACKING_MODEL_REVISION", "LINE_TRACKING_CHECKPOINT_SHA256"):
         assert environment.get(key) == "${" + key + ":-}"

@@ -56,7 +56,7 @@ def test_idle_rejection_completion_and_restart_keep_one_loaded_model(ros, monkey
         counts["loads"] += 1
         return SimpleNamespace(device=SimpleNamespace(type="cuda"), reset=reset, segment=segment)
 
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", load)
+    monkeypatch.setattr(debug, "SegmentationModel", load)
     monkeypatch.setattr(debug, "camera_image_rgb", decode)
     if terminal == "timeout":
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_TASK_TIMEOUT", "true")
@@ -139,7 +139,7 @@ def test_cancelled_inflight_result_cannot_seed_the_next_task(ros, monkeypatch):
         in_forward = False
         return SimpleNamespace(selected_mask=np.full((360, 640), 2, np.uint8), inference_seconds=0.01)
 
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _config: SimpleNamespace(
+    monkeypatch.setattr(debug, "SegmentationModel", lambda _config: SimpleNamespace(
         device=SimpleNamespace(type="cuda"), reset=reset, segment=segment,
     ))
 

@@ -15,9 +15,9 @@ from connectome360_dataset import four_views, read_rows
 from connectome_flow import FlyvisFlow
 from connectome_road import CircuitFeatures, ConnectomeRoadPerception, RoadReadout
 from connectome_policy import DriveReadout, policy_pixels
-from dangjin_sensor_faults import SensorFaults
+from sensor_faults import SensorFaults
 from finetune_connectome_road import evaluate, loss_for, pixel_weights
-from train_connectome_policy import teacher
+from training_geometry import teacher, load_simulation_world
 from surround_camera import load_profile, profile_sha256
 
 
@@ -180,9 +180,9 @@ def policy_training(args, encoder, package, device):
         raise ValueError('Expected 768 current-scene policy poses')
     render_provenance=json.loads(args.synthetic_policy_provenance.read_text())
     for name,expected in render_provenance['render_source_sha256'].items():
-        if digest(Path('environments/dangjin')/name)!=expected:
+        if digest(args.simulation_dir/name)!=expected:
             raise ValueError('Cached synthetic actor data differs from current renderer')
-    route=np.asarray(json.loads(Path('environments/dangjin/world.json').read_text())['perimeter_route'])
+    route=np.asarray(load_simulation_world(args.simulation_dir)['perimeter_route'])
     xs,ys,parts,origins,ids,packed_masks=[],[],[],[],[],[]
     illumination_variants=[]
     shadow_enabled=getattr(args,'shadow_augment',False)
@@ -318,7 +318,7 @@ def policy_training(args, encoder, package, device):
     folder.mkdir()
     torch.save(dict(schema=parent['schema'],state_dict=state,road_sha256=digest(package/'road/road-readout.pt')),
                folder/'drive-readout.pt')
-    world=json.loads(Path('environments/dangjin/world.json').read_text())
+    world=load_simulation_world(args.simulation_dir)
     training=dict(schema='dangjin.drive_training.vision.v2',data=str(args.data),
                   dataset_manifest_sha256=digest(args.data/'frames.jsonl'),
                   encoder_sha256=encoder.details['bundle_sha256'],encoder_frozen=True,road_readout_frozen=True,
@@ -351,6 +351,7 @@ def policy_training(args, encoder, package, device):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--simulation-dir',type=Path,required=True,help='local scene source directory used for offline supervision')
     p.add_argument('--data',type=Path,required=True)
     p.add_argument('--parent',type=Path,required=True)
     p.add_argument('--synthetic-road',type=Path,required=True)

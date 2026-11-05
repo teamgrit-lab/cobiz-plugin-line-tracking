@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import local_path
 from local_path import LocalPathConfig, LocalPathSmoother, extract_sidewalk_centerline
-from swin_l_drive_control import DriveConfig, decide_drive
+from drive_control import DriveConfig, decide_drive
 
 
 X = np.linspace(3, 8, 160, dtype=np.float32)

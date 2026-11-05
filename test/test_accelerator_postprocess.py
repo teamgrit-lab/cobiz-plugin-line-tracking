@@ -1,5 +1,6 @@
 """Compare accelerator postprocessing with the retained CPU round-trip path."""
 
+from types import SimpleNamespace
 import sys
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from best_so_far_runtime import BestSoFarSegmenter  # noqa: E402
+from segmentation_runtime import SegmentationModel  # noqa: E402
 
 
 @pytest.fixture(params=["cpu", "cuda", "mps"])
@@ -23,8 +24,9 @@ def device(request):
 
 
 def make_segmenter(device, *, margin=0.07, expansion=0, action="drop"):
-    segmenter = object.__new__(BestSoFarSegmenter)
-    segmenter.backend = "tensorrt"
+    segmenter = object.__new__(SegmentationModel)
+    segmenter.backend = "pytorch"
+    segmenter.config = SimpleNamespace(cuda_graph=True)
     segmenter.device = device
     segmenter.temporal_alpha = 0.62
     segmenter.temporal_hysteresis_margin = margin
@@ -60,7 +62,7 @@ def test_frame_sequence_matches_cpu_round_trip(device, dtype, margin, expansion,
     frame = np.zeros((32, 48, 3), dtype=np.uint8)
     buffer = source.to(device=device, dtype=dtype)
     for index in range(6):
-        # Reuse a TensorRT-style output buffer; postprocessing must not alter it
+        # Reuse a CUDA-graph output buffer; postprocessing must not alter it
         # or retain it as temporal state that is overwritten next frame.
         next_scores = source.clone()
         if index:

@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from test_apriltag_task_stop_ros import RosHarness, Message, SPORT, ZERO
-import swin_l_local_path_debug as debug
+import line_tracking_runtime as debug
 
 
 class Camera:
@@ -31,12 +31,12 @@ class Camera:
 @pytest.fixture
 def ros(monkeypatch):
     harness = RosHarness(monkeypatch)
-    factory = debug.BestSoFarSegmenter
+    factory = debug.SegmentationModel
     harness.model_loads = 0
     def load(config):
         harness.model_loads += 1
         return factory(config)
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', load)
+    monkeypatch.setattr(debug, 'SegmentationModel', load)
     monkeypatch.setitem(sys.modules, 'unitree_go.msg', NS(SportModeState=Message))
     monkeypatch.setattr(debug, 'TagRouteCamera', Camera)
     return harness

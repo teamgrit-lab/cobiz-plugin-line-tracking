@@ -83,7 +83,7 @@ def road_logits(_):
 
 
 def test_jetson_and_browser_perception_apply_prior_only_after_four_view_inference():
-    from dangjin_fcn import FcnPerception
+    from fcn_replay import FcnPerception
     panorama = np.zeros((1440,2880,3),np.uint8)
     jetson,views = classify_panorama(panorama,road_logits,input_width=512)
     browser = FcnPerception.__new__(FcnPerception)
@@ -97,7 +97,7 @@ def test_jetson_and_browser_perception_apply_prior_only_after_four_view_inferenc
 
 def test_robot_class_is_visible_in_ros_and_panorama_previews():
     from fcn360_detector import overlay
-    from dangjin_camera import panorama_mask
+    from panorama_mask import panorama_mask
     classes = apply_front_robot_prior(np.full((4,8,16),3,np.uint8))
     views = [np.zeros((256,512,3),np.uint8) for _ in range(4)]
     preview = overlay(views,classes)

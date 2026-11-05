@@ -27,23 +27,17 @@ detector and learned driving policy on Jetson without a browser. Its default is
 the pre-shadow `connectome360-both-20261103-135251-10mps` package. Road uses the
 four projected camera views; Sidewalk keeps its existing camera/model/controller.
 
-The [Dangjin browser simulator](environments/dangjin/README.md) provides a local
-360° camera robot, road detection read from frozen Flyvis neural activity,
-a trained neural readout that directly selects speed, yaw rate and stopping,
-and camera-only patrol around the five barns, without map goals. Synthetic detection dropouts
-feed the action model; collision/no-go checks only record evaluation results
-in this simulation mode. The original checked planner remains available with
-`--control baseline`.
-Its controller and model adaptation are separate from the physical robot runtime.
+Road simulation sources, browser assets and generated reports are local-only and
+excluded from Git and Docker builds. See [local simulation policy](docs/local-simulation.md).
+The tracked camera profile and shared inference helpers work without that directory.
 
 `actual-activate` is a Cobiz `LINE_TRACKING` task listener for the Unitree A2.
-For an accepted task it follows the selected surface-center path, defaulting to
-the pinned Swin-L FP16 TensorRT profile `swin-l-aspect-224x384-fp16`. The existing
-MaskFormer R50 profile `r50-fp16-640x360` is also supported with the PyTorch
-backend. AprilTag-based stopping and completion can be enabled explicitly. With no
+For an accepted task it follows the selected surface-center path with the pinned
+MaskFormer R50 profile `r50-fp16-640x360` and PyTorch. A validated local checkpoint
+uses `r50-finetuned-fp16-640x360`. AprilTag-based stopping and completion can be enabled explicitly. With no
 accepted task, it publishes
 no Sport Move request. The default path class is sidewalk
-(`SWIN_L_PATH_MASK_CLASS=2`); a task can request road (`1`) or road/sidewalk
+(`LINE_TRACKING_PATH_MASK_CLASS=2`); a task can request road (`1`) or road/sidewalk
 combined (`0`) with
 `payload.selected_mask`.
 The motion controller follows the camera-derived path at the configured output rate.
@@ -73,7 +67,7 @@ branch-loss guards also stop motion independently of these switches.
   clear pending frames, paths, and saved commands. An already-running inference
   may finish, but its result is discarded. Model temporal history is reset by
   the worker before the next task's first frame; model weights are not reloaded.
-- `debugging-swin-l` (`ros2` mode) still infers continuously without tasks.
+- `debugging-line-tracking` (`ros2` mode) still infers continuously without tasks.
   `metrics.inference_enabled` reports whether the worker accepts frames;
   `inference_count` counts published results over the process lifetime. Timing
   samples are cleared between tasks so idle time does not distort throughput.
@@ -118,24 +112,24 @@ limit.
 | input | `/grit_slam/localization/status` | `std_msgs/String` | retained SLAM localization session (reliable, transient-local, depth 1) |
 | output | `/grit_slam/localization/command` | `std_msgs/String` | immediate SLAM `STOP` during standalone LINE_TRACKING (reliable, volatile, depth 10) |
 | output | `/api/sport/request` | `unitree_api/msg/Request` | accepted-task Move requests |
-| output | `/line_tracking/swin_l/local_path` | `nav_msgs/Path` | selected surface-center path in `base_link` |
-| output | `/line_tracking/swin_l/metrics` | `std_msgs/String` | path, task, and AprilTag state JSON |
+| output | `/line_tracking/local_path` | `nav_msgs/Path` | selected surface-center path in `base_link` |
+| output | `/line_tracking/metrics` | `std_msgs/String` | path, task, and AprilTag state JSON |
 | output | `/task_state` | `std_msgs/String` | `TASK_STARTED`, `TASK_COMPLETED`, or abort/reject state |
 
 The deployment defaults are literal and may be overridden in `.env`:
 
 ```dotenv
-SWIN_L_APRILTAG_DETECTIONS_TOPIC=/detections
-SWIN_L_APRILTAG_MAX_AGE_SEC=1.0
-SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC=1.0
-SWIN_L_APRILTAG_CONFIRM_MIN_HITS=3
+LINE_TRACKING_APRILTAG_DETECTIONS_TOPIC=/detections
+LINE_TRACKING_APRILTAG_MAX_AGE_SEC=1.0
+LINE_TRACKING_APRILTAG_CONFIRM_WINDOW_SEC=1.0
+LINE_TRACKING_APRILTAG_CONFIRM_MIN_HITS=3
 LINE_TRACKING_MAX_FORWARD_MPS=0.50
 LINE_TRACKING_MAX_TARGET_HEADING_DEG=60.0
 ```
 
 ## 갈림길에서 좌우 경로 우선
 
-ROS 실행과 MCAP local-path 모드는 기본적으로 `SWIN_L_BRANCH_PREFERENCE=right`를
+ROS 실행과 MCAP local-path 모드는 기본적으로 `LINE_TRACKING_BRANCH_PREFERENCE=right`를
 사용한다. 일반 단일 통로는 기존 중앙선을 유지한다. 공통 진입로에서 갈라진
 후보가 확인되면, `right`는 유효한 후보 중 상대적으로 오른쪽인 경로의 중앙선을,
 `left`는 왼쪽인 경로의 중앙선을 선택한다. 통로의 경계에 붙이는 기능은 아니다.
@@ -143,14 +137,14 @@ ROS 실행과 MCAP local-path 모드는 기본적으로 `SWIN_L_BRANCH_PREFERENC
 이전 설정값 `none`을 사용 중이라면 `center`로 변경해야 한다.
 
 ```dotenv
-SWIN_L_BRANCH_PREFERENCE=right
-SWIN_L_BRANCH_MIN_WIDTH_M=0.60
-SWIN_L_BRANCH_MARGIN_M=0.10
-SWIN_L_BRANCH_CONFIRM_FRAMES=2
-SWIN_L_BRANCH_HOLD_SEC=1.50
+LINE_TRACKING_BRANCH_PREFERENCE=right
+LINE_TRACKING_BRANCH_MIN_WIDTH_M=0.60
+LINE_TRACKING_BRANCH_MARGIN_M=0.10
+LINE_TRACKING_BRANCH_CONFIRM_FRAMES=2
+LINE_TRACKING_BRANCH_HOLD_SEC=1.50
 ```
 
-왼쪽 분기를 우선하려면 `.env`에 `SWIN_L_BRANCH_PREFERENCE=left`를 지정한다.
+왼쪽 분기를 우선하려면 `.env`에 `LINE_TRACKING_BRANCH_PREFERENCE=left`를 지정한다.
 좌우 모두 동일한 분기 확인·선택 유지·경로 소실 정지 조건을 적용한다.
 
 직접 실행에서는 `--branch-preference left|right|center`, `--branch-min-width-m`,
@@ -176,7 +170,7 @@ SWIN_L_BRANCH_HOLD_SEC=1.50
   재개하며, 복구되지 않으면 작업 취소/재시작으로 선택 상태를 초기화할 수 있다.
 - 분기 중앙선은 선택된 구간의 여유 범위 안에서 공간적으로 다듬고, 점 사이의 선분도
   마스크 내부인지 확인한다. 두 가지를 평균 내는 시간 평활화는 적용하지 않는다.
-  분기 경로에는 BEV 행별 점을 유지하므로 기존 `SWIN_L_PATH_POINTS=20`보다 점이
+  분기 경로에는 BEV 행별 점을 유지하므로 기존 `LINE_TRACKING_PATH_POINTS=20`보다 점이
   많을 수 있다. `unrestricted_path_mode`에서도 분기 판정과 선택 유지는 동작한다.
 
 `metrics.branch_selection`에는 분기 검출 여부, 후보 방향, 유효 후보 수, 확인 횟수,
@@ -365,7 +359,7 @@ metrics의 `stop_checks`에 12개 설정을 표시한다. `path_yaw_held`,
 연속 실패 제한이 켜지고 5회에 도달했을 때만 `true`다.
 `apriltag.stop_enabled`는 AprilTag 정지 설정을 나타낸다.
 
-`debugging-swin-l`은 Sport 요청을 발행하지 않는 디버그 프로필이다.
+`debugging-line-tracking`은 Sport 요청을 발행하지 않는 디버그 프로필이다.
 
 ## Start the task listener
 
@@ -384,16 +378,13 @@ SLAM이 `STOPPED` 또는 `ERROR`를 보고할 때까지 1초 간격으로 재요
 
 ```bash
 cp .env.example .env
-mkdir -p .cache/huggingface models/swin-l-checkpoint models
-docker compose --profile engine build
-docker compose run --rm prepare-swin-l-checkpoint
-docker compose run --rm build-swin-l-engine
+mkdir -p .cache/huggingface models
 docker compose config --quiet
-docker compose up -d actual-activate
+docker compose up -d --build actual-activate
 docker compose logs -f actual-activate
 
 ros2 topic echo /detections
-ros2 topic echo /line_tracking/swin_l/metrics
+ros2 topic echo /line_tracking/metrics
 ros2 topic echo /task_state
 ```
 
@@ -410,12 +401,12 @@ can produce a path, and adjacent road/sidewalk regions can form one wider
 region. Semantic background pixels (label `0`) are still excluded. This mode
 does not prefer sidewalk over road or run the model a second time.
 
-Mapillary-based Swin-L and R50 profiles keep `Crosswalk - Plain` (class 8)
+Mapillary R50 profiles keep `Crosswalk - Plain` (class 8)
 and `Lane Marking - Crosswalk` (class 23) in the road group (label `1`) for
 every path mode. Sidewalk-only tasks (`selected_mask=2`) exclude these labels.
 
 To use this mode when a task omits `selected_mask`, set
-`SWIN_L_PATH_MASK_CLASS=0` in `.env` and recreate the service with an updated
+`LINE_TRACKING_PATH_MASK_CLASS=0` in `.env` and recreate the service with an updated
 image. An explicit task value overrides the environment default. Metrics
 report `path_mask_class: 0` and `path_surface: "ROAD_OR_SIDEWALK"`. Existing
 stop checks still apply; no road/sidewalk region means no path.
@@ -433,7 +424,7 @@ No process can publish a final command after power loss or `SIGKILL`.
 ## Camera and path calibration
 
 `.env.example` is not a calibrated deployment file. Before operation, validate
-the camera-to-`base_link` geometry and Swin-L path against the installed A2.
+the camera-to-`base_link` geometry and surface path against the installed A2.
 
 The semantic reference Path uses the calibrated ROI homography below.
 
@@ -441,7 +432,7 @@ Road and sidewalk share the same ROI. Its default bottom width is 84% of the
 image, top width is 24%, and height is 55% (top at image y=45%):
 
 ```dotenv
-SWIN_L_ROI_POLYGON=0.08,1.00,0.92,1.00,0.62,0.45,0.38,0.45
+LINE_TRACKING_ROI_POLYGON=0.08,1.00,0.92,1.00,0.62,0.45,0.38,0.45
 ```
 
 An existing deployment `.env` overrides this default. Update its value and
@@ -450,11 +441,11 @@ homography: moving its top changes which pixels map to the configured 8 m far
 distance. Check known ground points after changing it; this setting does not
 measure the distance from the camera.
 
-1. Adjust `SWIN_L_ROI_POLYGON` while inspecting the
+1. Adjust `LINE_TRACKING_ROI_POLYGON` while inspecting the
    `nav_msgs/Path` local path in RViz; use the offline overlay workflow for a
    rendered camera view.
 2. Compare known ground distances with the projected camera path.
-3. Select `SWIN_L_PATH_MASK_CLASS=1` for road or `2` for sidewalk.
+3. Select `LINE_TRACKING_PATH_MASK_CLASS=1` for road or `2` for sidewalk.
 4. Verify the camera timestamp, inference freshness, coordinate axes, speed limits,
    and behavior with any concurrently active Sport publishers before a live task.
 
@@ -462,9 +453,9 @@ For a 1280x720 Jetson camera, retain the 640x360 evaluation size and set only
 the actual image topic as needed:
 
 ```dotenv
-SWIN_L_IMAGE_TOPIC=/a2/front_camera/image_raw
-SWIN_L_EVALUATION_WIDTH=640
-SWIN_L_EVALUATION_HEIGHT=360
+LINE_TRACKING_IMAGE_TOPIC=/a2/front_camera/image_raw
+LINE_TRACKING_EVALUATION_WIDTH=640
+LINE_TRACKING_EVALUATION_HEIGHT=360
 ```
 
 ## 컨테이너 내부 AprilTag 검출
@@ -475,14 +466,14 @@ LINE_TRACKING 작업 수락 여부와 관계없이 태그를 검출하며,
 태그가 없는 영상은 빈 배열이다. 카메라 입력이 없으면 검출 메시지도 나오지 않는다.
 
 ```dotenv
-SWIN_L_APRILTAG_DETECTOR_ENABLED=true
-SWIN_L_APRILTAG_DETECTIONS_TOPIC=/detections
-# 비워 두면 SWIN_L_IMAGE_TOPIC 및 같은 해상도의 camera_info를 사용한다.
-SWIN_L_APRILTAG_IMAGE_TOPIC=
-SWIN_L_APRILTAG_CAMERA_INFO_TOPIC=
-SWIN_L_APRILTAG_FAMILY=36h11
-SWIN_L_APRILTAG_MAX_HAMMING=0
-SWIN_L_APRILTAG_MAX_HZ=10.0
+LINE_TRACKING_APRILTAG_DETECTOR_ENABLED=true
+LINE_TRACKING_APRILTAG_DETECTIONS_TOPIC=/detections
+# 비워 두면 LINE_TRACKING_IMAGE_TOPIC 및 같은 해상도의 camera_info를 사용한다.
+LINE_TRACKING_APRILTAG_IMAGE_TOPIC=
+LINE_TRACKING_APRILTAG_CAMERA_INFO_TOPIC=
+LINE_TRACKING_APRILTAG_FAMILY=36h11
+LINE_TRACKING_APRILTAG_MAX_HAMMING=0
+LINE_TRACKING_APRILTAG_MAX_HZ=10.0
 ```
 
 카메라 릴레이는 최대 10Hz로 원본 영상을 전달하고, 같은 해상도의 최근 CameraInfo를
@@ -493,9 +484,9 @@ ID 목록으로 제한하지 않는다. 원본 광각 영상에서는 ID·2D 모
 
 `LINE_TRACKING_STOP_ON_APRILTAG=true`가 별도로 설정되어야 태그 확인 후 정지·작업 완료가
 활성화된다. 검출을 켜는 것만으로 이 정지 설정을 바꾸지 않는다. 외부 검출기를 사용하는
-경우 `SWIN_L_APRILTAG_DETECTOR_ENABLED=false`로 내부 검출기를 끈다.
-`debugging-swin-l`의 내부 검출기는 중복 발행을 피하려고 기본적으로 꺼져 있으며,
-단독 디버깅 시 `SWIN_L_DEBUG_APRILTAG_DETECTOR_ENABLED=true`로 켤 수 있다.
+경우 `LINE_TRACKING_APRILTAG_DETECTOR_ENABLED=false`로 내부 검출기를 끈다.
+`debugging-line-tracking`의 내부 검출기는 중복 발행을 피하려고 기본적으로 꺼져 있으며,
+단독 디버깅 시 `LINE_TRACKING_DEBUG_APRILTAG_DETECTOR_ENABLED=true`로 켤 수 있다.
 
 카메라 릴레이·검출기·라인트래킹 중 하나가 종료되면 다른 프로세스도 종료한다.
 컨테이너 종료 신호는 라인트래킹의 기존 주행 종료 처리로 전달된다. 이 기능을 최초로
@@ -511,7 +502,7 @@ row selects a contiguous region at least 0.12 m wide, favoring width and
 continuity with the preceding row. Its center contributes to a quadratic fit,
 which is sampled into 20 path points and clipped to +/-3.5 m laterally.
 
-With the deployed default `SWIN_L_UNRESTRICTED_PATH_MODE=true`, at least two
+With the deployed default `LINE_TRACKING_UNRESTRICTED_PATH_MODE=true`, at least two
 usable rows are sufficient. No path is produced when fewer than two rows have
 a qualifying region, including when the selected class is absent from the
 ROI. An invalid new estimate clears the previous path. Valid-ratio filtering,
@@ -544,7 +535,7 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 ## 정지·작업 중단·시작 거절 사유
 
 아래는 `actual-activate`의 Python `task-drive` 코드 기준이다. 주행 판단의
-`drive_reason`과 `ready_reason`은 `/line_tracking/swin_l/metrics`에서,
+`drive_reason`과 `ready_reason`은 `/line_tracking/metrics`에서,
 작업 결과의 `type`과 `reason`은 `/task_state`에서 확인한다.
 `drive_reason`은 시작 대기·AprilTag 확인 등까지 반영한 출력 판단이고,
 `ready_reason`은 카메라·추론·Path 검사 결과다. 정지 명령 전송과 작업 중단은
@@ -621,9 +612,9 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 
 잘못된 최상위 이벤트 JSON, 잘못된 task ID/다른 action, 중복 등록 이벤트 등은
 대체로 무시하며 별도 주행 정지 사유가 아니다. 프로세스 실행 전에는 ROS 메시지
-패키지·CUDA·모델/엔진 로딩 실패, TensorRT manifest/체크섬/버전 불일치, 잘못된
+패키지·CUDA·모델 로딩 실패, 체크포인트 manifest/체크섬 불일치, 잘못된
 환경변수·ROI·속도/시간 설정, 허용 profile·고정 checkpoint/360×640 출력/`base_link` 조건 위반,
-출력 주기 10 Hz 미만, `use_sim_time=true`, 자동 backend fallback 허용 등이
+출력 주기 10 Hz 미만, `use_sim_time=true`, 지원하지 않는 backend 등이
 시작 자체를 막을 수 있다. 이 경우 아직 작업을 수락하지 않았으므로
 `/task_state` 대신 컨테이너 시작 로그를 확인한다.
 
@@ -634,50 +625,26 @@ AprilTag 검출 스트림 단절만으로는 별도 정지하지 않는다. 추�
 수 있어 마지막 정지 명령이나 `TASK_ABORTED` 발행을 보장하지 못한다. OC3 같은
 보드 보호 동작은 이 애플리케이션의 reason 코드와 별개다.
 
-## FP16 TensorRT Swin-L and Jetson image
+## Jetson runtime image
 
-The default live task profile is `swin-l-aspect-224x384-fp16`:
-
-- model: `facebook/mask2former-swin-large-mapillary-vistas-semantic`
-- revision: `4772b6bf101d91f2534c106dc524d906aeb3c68a`
-- model input: 224x384; score map: 640x360; FP16 on CUDA/MPS
-- CPU falls back to FP32 for compatibility
-
-Build the CUDA base image once on the Jetson host with jetson-containers, then
-use it as the Compose build base:
+Build the CUDA/PyTorch base once on the Jetson with jetson-containers:
 
 ```bash
 cd ~/tools/jetson-containers
 PYTORCH_VERSION=2.8 CUDA_VERSION=12.6 \
-jetson-containers build \
-  --base=cobiz:jetson \
-  --name=cobiz:jetson-swin-l \
-  --skip-packages=ffmpeg,opencv,ros \
-  pytorch:2.8
-
-docker image inspect cobiz:jetson-swin-l-l4t-r36.5.0
-cd /path/to/cobiz-plugin-line-tracking
-mkdir -p .cache/huggingface models/swin-l-checkpoint models
-docker compose --profile engine build
-docker compose run --rm prepare-swin-l-checkpoint
-docker compose run --rm build-swin-l-engine
-docker compose --profile debug up -d --build debugging-swin-l
-docker compose logs -f debugging-swin-l
+jetson-containers build --base=cobiz:jetson \
+  --name=cobiz:jetson-line-tracking --skip-packages=ffmpeg,opencv,ros pytorch:2.8
+docker image inspect cobiz:jetson-line-tracking-l4t-r36.5.0
 ```
 
-The image build installs vendored `unitree_api` and the Humble `apriltag_ros`
-package with its matching `apriltag_msgs` interfaces. Checkpoint preparation explicitly loads the pinned Hub
-`model.safetensors`, records any checkpoint-initialized values, and saves one
-complete local safetensors file. The engine build then compiles a static
-`1x3x224x384` FP16 input into a `65x360x640` semantic-score output and writes a
-SHA-256-protected manifest next to the plan. TensorRT plans must be generated on
-the target Jetson class and rebuilt after a TensorRT/CUDA/GPU change.
+`Dockerfile.line-tracking` installs the matching torchvision, ROS interfaces,
+AprilTag detector and inference tools without replacing the Jetson PyTorch stack.
+The R50 runtime uses PyTorch; the optional FCN Road service retains its independent
+TensorRT implementation. Set `LINE_TRACKING_BASE_IMAGE` to the installed base tag
+if the builder chooses a different suffix.
 
-The listener validates the plan checksum, model revision, binding shapes,
-TensorRT version, and GPU compute capability before accepting inference. It
-never falls back automatically in `task-drive` mode. Set
-`SWIN_L_BACKEND=pytorch` explicitly to use the retained FP16 PyTorch rollback;
-`SWIN_L_ALLOW_BACKEND_FALLBACK=true` is allowed only for debug/offline use.
+For existing installations, follow [configuration migration](docs/configuration-migration.md)
+before recreating services. Model paths, hashes and control settings are preserved.
 
 ## MaskFormer R50 on Jetson
 
@@ -686,29 +653,27 @@ For partial-label fine-tuning and deploying a local R50 checkpoint, follow
 `r50-finetuned-fp16-640x360` profile verifies an exported checkpoint manifest;
 the original R50 profile below remains available for rollback.
 
-Both `actual-activate` and `debugging-swin-l` read `SWIN_L_PROFILE` from `.env`.
+Both `actual-activate` and `debugging-line-tracking` read `LINE_TRACKING_PROFILE` from `.env`.
 To select the existing R50 runtime, set both the profile and backend:
 
 ```dotenv
-SWIN_L_PROFILE=r50-fp16-640x360
-SWIN_L_BACKEND=pytorch
-SWIN_L_DEVICE=cuda
-SWIN_L_TRT_AUTO_BUILD=false
-SWIN_L_ALLOW_BACKEND_FALLBACK=false
+LINE_TRACKING_PROFILE=r50-fp16-640x360
+LINE_TRACKING_BACKEND=pytorch
+LINE_TRACKING_DEVICE=cuda
 ```
 
 R50 uses `facebook/maskformer-resnet50-vistas` at revision
 `ae4b8c2590c0a090fc32d5c217d78738a2dd4b19`. Its PyTorch weights are loaded through
 the existing Hugging Face cache, then run in FP16 on CUDA. The image already
 includes its dependencies; no ONNX conversion or TensorRT engine build is needed.
-An R50/TensorRT combination fails before any startup engine build.
+An unsupported R50 backend fails before ROS startup.
 
 The 720p camera topic can stay unchanged: the processor resizes each selected
 frame to 640x360 before model-specific padding, and the output score map remains
 640x360 for BEV and Path calculation. Latest-frame selection, RGB handling,
 BEV caching, task-selected masks 0/1/2, and Sport control use the shared pipeline.
 CUDA, checkpoint pinning, camera freshness, task lifecycle, and control checks
-still apply. The live inference target remains `SWIN_L_INFERENCE_HZ` (default 4).
+still apply. The live inference target remains `LINE_TRACKING_INFERENCE_HZ` (default 4).
 
 R50 retains its existing label aggregation and cleanup: Bike Lane and Manhole
 join the sidewalk group, while Parking and Service Lane are excluded from the
@@ -723,29 +688,21 @@ docker compose up -d --build actual-activate
 docker compose logs -f actual-activate
 ```
 
-For inspection without Sport commands, use `debugging-swin-l` instead of
+For inspection without Sport commands, use `debugging-line-tracking` instead of
 `actual-activate`. Avoid running both while comparing inference speed because
 they share the GPU. Check the metrics `profile`, `inference_count`,
-and `performance` together with the generated Path. The Swin-L-specific
-`swin_l_rosbag_overlay.py` wrapper remains pinned to Swin-L; use
-`swin_l_local_path_debug.py mcap --profile r50-fp16-640x360 --backend pytorch`
-with the input/output arguments for offline R50 Path inspection.
-
-To restore the default runtime, set `SWIN_L_PROFILE=swin-l-aspect-224x384-fp16`
-and `SWIN_L_BACKEND=tensorrt`, then recreate the service with its matching
-Swin-L engine and manifest.
+and `performance` together with the generated Path. `tools/rosbag_overlay.py`
+uses the configured R50 model, checkpoint pin and geometry for offline inspection.
 
 ## Jetson inference stability
 
-While enabled, live inference obeys `SWIN_L_INFERENCE_HZ`, including when
-`SWIN_L_UNRESTRICTED_PATH_MODE=true`. The latest-frame queue holds one frame;
+While enabled, live inference obeys `LINE_TRACKING_INFERENCE_HZ`, including when
+`LINE_TRACKING_UNRESTRICTED_PATH_MODE=true`. The latest-frame queue holds one frame;
 it replaces pending frames while waiting for the next inference start. A late
 inference does not trigger a burst of catch-up jobs. Rate limiting reduces
 average load, but cannot guarantee latency or cap instantaneous GPU power.
 The first frame of a newly accepted task does not wait for the previous task's
 rate-limit deadline. Task-driven mode sleeps between tasks; debug mode does not.
-TensorRT's one-time startup validation with a synthetic input is retained;
-this is separate from camera inference and can briefly use the GPU at startup.
 
 The camera callback validates timestamps, encoding, dimensions, row stride and
 buffer length, then queues the original ROS image message. Only the selected
@@ -755,8 +712,7 @@ padded rows are made contiguous after selection. Other encodings are converted
 directly to RGB by `cv_bridge`. Camera conversion failures still stop motion.
 Offline BGR image/overlay callers keep the existing default input convention.
 The worker's processing latency now also includes selected-message decoding;
-previously callback decoding was outside that measurement. TensorRT transfers
-only `pixel_values`, leaving the unused processor `pixel_mask` on the CPU.
+previously callback decoding was outside that measurement.
 
 Camera-only BEV projection maps, metric axes and the closing kernel are cached by image
 dimensions and the frozen local-path configuration (up to eight entries).
@@ -764,23 +720,21 @@ Road, sidewalk and union paths share this immutable geometry, but each current
 mask is remapped and each path/smoother is updated independently. ROI,
 calibration, image size, BEV size or kernel changes select a new cache entry.
 
-The hybrid backend and the complete segmentation/temporal pipeline run in
+The complete segmentation/temporal pipeline run in
 `torch.inference_mode()` in the calling worker thread. This prevents the
 PyTorch decoder's autograd graph from being retained across frames by the
 temporal score average. `model.eval()` alone does not disable autograd.
 See the [PyTorch autograd documentation](https://docs.pytorch.org/docs/stable/notes/autograd).
 
 Compose defaults the OpenMP, MKL, and OpenBLAS thread pools to two threads.
-Engine auto-build is disabled by default (`SWIN_L_TRT_AUTO_BUILD=false`);
-prepare artifacts with the engine services during maintenance, with live
-inference stopped. Existing `.env` values still override these defaults.
-Run only one live Swin-L model at a time on the Jetson.
+Run one tracking model process at a time while measuring Jetson inference speed.
+Existing `.env` values override the common R50 defaults.
 
 For an **inference-only** 1 Hz acceptance run, use debug mode with
-`SWIN_L_INFERENCE_HZ=1.25` to leave scheduling margin. Warm up first, then
+`LINE_TRACKING_INFERENCE_HZ=1.25` to leave scheduling margin. Warm up first, then
 measure for at least five minutes under the normal camera and service load:
 
-- `/line_tracking/swin_l/metrics`: `performance.completion_fps >= 1.0`,
+- `/line_tracking/metrics`: `performance.completion_fps >= 1.0`,
   `completion_gap_max_ms <= 1000`, and processing p95/p99 latency. These are
   rolling-window metrics; record the entire run to detect intermittent stalls.
 - `tegrastats`: total RAM, swap activity, GPU load, temperature, and `VDD_IN`.
@@ -815,15 +769,15 @@ uv run --with mcap --with mcap-ros2-support \
   --output rosbag-results/camera.mp4
 ```
 
-Run the Swin-L overlays locally, or use the `test-swin-l` Compose profile on a
+Run the configured R50 overlays locally, or use the `test-line-tracking` Compose profile on a
 Jetson:
 
 ```bash
-uv run tools/swin_l_rosbag_overlay.py sidewalk --input /path/to/input.mcap --open
-uv run tools/swin_l_rosbag_overlay.py local-path --input /path/to/input.mcap \
+uv run tools/rosbag_overlay.py sidewalk --input /path/to/input.mcap --open
+uv run tools/rosbag_overlay.py local-path --input /path/to/input.mcap \
   --open
 
-docker compose run --rm --no-deps test-swin-l local-path \
+docker compose run --rm --no-deps test-line-tracking local-path \
   --input /bags/input.mcap --device cuda
 ```
 

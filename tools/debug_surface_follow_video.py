@@ -31,9 +31,9 @@ import time
 import cv2
 import numpy as np
 
-from best_so_far_runtime import (
-    BestSoFarConfig,
-    BestSoFarSegmenter,
+from segmentation_runtime import (
+    SegmentationConfig,
+    SegmentationModel,
     DEFAULT_PROFILE,
 )
 from local_path import (
@@ -47,7 +47,7 @@ from local_path import (
     pixel_to_ground_homography,
 )
 from segment_sidewalk_road import atomic_write_json, utc_now
-from swin_l_drive_control import DriveConfig, decide_drive
+from drive_control import DriveConfig, decide_drive
 
 
 def choose_surface(
@@ -230,8 +230,8 @@ def main() -> int:
     drive_config = DriveConfig()
     path_config.validate()
     drive_config.validate()
-    segmenter = BestSoFarSegmenter(
-        BestSoFarConfig(profile=DEFAULT_PROFILE, device=args.device)
+    segmenter = SegmentationModel(
+        SegmentationConfig(profile=DEFAULT_PROFILE, device=args.device)
     )
     smoother = LocalPathSmoother(path_config)
     capture = cv2.VideoCapture(str(source))

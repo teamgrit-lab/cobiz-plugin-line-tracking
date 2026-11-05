@@ -58,7 +58,7 @@ def test_shared_worker_runs_legacy_tasks_then_navigation_with_one_model(monkeypa
         return SimpleNamespace(device=SimpleNamespace(type="cuda"), reset=lambda: None,
             segment=lambda _frame, **kwargs: SimpleNamespace(selected_mask=np.full(
                 (360, 640), kwargs["path_mask_class"] or 2, np.uint8), inference_seconds=.01))
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", load)
+    monkeypatch.setattr(debug, "SegmentationModel", load)
 
     def scenario(node):
         legacy(ros, mask=mask)
@@ -165,7 +165,7 @@ def test_worker_reuses_real_inference_control_without_task_or_sport_ownership(mo
         return SimpleNamespace(device=SimpleNamespace(type="cuda"), reset=reset,
             segment=lambda _frame, **kwargs: SimpleNamespace(
                 selected_mask=np.full((360, 640), kwargs["path_mask_class"], np.uint8), inference_seconds=.01))
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", load)
+    monkeypatch.setattr(debug, "SegmentationModel", load)
 
     def scenario(node):
         assert "/task_event" in ros.subscriptions
@@ -243,7 +243,7 @@ def test_stopped_inflight_inference_cannot_seed_next_surface(monkeypatch):
         entered.set()
         assert release.wait(3)
         return SimpleNamespace(selected_mask=np.full((360, 640), 2, np.uint8), inference_seconds=.01)
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", lambda _config:
+    monkeypatch.setattr(debug, "SegmentationModel", lambda _config:
         SimpleNamespace(device=SimpleNamespace(type="cuda"), reset=lambda: None, segment=segment))
     def scenario(node):
         try:

@@ -1,0 +1,188 @@
+from pathlib import Path
+import sys
+
+import numpy as np
+import pytest
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
+import line_tracking_runtime as debug  # noqa: E402
+from local_path import (  # noqa: E402
+    DEFAULT_ROAD_ROI_POLYGON,
+    DEFAULT_ROAD_ROI_EXCLUSION_POLYGON,
+    DEFAULT_ROI_POLYGON,
+    path_config_for_mode,
+    LocalPathConfig,
+    LocalPathSmoother,
+    extract_sidewalk_centerline,
+)
+from cobiz_line_tracking_task import ActiveTask  # noqa: E402
+
+
+def test_live_config_uses_wide_road_roi_only_for_mode1(monkeypatch):
+    monkeypatch.delitem(debug.ENV, 'LINE_TRACKING_ROAD_ROI_POLYGON', raising=False)
+    monkeypatch.delitem(debug.ENV, 'LINE_TRACKING_ROI_POLYGON', raising=False)
+    monkeypatch.delitem(debug.ENV, 'LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON', raising=False)
+    config = debug._local_path_config_from_args(debug.parse_args(['task-drive']))
+    assert path_config_for_mode(config, 1).roi_polygon == DEFAULT_ROAD_ROI_POLYGON
+    assert path_config_for_mode(config, 1).roi_exclusion_polygon == DEFAULT_ROAD_ROI_EXCLUSION_POLYGON
+    for mode in (0, 2):
+        assert path_config_for_mode(config, mode).roi_polygon == DEFAULT_ROI_POLYGON
+        assert path_config_for_mode(config, mode).roi_exclusion_polygon == ()
+
+
+@pytest.mark.parametrize('value', ['.8,0,1,0,1', '.8,0,1,0,nan,1', '.8,0,1,0,1,2'])
+def test_invalid_camera_body_exclusion_fails_before_ros(monkeypatch, value):
+    monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON', value)
+    with pytest.raises(SystemExit):
+        debug.parse_args(['task-drive'])
+
+
+def test_camera_body_exclusion_can_be_explicitly_disabled(monkeypatch):
+    monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON', '')
+    config = debug._local_path_config_from_args(debug.parse_args(['task-drive']))
+    assert path_config_for_mode(config, 1).roi_exclusion_polygon == ()
+
+
+@pytest.mark.parametrize('value', ['nan,1,.98,1,.98,.47,.02,.47', '.02,1,.98,1,.98,.47,.02,2'])
+def test_invalid_mode1_roi_is_rejected_before_ros_starts(monkeypatch, value):
+    monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_ROAD_ROI_POLYGON', value)
+    with pytest.raises(SystemExit):
+        debug.parse_args(['task-drive'])
+
+
+@pytest.mark.parametrize("mask_class", [0, 1, 2])
+@pytest.mark.parametrize("mode", ["ros2", "task-drive"])
+def test_live_modes_use_the_env_selected_path_class(monkeypatch, mode, mask_class):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", str(mask_class))
+
+    assert debug.parse_args([mode]).path_mask_class == mask_class
+
+
+def test_sidewalk_is_the_default_path_class(monkeypatch):
+    monkeypatch.delitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", raising=False)
+
+    assert debug.parse_args(["ros2"]).path_mask_class == 2
+
+
+@pytest.mark.parametrize("mask_class", [0, 1, 2])
+def test_command_line_can_override_env_for_offline_path_preview(
+    monkeypatch, tmp_path, mask_class
+):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", "2")
+
+    args = debug.parse_args(
+        [
+            "mcap",
+            "--input",
+            str(tmp_path / "input.mcap"),
+            "--output",
+            str(tmp_path / "output.mp4"),
+            "--path-mask-class",
+            str(mask_class),
+        ]
+    )
+    assert args.path_mask_class == mask_class
+
+
+@pytest.mark.parametrize("value", ["-1", "3", "road", ""])
+def test_invalid_path_class_fails_before_ros_starts(monkeypatch, value):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", value)
+
+    with pytest.raises(SystemExit) as error:
+        debug.parse_args(["task-drive"])
+    assert error.value.code == 2
+
+
+def test_selected_path_region_excludes_other_classes():
+    selected_mask = np.array([[0, 1, 2], [2, 1, 3]], dtype=np.uint8)
+
+    np.testing.assert_array_equal(
+        debug.selected_path_region(selected_mask, 1),
+        [[False, True, False], [False, True, False]],
+    )
+    np.testing.assert_array_equal(
+        debug.selected_path_region(selected_mask, 2),
+        [[False, False, True], [True, False, False]],
+    )
+    np.testing.assert_array_equal(
+        debug.selected_path_region(selected_mask, 0),
+        [[False, True, True], [True, True, False]],
+    )
+    with pytest.raises(ValueError, match="must be 0 .* or 2"):
+        debug.selected_path_region(selected_mask, 3)
+
+
+@pytest.mark.parametrize("surface", [0, 1, 2])
+@pytest.mark.parametrize("mask_class", [0, 1, 2])
+def test_path_exists_only_when_the_scene_contains_a_requested_surface(surface, mask_class):
+    mask = np.full((360, 640), surface, dtype=np.uint8)
+    config = LocalPathConfig()
+
+    path = extract_sidewalk_centerline(
+        debug.selected_path_region(mask, mask_class), config
+    )
+    assert (path is not None) == (surface != 0 and mask_class in (0, surface))
+
+
+def test_task_paths_are_independent_and_active_task_selects_its_own_path():
+    mask = np.zeros((360, 640), dtype=np.uint8)
+    mask[:, :320] = 1
+    mask[:, 320:] = 2
+    config = LocalPathConfig()
+    smoothers = {key: LocalPathSmoother(config) for key in (0, 1, 2)}
+
+    estimates = debug.update_path_smoothers(mask, smoothers, config, 10.0)
+    road = smoothers[1].current(10.1)
+    sidewalk = smoothers[2].current(10.1)
+    combined = smoothers[0].current(10.1)
+
+    assert all(estimate is not None for estimate in estimates.values())
+    assert road is not None and sidewalk is not None
+    assert road.points_xy[:, 1].mean() > 0
+    assert sidewalk.points_xy[:, 1].mean() < 0
+    assert combined is not None
+    np.testing.assert_allclose(combined.points_xy[:, 1], 0.0, atol=0.02)
+    for mask_class in (0, 1, 2):
+        active = ActiveTask("t1", "t1", None, None, 10.0, 30.0, mask_class)
+        assert debug.active_path_mask_class(active, 2) == mask_class
+    assert debug.active_path_mask_class(None, 2) == 2
+
+
+@pytest.mark.parametrize("mode", ["ros2", "task-drive"])
+@pytest.mark.parametrize("preference", ["left", "right", "center"])
+def test_branch_configuration_environment_and_cli(monkeypatch, mode, preference):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_PREFERENCE", "center")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_MIN_WIDTH_M", "0.8")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_MARGIN_M", "0.15")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_CONFIRM_FRAMES", "3")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_HOLD_SEC", "2.5")
+    args = debug.parse_args([mode, "--branch-preference", preference])
+    cfg = debug._local_path_config_from_args(args)
+    assert cfg.branch_preference == preference
+    assert cfg.branch_min_width_m == 0.8
+    assert cfg.branch_margin_m == 0.15
+    assert cfg.branch_confirm_frames == 3
+    assert cfg.branch_hold_sec == 2.5
+
+
+@pytest.mark.parametrize("mode", ["ros2", "task-drive", "mcap"])
+@pytest.mark.parametrize("preference", ["left", "center"])
+def test_preference_from_environment_reaches_path_config(monkeypatch, tmp_path, mode, preference):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_PREFERENCE", preference)
+    arguments = [mode]
+    if mode == "mcap":
+        arguments += ["--input", str(tmp_path / "input.mcap"), "--output", str(tmp_path / "output.mp4")]
+    args = debug.parse_args(arguments)
+    assert debug._local_path_config_from_args(args).branch_preference == preference
+
+
+@pytest.mark.parametrize("name,value", [
+    ("PREFERENCE", "none"), ("MIN_WIDTH_M", "nan"), ("MARGIN_M", "-0.1"),
+    ("CONFIRM_FRAMES", "1"), ("HOLD_SEC", "inf"),
+])
+def test_invalid_branch_environment_is_rejected_before_startup(monkeypatch, name, value):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_BRANCH_" + name, value)
+    with pytest.raises(SystemExit):
+        debug.parse_args(["task-drive"])

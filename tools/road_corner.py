@@ -337,7 +337,7 @@ class CornerNavigator:
         return self._ground_allowed(np.concatenate(points), now)
 
     def _guard_tracking(self, nominal, now, pose, drive_config):
-        from swin_l_drive_control import DriveDecision
+        from drive_control import DriveDecision
         self.trajectory_guard = 'not_evaluated'
         if nominal.reason not in ('tracking', 'tracking_slow_turn'):
             return nominal
@@ -373,7 +373,7 @@ class CornerNavigator:
         return vx, vy, yaw
 
     def decide(self, nominal, path, *, now, pose, drive_config, sensors_ready=True):
-        from swin_l_drive_control import DriveDecision
+        from drive_control import DriveDecision
         if not self.config.enabled:
             return nominal
         if not self.active:

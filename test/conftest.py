@@ -7,6 +7,6 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_runtime_environment(monkeypatch):
-    module = sys.modules.get("swin_l_local_path_debug")
+    module = sys.modules.get("line_tracking_runtime")
     if module is not None:
         monkeypatch.setattr(module, "ENV", {})

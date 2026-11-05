@@ -24,7 +24,7 @@ def test_real_pretrained_connectome_mask_path_and_command_contract():
     from connectome_flow import FlyvisFlow
     from connectome_server import PlannerService, make_server
     from local_path import LocalPathConfig
-    from swin_l_drive_control import DriveConfig, decide_drive
+    from drive_control import DriveConfig, decide_drive
     from unitree_sport_api import drive_to_sport_move
     from test_connectome import strip
 

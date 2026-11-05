@@ -16,7 +16,7 @@
 ```
 
 Road(`selected_mask=1`)에서만 360도 영상과 학습한 명령을 사용한다. Sidewalk(`2`)는
-기존 `SWIN_L_IMAGE_TOPIC`, `SWIN_L_PROFILE` 검출기·제어기를 사용한다. 생략한 작업은
+기존 `LINE_TRACKING_IMAGE_TOPIC`, `LINE_TRACKING_PROFILE` 검출기·제어기를 사용한다. 생략한 작업은
 Road가 기본이며 혼합 모드 `0`은 거부한다. 지도·목표점·LiDAR·odom·브라우저 서버는
 360도 모델 추론에 넣지 않는다. 컨테이너는 `connectome360`, `actual-activate` 두 개다.
 Road 요청 때 카메라를 열고, 요청이 끊긴 후 유휴 2.5초가 지나면 해제한다.
@@ -98,8 +98,8 @@ docker compose logs --tail=100 connectome360 actual-activate
 
 이 명령은 의존 서비스도 시작한다. Cobiz의 `LINE_TRACKING` 작업에
 `selected_mask=1`을 주면 Road, `2`를 주면 Sidewalk다. 실제 로봇 실행은 이 작업을
-수락한 동안에만 이뤄진다. `/line_tracking/swin_l/metrics`의 `inference_backend`가
-Road에서 `connectome360`, Sidewalk에서 `legacy`인지 확인할 수 있다.
+수락한 동안에만 이뤄진다. `/line_tracking/metrics`의 `inference_backend`가
+Road에서 `connectome360`, Sidewalk에서 `r50`인지 확인할 수 있다.
 Road의 `camera_transport`는 `direct`, `camera_topic`은 `null`이다.
 처음 전환할 때는 기존 `connectome360-camera` 컨테이너를 종료·제거해야 한다.
 

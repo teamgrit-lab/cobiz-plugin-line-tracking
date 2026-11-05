@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 
 
 def policy_pixels(masks):

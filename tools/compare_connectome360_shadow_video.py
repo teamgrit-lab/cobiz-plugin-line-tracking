@@ -101,7 +101,7 @@ def main():
     from connectome_flow import FlyvisFlow
     from connectome_road import ConnectomeRoadPerception
     from connectome_policy import ConnectomeDrivePolicy
-    from dangjin_camera import _panorama_projection
+    from panorama_mask import _panorama_projection
     before=json.loads((args.before/'model.json').read_text())
     after=json.loads((args.after/'model.json').read_text())
     assert before['encoder_sha256']==after['encoder_sha256']

@@ -80,7 +80,7 @@ def test_mode0_pins_road_through_outage_and_does_not_switch_to_sidewalk(endpoint
 
 
 def test_perception_child_routes_sidewalk_without_any_http(monkeypatch):
-    import best_so_far_runtime
+    import segmentation_runtime
     import connectome_client
     from perception_process import perception_worker
     class Client:
@@ -92,7 +92,7 @@ def test_perception_child_routes_sidewalk_without_any_http(monkeypatch):
     def segment(_frame, **kwargs):
         segment_calls.append(kwargs)
         return NS(selected_mask=strip(surface=2), road_hazard_mask=np.zeros((360, 640), np.uint8))
-    monkeypatch.setattr(best_so_far_runtime, 'BestSoFarSegmenter', lambda _cfg: NS(
+    monkeypatch.setattr(segmentation_runtime, 'SegmentationModel', lambda _cfg: NS(
         device=NS(type='cpu'), reset=lambda: None,
         segment=segment))
     packets = iter([{'reset': True, 'rgb': np.zeros((360, 640, 3), np.uint8),

@@ -41,7 +41,7 @@ def test_sidewalk_stop_nav2_and_road_reuse_one_real_worker(monkeypatch, policy):
         return SimpleNamespace(device=SimpleNamespace(type="cuda"), reset=lambda: None,
             segment=lambda _frame, **kwargs: SimpleNamespace(
                 selected_mask=np.full((360, 640), kwargs["path_mask_class"], np.uint8), inference_seconds=.01))
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", load)
+    monkeypatch.setattr(debug, "SegmentationModel", load)
     core = navigation.SurfaceCoordinator(navigation.SurfaceConfig(direct_approach_enabled=False))
     events, status_count = [], 0
 
@@ -169,7 +169,7 @@ def test_legacy_sidewalk_nav2_road_and_legacy_share_one_model(monkeypatch, polic
         return SimpleNamespace(device=SimpleNamespace(type="cuda"), reset=lambda: None,
             segment=lambda _frame, **kwargs: SimpleNamespace(selected_mask=np.full(
                 (360, 640), kwargs["path_mask_class"] or 2, np.uint8), inference_seconds=.01))
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", load)
+    monkeypatch.setattr(debug, "SegmentationModel", load)
     counts = {"request": 0, "status": 0}
     events = []
 
@@ -307,7 +307,7 @@ def test_waypoint_capture_stops_real_worker_before_direct_approach_and_next_road
         return SimpleNamespace(device=SimpleNamespace(type="cuda"), reset=lambda: None,
             segment=lambda _frame, **kw: SimpleNamespace(
                 selected_mask=np.full((360, 640), kw["path_mask_class"], np.uint8), inference_seconds=.01))
-    monkeypatch.setattr(debug, "BestSoFarSegmenter", model)
+    monkeypatch.setattr(debug, "SegmentationModel", model)
     events, count = [], 0
     def transport():
         nonlocal count

@@ -123,7 +123,7 @@ def main():
     from connectome360_dataset import four_views
     from connectome_flow import FlyvisFlow
     from connectome_road import ConnectomeRoadPerception
-    from dangjin_camera import _panorama_projection
+    from panorama_mask import _panorama_projection
     from surround_camera import load_profile, profile_sha256
 
     torch.set_num_threads(2)
@@ -133,7 +133,8 @@ def main():
                            ('road/road-readout.pt', config['road_sha256'])]:
         assert digest(args.model/name) == expected, name
     manifest_sha = digest(args.dataset/'frames.jsonl')
-    profile = load_profile(args.model/'runtime/environments/dangjin/camera360-profile.json')
+    packaged_profile = args.model/'runtime/config/camera360-profile.json'
+    profile = load_profile(packaged_profile) if packaged_profile.is_file() else load_profile()
     assert profile_sha256(profile) == config['camera_profile_sha256']
     rows = [json.loads(line) for line in (args.dataset/'frames.jsonl').read_text().splitlines()]
     assert all(r['recording'] != 'ID482' or r['source_time_sec'] < 1500 for r in rows)

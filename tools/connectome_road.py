@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
-from dangjin_camera import panorama_mask
+from panorama_mask import panorama_mask
 
 
 class CircuitFeatures:

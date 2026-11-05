@@ -1,7 +1,7 @@
 x-tracking-environment: &tracking-environment
-  SWIN_L_CUDA_GRAPH: ${SWIN_L_CUDA_GRAPH:-false}
-  SWIN_L_TELEMETRY_HZ: ${SWIN_L_TELEMETRY_HZ:-0.0}
-  SWIN_L_INFERENCE_PROCESS: ${SWIN_L_INFERENCE_PROCESS:-false}
+  LINE_TRACKING_CUDA_GRAPH: ${LINE_TRACKING_CUDA_GRAPH:-false}
+  LINE_TRACKING_TELEMETRY_HZ: ${LINE_TRACKING_TELEMETRY_HZ:-0.0}
+  LINE_TRACKING_INFERENCE_PROCESS: ${LINE_TRACKING_INFERENCE_PROCESS:-false}
   LINE_TRACKING_PATH_PLANNER: ${LINE_TRACKING_PATH_PLANNER:-local}
   LINE_TRACKING_CONNECTOME_URL: ${LINE_TRACKING_CONNECTOME_URL:-http://127.0.0.1:8091/v1/plan}
   LINE_TRACKING_CONNECTOME_TIMEOUT_SEC: ${LINE_TRACKING_CONNECTOME_TIMEOUT_SEC:-0.8}
@@ -10,31 +10,30 @@ x-tracking-environment: &tracking-environment
   LINE_TRACKING_PATH_MARGIN_M: ${LINE_TRACKING_PATH_MARGIN_M:-0.15}
 
 x-apriltag-environment: &apriltag-environment
-  SWIN_L_APRILTAG_IMAGE_TOPIC: ${SWIN_L_APRILTAG_IMAGE_TOPIC:-}
-  SWIN_L_APRILTAG_CAMERA_INFO_TOPIC: ${SWIN_L_APRILTAG_CAMERA_INFO_TOPIC:-}
-  SWIN_L_APRILTAG_DETECTIONS_TOPIC: ${SWIN_L_APRILTAG_DETECTIONS_TOPIC:-/detections}
-  SWIN_L_APRILTAG_FAMILY: ${SWIN_L_APRILTAG_FAMILY:-36h11}
-  SWIN_L_APRILTAG_THREADS: ${SWIN_L_APRILTAG_THREADS:-2}
-  SWIN_L_APRILTAG_DECIMATE: ${SWIN_L_APRILTAG_DECIMATE:-2.0}
-  SWIN_L_APRILTAG_MAX_HAMMING: ${SWIN_L_APRILTAG_MAX_HAMMING:-0}
-  SWIN_L_APRILTAG_MAX_HZ: ${SWIN_L_APRILTAG_MAX_HZ:-6.0}
+  LINE_TRACKING_APRILTAG_IMAGE_TOPIC: ${LINE_TRACKING_APRILTAG_IMAGE_TOPIC:-}
+  LINE_TRACKING_APRILTAG_CAMERA_INFO_TOPIC: ${LINE_TRACKING_APRILTAG_CAMERA_INFO_TOPIC:-}
+  LINE_TRACKING_APRILTAG_DETECTIONS_TOPIC: ${LINE_TRACKING_APRILTAG_DETECTIONS_TOPIC:-/detections}
+  LINE_TRACKING_APRILTAG_FAMILY: ${LINE_TRACKING_APRILTAG_FAMILY:-36h11}
+  LINE_TRACKING_APRILTAG_THREADS: ${LINE_TRACKING_APRILTAG_THREADS:-2}
+  LINE_TRACKING_APRILTAG_DECIMATE: ${LINE_TRACKING_APRILTAG_DECIMATE:-2.0}
+  LINE_TRACKING_APRILTAG_MAX_HAMMING: ${LINE_TRACKING_APRILTAG_MAX_HAMMING:-0}
+  LINE_TRACKING_APRILTAG_MAX_HZ: ${LINE_TRACKING_APRILTAG_MAX_HZ:-6.0}
 
 services:
   # Safe inspection-only process. It publishes local path/debug topics and
   # never publishes /api/sport/request. Start it explicitly with:
-  # docker compose up -d --build debugging-swin-l
-  debugging-swin-l:
+  # docker compose up -d --build debugging-line-tracking
+  debugging-line-tracking:
     profiles: [debug]
-    build: &swin-l-build
+    build: &line-tracking-build
       context: .
-      dockerfile: Dockerfile.swin-l-debug
+      dockerfile: Dockerfile.line-tracking
       args:
-        SWIN_L_BASE_IMAGE: ${SWIN_L_BASE_IMAGE:-cobiz:jetson-swin-l-l4t-r36.5.0}
-        SWIN_L_TORCHVISION_INDEX_URL: ${SWIN_L_TORCHVISION_INDEX_URL:-https://pypi.jetson-ai-lab.io/jp6/cu126}
-        SWIN_L_TORCHVISION_VERSION: ${SWIN_L_TORCHVISION_VERSION:-0.23.0}
-        SWIN_L_TORCH_TENSORRT_VERSION: ${SWIN_L_TORCH_TENSORRT_VERSION:-2.8.0+cu126}
-    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
-    container_name: cobiz-plugin-line-tracking-debugging-swin-l
+        LINE_TRACKING_BASE_IMAGE: ${LINE_TRACKING_BASE_IMAGE:-cobiz:jetson-line-tracking-l4t-r36.5.0}
+        LINE_TRACKING_TORCHVISION_INDEX_URL: ${LINE_TRACKING_TORCHVISION_INDEX_URL:-https://pypi.jetson-ai-lab.io/jp6/cu126}
+        LINE_TRACKING_TORCHVISION_VERSION: ${LINE_TRACKING_TORCHVISION_VERSION:-0.23.0}
+    image: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
+    container_name: cobiz-plugin-line-tracking-debugging-line-tracking
     network_mode: host
     ipc: host
     runtime: nvidia
@@ -42,32 +41,29 @@ services:
     volumes:
       - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
       - ./.env:/workspace/.env:ro
-      - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
-      - ${SWIN_L_ENGINE_DIR:-./models}:/models:ro
+      - ${LINE_TRACKING_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
+      - ${LINE_TRACKING_MODEL_DIR:-./models}:/models:ro
     environment:
       <<: [*tracking-environment, *apriltag-environment]
       # Keep the inspection service from duplicating the driving detector.
-      SWIN_L_APRILTAG_DETECTOR_ENABLED: ${SWIN_L_DEBUG_APRILTAG_DETECTOR_ENABLED:-false}
-      SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/res_360p/image_raw}
+      LINE_TRACKING_APRILTAG_DETECTOR_ENABLED: ${LINE_TRACKING_DEBUG_APRILTAG_DETECTOR_ENABLED:-false}
+      LINE_TRACKING_IMAGE_TOPIC: ${LINE_TRACKING_IMAGE_TOPIC:-/a2/front_camera/res_360p/image_raw}
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
-      SWIN_L_PROFILE: ${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}
-      SWIN_L_MODEL_ID: ${SWIN_L_MODEL_ID:-}
-      SWIN_L_MODEL_REVISION: ${SWIN_L_MODEL_REVISION:-}
-      SWIN_L_CHECKPOINT_SHA256: ${SWIN_L_CHECKPOINT_SHA256:-}
-      SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
-      SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
-      SWIN_L_BACKEND: ${SWIN_L_BACKEND:-tensorrt}
-      SWIN_L_TRT_ENGINE: ${SWIN_L_TRT_ENGINE:-/models/swin-l-224x384-fp16.plan}
-      SWIN_L_TRT_MANIFEST: ${SWIN_L_TRT_MANIFEST:-/models/swin-l-224x384-fp16.plan.json}
-      SWIN_L_ALLOW_BACKEND_FALLBACK: ${SWIN_L_ALLOW_BACKEND_FALLBACK:-false}
-      SWIN_L_UNRESTRICTED_PATH_MODE: ${SWIN_L_UNRESTRICTED_PATH_MODE:-true}
-      SWIN_L_BRANCH_PREFERENCE: ${SWIN_L_BRANCH_PREFERENCE:-right}
-      SWIN_L_BRANCH_MIN_WIDTH_M: ${SWIN_L_BRANCH_MIN_WIDTH_M:-0.60}
-      SWIN_L_BRANCH_MARGIN_M: ${SWIN_L_BRANCH_MARGIN_M:-0.10}
-      SWIN_L_BRANCH_CONFIRM_FRAMES: ${SWIN_L_BRANCH_CONFIRM_FRAMES:-2}
-      SWIN_L_BRANCH_HOLD_SEC: ${SWIN_L_BRANCH_HOLD_SEC:-1.50}
-      SWIN_L_INFERENCE_HZ: ${SWIN_L_INFERENCE_HZ:-4.0}
+      LINE_TRACKING_PROFILE: ${LINE_TRACKING_PROFILE:-r50-fp16-640x360}
+      LINE_TRACKING_MODEL_ID: ${LINE_TRACKING_MODEL_ID:-}
+      LINE_TRACKING_MODEL_REVISION: ${LINE_TRACKING_MODEL_REVISION:-}
+      LINE_TRACKING_CHECKPOINT_SHA256: ${LINE_TRACKING_CHECKPOINT_SHA256:-}
+      LINE_TRACKING_PATH_MASK_CLASS: ${LINE_TRACKING_PATH_MASK_CLASS:-2}
+      LINE_TRACKING_DEVICE: ${LINE_TRACKING_DEVICE:-cuda}
+      LINE_TRACKING_BACKEND: ${LINE_TRACKING_BACKEND:-pytorch}
+      LINE_TRACKING_UNRESTRICTED_PATH_MODE: ${LINE_TRACKING_UNRESTRICTED_PATH_MODE:-true}
+      LINE_TRACKING_BRANCH_PREFERENCE: ${LINE_TRACKING_BRANCH_PREFERENCE:-right}
+      LINE_TRACKING_BRANCH_MIN_WIDTH_M: ${LINE_TRACKING_BRANCH_MIN_WIDTH_M:-0.60}
+      LINE_TRACKING_BRANCH_MARGIN_M: ${LINE_TRACKING_BRANCH_MARGIN_M:-0.10}
+      LINE_TRACKING_BRANCH_CONFIRM_FRAMES: ${LINE_TRACKING_BRANCH_CONFIRM_FRAMES:-2}
+      LINE_TRACKING_BRANCH_HOLD_SEC: ${LINE_TRACKING_BRANCH_HOLD_SEC:-1.50}
+      LINE_TRACKING_INFERENCE_HZ: ${LINE_TRACKING_INFERENCE_HZ:-4.0}
       OMP_NUM_THREADS: ${OMP_NUM_THREADS:-2}
       MKL_NUM_THREADS: ${MKL_NUM_THREADS:-2}
       OPENBLAS_NUM_THREADS: ${OPENBLAS_NUM_THREADS:-2}
@@ -75,84 +71,79 @@ services:
     restart: unless-stopped
     stop_grace_period: 15s
 
-  # Swin-L or R50 task-driving mode. It listens for Cobiz custom actions and creates
+  # R50 task-driving mode. It listens for Cobiz custom actions and creates
   # direct Sport requests only for an accepted LINE_TRACKING task.
   actual-activate:
     cpu_shares: ${LINE_TRACKING_CPU_SHARES:-1024}
-    build: *swin-l-build
-    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+    build: *line-tracking-build
+    image: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
     container_name: cobiz-plugin-line-tracking-actual-activate
     network_mode: host
     ipc: host
     runtime: nvidia
     shm_size: "2gb"
     volumes:
+      - ./.env:/workspace/.env:ro
       - ${TEAMGRIT_DDS_DIR:-/opt/ros/teamgrit/dds}:/opt/ros/teamgrit/dds:ro
-      - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
-      - ${SWIN_L_ENGINE_DIR:-./models}:/models
-      - ${SWIN_L_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint
+      - ${LINE_TRACKING_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
+      - ${LINE_TRACKING_MODEL_DIR:-./models}:/models
     environment:
       <<: [*tracking-environment, *apriltag-environment]
-      SWIN_L_APRILTAG_DETECTOR_ENABLED: ${SWIN_L_APRILTAG_DETECTOR_ENABLED:-true}
-      SWIN_L_SHARED_CAMERA_IMAGE_TOPIC: ${SWIN_L_SHARED_CAMERA_IMAGE_TOPIC:-}
-      SWIN_L_SHARED_CAMERA_INFO_TOPIC: ${SWIN_L_SHARED_CAMERA_INFO_TOPIC:-}
+      LINE_TRACKING_APRILTAG_DETECTOR_ENABLED: ${LINE_TRACKING_APRILTAG_DETECTOR_ENABLED:-true}
+      LINE_TRACKING_SHARED_CAMERA_IMAGE_TOPIC: ${LINE_TRACKING_SHARED_CAMERA_IMAGE_TOPIC:-}
+      LINE_TRACKING_SHARED_CAMERA_INFO_TOPIC: ${LINE_TRACKING_SHARED_CAMERA_INFO_TOPIC:-}
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_DISTRO: ${ROS_DISTRO:-humble}
-      SWIN_L_MODE: task-drive
-      SWIN_L_PROFILE: ${SWIN_L_PROFILE:-swin-l-aspect-224x384-fp16}
-      SWIN_L_MODEL_ID: ${SWIN_L_MODEL_ID:-}
-      SWIN_L_MODEL_REVISION: ${SWIN_L_MODEL_REVISION:-}
-      SWIN_L_CHECKPOINT_SHA256: ${SWIN_L_CHECKPOINT_SHA256:-}
-      SWIN_L_PATH_MASK_CLASS: ${SWIN_L_PATH_MASK_CLASS:-2}
-      SWIN_L_DEVICE: ${SWIN_L_DEVICE:-cuda}
-      SWIN_L_BACKEND: ${SWIN_L_BACKEND:-tensorrt}
-      SWIN_L_TRT_ENGINE: ${SWIN_L_TRT_ENGINE:-/models/swin-l-224x384-fp16.plan}
-      SWIN_L_TRT_MANIFEST: ${SWIN_L_TRT_MANIFEST:-/models/swin-l-224x384-fp16.plan.json}
-      SWIN_L_TRT_AUTO_BUILD: ${SWIN_L_TRT_AUTO_BUILD:-false}
-      SWIN_L_TRT_CHECKPOINT: ${SWIN_L_TRT_CHECKPOINT:-/models/checkpoint}
-      SWIN_L_ALLOW_BACKEND_FALLBACK: "false"
-      SWIN_L_UNRESTRICTED_PATH_MODE: ${SWIN_L_UNRESTRICTED_PATH_MODE:-true}
-      SWIN_L_BRANCH_PREFERENCE: ${SWIN_L_BRANCH_PREFERENCE:-right}
-      SWIN_L_BRANCH_MIN_WIDTH_M: ${SWIN_L_BRANCH_MIN_WIDTH_M:-0.60}
-      SWIN_L_BRANCH_MARGIN_M: ${SWIN_L_BRANCH_MARGIN_M:-0.10}
-      SWIN_L_BRANCH_CONFIRM_FRAMES: ${SWIN_L_BRANCH_CONFIRM_FRAMES:-2}
-      SWIN_L_BRANCH_HOLD_SEC: ${SWIN_L_BRANCH_HOLD_SEC:-1.50}
-      SWIN_L_IMAGE_TOPIC: ${SWIN_L_IMAGE_TOPIC:-/a2/front_camera/image_raw}
-      SWIN_L_EVALUATION_HEIGHT: ${SWIN_L_EVALUATION_HEIGHT:-360}
-      SWIN_L_EVALUATION_WIDTH: ${SWIN_L_EVALUATION_WIDTH:-640}
-      SWIN_L_PATH_FRAME_ID: ${SWIN_L_PATH_FRAME_ID:-base_link}
-      SWIN_L_INPUT_RELIABILITY: ${SWIN_L_INPUT_RELIABILITY:-best_effort}
-      SWIN_L_LOCAL_PATH_TOPIC: ${SWIN_L_LOCAL_PATH_TOPIC:-/line_tracking/swin_l/local_path}
-      SWIN_L_METRICS_TOPIC: ${SWIN_L_METRICS_TOPIC:-/line_tracking/swin_l/metrics}
-      SWIN_L_NEAR_DISTANCE_M: ${SWIN_L_NEAR_DISTANCE_M:-3.0}
-      SWIN_L_FAR_DISTANCE_M: ${SWIN_L_FAR_DISTANCE_M:-8.0}
-      SWIN_L_GROUND_HALF_WIDTH_M: ${SWIN_L_GROUND_HALF_WIDTH_M:-4.0}
-      SWIN_L_SEARCH_HALF_WIDTH_M: ${SWIN_L_SEARCH_HALF_WIDTH_M:-3.5}
-      SWIN_L_ROI_POLYGON: ${SWIN_L_ROI_POLYGON:-0.08,1.00,0.92,1.00,0.62,0.45,0.38,0.45}
-      SWIN_L_ROAD_ROI_POLYGON: ${SWIN_L_ROAD_ROI_POLYGON:-0.07,1.00,0.93,1.00,0.68,0.45,0.32,0.45}
-      SWIN_L_ROAD_ROI_EXCLUSION_POLYGON: ${SWIN_L_ROAD_ROI_EXCLUSION_POLYGON-0.68,0.00,1.00,0.00,1.00,0.95,0.96,0.93,0.91,0.86,0.84,0.78,0.79,0.65,0.73,0.35}
-      SWIN_L_PATH_POINTS: ${SWIN_L_PATH_POINTS:-20}
-      SWIN_L_BEV_WIDTH_PX: ${SWIN_L_BEV_WIDTH_PX:-280}
-      SWIN_L_BEV_HEIGHT_PX: ${SWIN_L_BEV_HEIGHT_PX:-160}
-      SWIN_L_MIN_VALID_RATIO: ${SWIN_L_MIN_VALID_RATIO:-0.35}
-      SWIN_L_MIN_SIDEWALK_WIDTH_M: ${SWIN_L_MIN_SIDEWALK_WIDTH_M:-0.12}
-      SWIN_L_CLOSE_KERNEL_PX: ${SWIN_L_CLOSE_KERNEL_PX:-5}
-      SWIN_L_PATH_DURATION_SEC: ${SWIN_L_PATH_DURATION_SEC:-1.50}
-      SWIN_L_INFERENCE_HZ: ${SWIN_L_INFERENCE_HZ:-4.0}
+      LINE_TRACKING_MODE: task-drive
+      LINE_TRACKING_PROFILE: ${LINE_TRACKING_PROFILE:-r50-fp16-640x360}
+      LINE_TRACKING_MODEL_ID: ${LINE_TRACKING_MODEL_ID:-}
+      LINE_TRACKING_MODEL_REVISION: ${LINE_TRACKING_MODEL_REVISION:-}
+      LINE_TRACKING_CHECKPOINT_SHA256: ${LINE_TRACKING_CHECKPOINT_SHA256:-}
+      LINE_TRACKING_PATH_MASK_CLASS: ${LINE_TRACKING_PATH_MASK_CLASS:-2}
+      LINE_TRACKING_DEVICE: ${LINE_TRACKING_DEVICE:-cuda}
+      LINE_TRACKING_BACKEND: ${LINE_TRACKING_BACKEND:-pytorch}
+      LINE_TRACKING_UNRESTRICTED_PATH_MODE: ${LINE_TRACKING_UNRESTRICTED_PATH_MODE:-true}
+      LINE_TRACKING_BRANCH_PREFERENCE: ${LINE_TRACKING_BRANCH_PREFERENCE:-right}
+      LINE_TRACKING_BRANCH_MIN_WIDTH_M: ${LINE_TRACKING_BRANCH_MIN_WIDTH_M:-0.60}
+      LINE_TRACKING_BRANCH_MARGIN_M: ${LINE_TRACKING_BRANCH_MARGIN_M:-0.10}
+      LINE_TRACKING_BRANCH_CONFIRM_FRAMES: ${LINE_TRACKING_BRANCH_CONFIRM_FRAMES:-2}
+      LINE_TRACKING_BRANCH_HOLD_SEC: ${LINE_TRACKING_BRANCH_HOLD_SEC:-1.50}
+      LINE_TRACKING_IMAGE_TOPIC: ${LINE_TRACKING_IMAGE_TOPIC:-/a2/front_camera/image_raw}
+      LINE_TRACKING_EVALUATION_HEIGHT: ${LINE_TRACKING_EVALUATION_HEIGHT:-360}
+      LINE_TRACKING_EVALUATION_WIDTH: ${LINE_TRACKING_EVALUATION_WIDTH:-640}
+      LINE_TRACKING_PATH_FRAME_ID: ${LINE_TRACKING_PATH_FRAME_ID:-base_link}
+      LINE_TRACKING_INPUT_RELIABILITY: ${LINE_TRACKING_INPUT_RELIABILITY:-best_effort}
+      LINE_TRACKING_LOCAL_PATH_TOPIC: ${LINE_TRACKING_LOCAL_PATH_TOPIC:-/line_tracking/local_path}
+      LINE_TRACKING_METRICS_TOPIC: ${LINE_TRACKING_METRICS_TOPIC:-/line_tracking/metrics}
+      LINE_TRACKING_NEAR_DISTANCE_M: ${LINE_TRACKING_NEAR_DISTANCE_M:-3.0}
+      LINE_TRACKING_FAR_DISTANCE_M: ${LINE_TRACKING_FAR_DISTANCE_M:-8.0}
+      LINE_TRACKING_GROUND_HALF_WIDTH_M: ${LINE_TRACKING_GROUND_HALF_WIDTH_M:-4.0}
+      LINE_TRACKING_SEARCH_HALF_WIDTH_M: ${LINE_TRACKING_SEARCH_HALF_WIDTH_M:-3.5}
+      LINE_TRACKING_ROI_POLYGON: ${LINE_TRACKING_ROI_POLYGON:-0.08,1.00,0.92,1.00,0.62,0.45,0.38,0.45}
+      LINE_TRACKING_ROAD_ROI_POLYGON: ${LINE_TRACKING_ROAD_ROI_POLYGON:-0.07,1.00,0.93,1.00,0.68,0.45,0.32,0.45}
+      LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON: ${LINE_TRACKING_ROAD_ROI_EXCLUSION_POLYGON-0.68,0.00,1.00,0.00,1.00,0.95,0.96,0.93,0.91,0.86,0.84,0.78,0.79,0.65,0.73,0.35}
+      LINE_TRACKING_PATH_POINTS: ${LINE_TRACKING_PATH_POINTS:-20}
+      LINE_TRACKING_BEV_WIDTH_PX: ${LINE_TRACKING_BEV_WIDTH_PX:-280}
+      LINE_TRACKING_BEV_HEIGHT_PX: ${LINE_TRACKING_BEV_HEIGHT_PX:-160}
+      LINE_TRACKING_MIN_VALID_RATIO: ${LINE_TRACKING_MIN_VALID_RATIO:-0.35}
+      LINE_TRACKING_MIN_SIDEWALK_WIDTH_M: ${LINE_TRACKING_MIN_SIDEWALK_WIDTH_M:-0.12}
+      LINE_TRACKING_CLOSE_KERNEL_PX: ${LINE_TRACKING_CLOSE_KERNEL_PX:-5}
+      LINE_TRACKING_PATH_DURATION_SEC: ${LINE_TRACKING_PATH_DURATION_SEC:-1.50}
+      LINE_TRACKING_INFERENCE_HZ: ${LINE_TRACKING_INFERENCE_HZ:-4.0}
       OMP_NUM_THREADS: ${OMP_NUM_THREADS:-2}
       MKL_NUM_THREADS: ${MKL_NUM_THREADS:-2}
       OPENBLAS_NUM_THREADS: ${OPENBLAS_NUM_THREADS:-2}
-      SWIN_L_OUTPUT_HZ: ${SWIN_L_OUTPUT_HZ:-10.0}
-      SWIN_L_SMOOTHING_TIME_CONSTANT_SEC: ${SWIN_L_SMOOTHING_TIME_CONSTANT_SEC:-0.80}
-      SWIN_L_MAX_LATERAL_UPDATE_M: ${SWIN_L_MAX_LATERAL_UPDATE_M:-0.35}
-      SWIN_L_PATH_HOLD_SEC: ${SWIN_L_PATH_HOLD_SEC:-0.90}
-      SWIN_L_APRILTAG_MAX_AGE_SEC: ${SWIN_L_APRILTAG_MAX_AGE_SEC:-1.0}
-      SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC: ${SWIN_L_APRILTAG_CONFIRM_WINDOW_SEC:-1.0}
-      SWIN_L_APRILTAG_CONFIRM_MIN_HITS: ${SWIN_L_APRILTAG_CONFIRM_MIN_HITS:-3}
-      SWIN_L_APRILTAG_MAX_RANGE_M: ${SWIN_L_APRILTAG_MAX_RANGE_M:-3.0}
-      SWIN_L_APRILTAG_MIN_DECISION_MARGIN: ${SWIN_L_APRILTAG_MIN_DECISION_MARGIN:-15}
-      SWIN_L_APRILTAG_ALLOWED_IDS: ${SWIN_L_APRILTAG_ALLOWED_IDS:-0-30}
-      SWIN_L_APRILTAG_TAG_SIZE_M: ${SWIN_L_APRILTAG_TAG_SIZE_M:-0.167}
+      LINE_TRACKING_OUTPUT_HZ: ${LINE_TRACKING_OUTPUT_HZ:-10.0}
+      LINE_TRACKING_SMOOTHING_TIME_CONSTANT_SEC: ${LINE_TRACKING_SMOOTHING_TIME_CONSTANT_SEC:-0.80}
+      LINE_TRACKING_MAX_LATERAL_UPDATE_M: ${LINE_TRACKING_MAX_LATERAL_UPDATE_M:-0.35}
+      LINE_TRACKING_PATH_HOLD_SEC: ${LINE_TRACKING_PATH_HOLD_SEC:-0.90}
+      LINE_TRACKING_APRILTAG_MAX_AGE_SEC: ${LINE_TRACKING_APRILTAG_MAX_AGE_SEC:-1.0}
+      LINE_TRACKING_APRILTAG_CONFIRM_WINDOW_SEC: ${LINE_TRACKING_APRILTAG_CONFIRM_WINDOW_SEC:-1.0}
+      LINE_TRACKING_APRILTAG_CONFIRM_MIN_HITS: ${LINE_TRACKING_APRILTAG_CONFIRM_MIN_HITS:-3}
+      LINE_TRACKING_APRILTAG_MAX_RANGE_M: ${LINE_TRACKING_APRILTAG_MAX_RANGE_M:-3.0}
+      LINE_TRACKING_APRILTAG_MIN_DECISION_MARGIN: ${LINE_TRACKING_APRILTAG_MIN_DECISION_MARGIN:-15}
+      LINE_TRACKING_APRILTAG_ALLOWED_IDS: ${LINE_TRACKING_APRILTAG_ALLOWED_IDS:-0-30}
+      LINE_TRACKING_APRILTAG_TAG_SIZE_M: ${LINE_TRACKING_APRILTAG_TAG_SIZE_M:-0.167}
       LINE_TRACKING_SPORT_REQUEST_TOPIC: ${LINE_TRACKING_SPORT_REQUEST_TOPIC:-/api/sport/request}
       LINE_TRACKING_MAX_FORWARD_MPS: ${LINE_TRACKING_MAX_FORWARD_MPS:-0.50}
       LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED: ${LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED:-true}
@@ -182,64 +173,26 @@ services:
     restart: unless-stopped
     stop_grace_period: 15s
 
-  # Freeze checkpoint-initialized values into a reproducible local safetensors
-  # artifact before compiling for the target Jetson.
-  prepare-swin-l-checkpoint:
-    profiles: [engine]
-    build: *swin-l-build
-    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
-    runtime: nvidia
-    working_dir: /workspace
-    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/prepare_swin_l_checkpoint.py"]
-    command:
-      - --output-dir
-      - /models/checkpoint
-      - --allow-initialized-weights
-    volumes:
-      - ${SWIN_L_MODEL_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
-      - ${SWIN_L_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint
-    environment:
-      HF_HOME: /root/.cache/huggingface
-
-  # TensorRT plans are target-GPU/runtime-specific, so build this one-shot
-  # artifact on the same Jetson class used by actual-activate.
-  build-swin-l-engine:
-    profiles: [engine]
-    build: *swin-l-build
-    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
-    runtime: nvidia
-    working_dir: /workspace
-    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/build_swin_l_tensorrt.py"]
-    command:
-      - --checkpoint
-      - /models/checkpoint
-      - --output
-      - /models/output/swin-l-224x384-fp16.plan
-    volumes:
-      - ${SWIN_L_PREPARED_CHECKPOINT_DIR:-./models/swin-l-checkpoint}:/models/checkpoint:ro
-      - ${SWIN_L_ENGINE_DIR:-./models}:/models/output
-
   # One-shot offline MCAP tests using the same Jetson CUDA image as live debug.
   # Override its ROS/DDS entrypoint and keep files owned by the host user.
-  test-swin-l:
+  test-line-tracking:
     profiles: [test]
-    build: *swin-l-build
-    image: ${SWIN_L_DEBUG_IMAGE:-cobiz-plugin-line-tracking-swin-l-debug}
+    build: *line-tracking-build
+    image: ${LINE_TRACKING_IMAGE_NAME:-cobiz-plugin-line-tracking-runtime}
     runtime: nvidia
     shm_size: "2gb"
-    user: "${SWIN_L_TEST_UID:-1000}:${SWIN_L_TEST_GID:-1000}"
+    user: "${LINE_TRACKING_TEST_UID:-1000}:${LINE_TRACKING_TEST_GID:-1000}"
     working_dir: /workspace
-    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/swin_l_rosbag_overlay.py"]
+    entrypoint: ["/opt/venv/bin/python", "/workspace/tools/rosbag_overlay.py"]
     command: ["--help"]
     volumes:
       - ./.env:/workspace/.env:ro
-      - ${SWIN_L_ROSBAG_DIR:-./rosbags}:/bags:ro
-      - ${SWIN_L_TEST_RESULTS_DIR:-./rosbag-results/swin-l-tests}:/workspace/rosbag-results/swin-l-tests
-      - ${SWIN_L_TEST_CACHE_DIR:-./.cache/huggingface-tests}:/cache/huggingface
-      - ${SWIN_L_ENGINE_DIR:-./models}:/models:ro
+      - ${LINE_TRACKING_ROSBAG_DIR:-./rosbags}:/bags:ro
+      - ${LINE_TRACKING_TEST_RESULTS_DIR:-./rosbag-results/line-tracking-tests}:/workspace/rosbag-results/line-tracking-tests
+      - ${LINE_TRACKING_TEST_CACHE_DIR:-./.cache/huggingface-tests}:/cache/huggingface
+      - ${LINE_TRACKING_MODEL_DIR:-./models}:/models:ro
     environment:
       HF_HOME: /cache/huggingface
+      LINE_TRACKING_PROFILE: ${LINE_TRACKING_PROFILE:-r50-fp16-640x360}
       PYTHONDONTWRITEBYTECODE: "1"
-      SWIN_L_BACKEND: ${SWIN_L_BACKEND:-tensorrt}
-      SWIN_L_TRT_ENGINE: ${SWIN_L_TRT_ENGINE:-/models/swin-l-224x384-fp16.plan}
-      SWIN_L_TRT_MANIFEST: ${SWIN_L_TRT_MANIFEST:-/models/swin-l-224x384-fp16.plan.json}
+      LINE_TRACKING_BACKEND: ${LINE_TRACKING_BACKEND:-pytorch}

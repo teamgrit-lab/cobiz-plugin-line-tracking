@@ -65,7 +65,7 @@ def test_tasks_use_only_current_camera_and_stop_on_lost_front(monkeypatch):
     def segment(frame, path_mask_class, **kwargs):
         side_calls.append(path_mask_class)
         return SimpleNamespace(selected_mask=np.full((360, 640), 2, np.uint8), inference_seconds=.01)
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _: SimpleNamespace(
+    monkeypatch.setattr(debug, 'SegmentationModel', lambda _: SimpleNamespace(
         device=SimpleNamespace(type='cuda'), reset=lambda: None, segment=segment))
 
     def drive():
@@ -101,7 +101,7 @@ def test_tasks_use_only_current_camera_and_stop_on_lost_front(monkeypatch):
         ros.now += 2.1
         image(ros)
         wait_for_count(ros, 3)
-        assert side_calls == [2] and ros.metrics()['inference_backend'] == 'legacy'
+        assert side_calls == [2] and ros.metrics()['inference_backend'] == 'r50'
         cancel(ros, 'sidewalk')
         start(ros, 1, 'new-fcn')
         ros.subscriptions[mask_topic(SHA)](old_packet)
@@ -169,7 +169,7 @@ def test_inflight_road_result_is_discarded_on_switch_to_sidewalk(monkeypatch):
             ros.now += 2.1
             image(ros)
             wait_for_count(ros, 1)
-            assert ros.metrics()['inference_backend'] == 'legacy'
+            assert ros.metrics()['inference_backend'] == 'r50'
             assert ros.metrics()['fcn360'] is None
         finally:
             release.set()
@@ -198,7 +198,7 @@ def test_arm_is_unobserved_independent_of_fcn_class_and_needs_visible_shoulders(
 
 @pytest.mark.parametrize('open_side,expected_sign', [('left',1), ('right',-1)])
 def test_side_recovery_can_rotate_before_forward_turn_confirmation(open_side, expected_sign):
-    from dangjin_fcn import FcnDrive
+    from fcn_replay import FcnDrive
 
     masks = np.full((4, 8, 16), 13, np.uint8)
     masks[:, 4:] = 3

@@ -12,21 +12,10 @@ Compose의 직접 입력은 Jetson 하드웨어 MJPEG 디코딩과 VIC BGRx 변�
 추론은 GPU에서 수행하며 원래 분류 격자만 CPU에 반환한다. zero-copy 구현은 아니며
 지원 플러그인/CUDA가 없으면 오류로 알린다. 전면 카메라·Sidewalk 경로는 유지한다.
 
-## Mac에서 브라우저 실행
+## 로컬 검증
 
-```bash
-cd /Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking
-./tools/run_dangjin_360.sh
-```
-
-`Ready` 후 <http://127.0.0.1:8775/>에서 로봇 실험을 연다. 기본 모델은 아래 2026-11-03 패키지이며 기본 최대속도는 시뮬레이션 기준 10.0 m/s다. 이후 시뮬레이션은 이 상한을 사용한다. 이미 켜 둔 서버는 종료 후 다시 실행하고 브라우저를 새로고침한다. 다른 포트는 `--port 8776`으로 지정한다.
-
-이전에 모델 경로를 지정했다면 다음처럼 새 모델을 명시할 수 있다.
-
-```bash
-DANGJIN_FCN_MODEL_DIR='/Volumes/MY_HDD/02_학습모델_데이터셋/03_FCN_ResNet18/모델/fcn1024-road-runs/20261103-081851-c90tq27l' \
-  ./tools/run_dangjin_360.sh
-```
+브라우저 시험은 [로컬 시뮬레이션 안내](local-simulation.md)에 따라 별도 실행한다.
+실기 검출·제어 코드는 시뮬레이션 파일 없이 사용할 수 있다.
 
 ## Jetson에 코드와 모델 복사
 
@@ -39,7 +28,7 @@ cd /Users/kangminwoo/Documents/GitHub/cobiz-plugin-line-tracking
 rsync -avR \
   tools/fcn360_road.py \
   tools/fcn360_detector.py \
-  tools/swin_l_local_path_debug.py \
+  tools/line_tracking_runtime.py \
   docker-compose.fcn360.yml \
   dangjin-a2:/home/teamgrit/dev/dangjin-a2/cobiz-plugin-line-tracking/
 ```
@@ -95,7 +84,7 @@ docker compose logs --tail=100 fcn360-road
 ## 검출과 작업 전환 확인
 
 - 같은 ROS 도메인·DDS 설정의 ROS 2 뷰어에서 `/line_tracking/fcn360/overlay/compressed`를 `CompressedImage`, best-effort QoS로 구독한다. 앞·좌·후·우 순서의 2×2 미리보기이며 초록은 차도, 분홍은 고정 로봇 영역이다. 표시만 512×256 패널로 축소하고 추론·경로 계산은 원래 해상도를 유지한다.
-- Road 작업에서 `/line_tracking/swin_l/metrics`의 `inference_backend`는 `fcn1024-360`이다. `fcn360.front_path_valid`, `maneuver`, `observed_horizon_m`, `speed_fraction`을 확인한다. Sidewalk 작업의 backend는 `legacy`이며 기존 전면 카메라와 인도 제어기를 사용한다.
+- Road 작업에서 `/line_tracking/metrics`의 `inference_backend`는 `fcn1024-360`이다. `fcn360.front_path_valid`, `maneuver`, `observed_horizon_m`, `speed_fraction`을 확인한다. Sidewalk 작업의 backend는 `r50`이며 기존 전면 카메라와 인도 제어기를 사용한다.
 - 직접 입력 HTTP 응답의 `classes`에는 네 방향의 원래 `4×16×32` 클래스 격자와 원본 촬영 시각이 포함된다. 격자를 축소하지 않는다. 0은 미관측, 1은 고정 로봇, 3은 차도다. ROS 마스크·미리보기 토픽은 기존 검사 CLI를 `--direct-camera` 없이 실행할 때만 제공한다.
 - 전방 고정 팔 영역은 0 기준 14~17열·10~15행, 1 기준 15~18열·11~16행이다. 512 기준 2열×3행과 같은 화면 비율의 4열×6행이며 경로 계산에서는 미관측으로 제외한다. 그 밖의 로봇 예측도 미관측으로 처리한다.
 - 전방과 연결된 노면과 좌우 차도를 기준으로 경로를 선택한다. 작은 중앙 보정은 확인 대기 없이 적용한다. 새 큰 회전은 방향 기울기 0.40(약 22°)에서 확인을 시작하고 0.25(약 14°)까지 유지하는 히스테리시스로 직진·회전 왕복을 줄인다. 새 회전은 마스크 세 장에서 연속 확인한다.

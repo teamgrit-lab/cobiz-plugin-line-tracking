@@ -35,11 +35,9 @@ def main():
             elif isinstance(node, ast.Import):
                 todo.extend(a.name.split('.')[0] for a in node.names)
     source = dest / 'source'; source.mkdir(exist_ok=True)
-    for pattern in ['tools/*front_connectome*.py', 'tools/validate_front_http.py', 'tools/audit_front_holdout.py', 'tools/filter_front_road_data.py', 'tools/train_connectome_policy.py',
-                    'tools/dangjin_sensor_faults.py', 'tools/swin_l_local_path_debug.py',
-                    'tools/validate_front_drive.mjs', 'tools/watch_front_validation.py', 'test/test_front_connectome.py',
-                    'environments/dangjin/*.js', 'environments/dangjin/*.json',
-                    'environments/dangjin/*.html', 'environments/dangjin/*.css',
+    for pattern in ['tools/*front_connectome*.py', 'tools/validate_front_http.py', 'tools/audit_front_holdout.py', 'tools/filter_front_road_data.py', 'tools/training_geometry.py', 'tools/camera_trajectory.py',
+                    'tools/sensor_faults.py', 'tools/line_tracking_runtime.py',
+                    'test/test_front_connectome.py',
                     'docker-compose.front-connectome.yml', 'Dockerfile.connectome',
                     'requirements-connectome.txt']:
         for file in ROOT.glob(pattern):

@@ -6,7 +6,7 @@ and real semantic packet tests exercise the geometry producing these bounds.
 import numpy as np
 import pytest
 
-from dangjin_fcn import FcnDrive
+from fcn_replay import FcnDrive
 
 
 def controller(monkeypatch, shape=(16, 32)):

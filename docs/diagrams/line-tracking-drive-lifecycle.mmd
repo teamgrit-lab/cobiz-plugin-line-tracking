@@ -7,7 +7,7 @@ sequenceDiagram
 
     C->>N: LINE_TRACKING 작업 등록
     N->>P: 작업의 selected_mask로 카메라 추종 시작
-    loop 작업 활성 중 · SWIN_L_OUTPUT_HZ
+    loop 작업 활성 중 · LINE_TRACKING_OUTPUT_HZ
         P-->>N: 선택한 표면의 경로 또는 전면 모델 명령
         N->>N: 영상 시각·추종 상태·설정된 정지 조건 확인
         alt 주행 가능

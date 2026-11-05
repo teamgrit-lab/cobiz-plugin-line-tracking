@@ -6,7 +6,7 @@ import numpy as np
 from connectome360_runtime import PROTOCOL
 from front_connectome_client import FrontConnectomeSegmenter, limit_front_command, validated_command
 from surround_camera import load_profile, profile_sha256
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 
 
 class Connectome360Segmenter(FrontConnectomeSegmenter):

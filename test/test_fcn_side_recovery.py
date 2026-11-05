@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from dangjin_fcn import FcnDrive
+from fcn_replay import FcnDrive
 from fcn360_road import SIDE_RECOVERY_MAX_SECONDS, side_recovery_yaw
 from test_fcn360_road import ARGS, SHA, lane, mask_topic, packet
 from test_apriltag_task_stop_ros import RosHarness, SPORT, ZERO, debug
@@ -126,27 +126,3 @@ def test_ros_recovery_obeys_staleness_dropouts_regained_path_and_cancellation(mo
         callback(packet(ros,side_only(shape=(8,16))))
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
     ros.run(scenario,*ARGS)
-
-
-def test_simulation_packet_has_rotation_without_a_path_then_resumes_tracking():
-    from dangjin_sim_server import SimulationService, encode_png
-    from test_dangjin_sim import ROOT, request
-    site = json.loads((ROOT/'environments/dangjin/site.json').read_text())
-    world = json.loads((ROOT/'environments/dangjin/world.json').read_text())
-    classes = side_only()
-    detector = SimpleNamespace(details=dict(backend='fcn1024-360',input_width=1024,
-        weights_sha256=SHA,views=4),predict_classes=lambda _: (classes.copy(),0.))
-    sim = SimulationService(None,site,detector,world,FcnDrive(1.6,10.))
-    req = request();del req['image_png']
-    req.update(speed_mps=10.,views_atlas_png=encode_png(np.zeros((1024,2048,3),np.uint8)))
-    assert sim.step(req)['command']['yaw_rate'] == 0
-    req['stamp_sec'] += .1
-    reply = sim.step(req)
-    assert reply['command'] == dict(vx=0.,vy=0.,yaw_rate=.18,reason='road_side_recovery')
-    assert not reply['paths'] and not reply['policy_metrics']['front_path_valid']
-    classes[:] = 3;req['stamp_sec'] += .1
-    resumed = sim.step(req)
-    assert resumed['command']['vx'] > 0 and resumed['paths']['1']['points_xy']
-    classes[:] = 0;req['stamp_sec'] += .1
-    stopped = sim.step(req)['command']
-    assert stopped['vx'] == stopped['vy'] == stopped['yaw_rate'] == 0.

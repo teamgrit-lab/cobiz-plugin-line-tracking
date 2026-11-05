@@ -1,6 +1,6 @@
 """Surface-center local path extraction and smoothing helpers.
 
-The Swin-L runtime produces a Mapillary surface label map.  This module turns
+The R50 runtime produces a Mapillary surface label map.  This module turns
 the selected road/sidewalk regions into a short path in the robot convention
 ``x=forward, y=left``.  It deliberately keeps the geometry explicit and
 configurable because the rosbag contains camera intrinsics but no camera-to-
@@ -30,7 +30,7 @@ def selected_path_region(selected_mask: np.ndarray, path_mask_class: int) -> np.
 
     if path_mask_class not in PATH_MASK_CLASSES:
         raise ValueError(
-            "SWIN_L_PATH_MASK_CLASS must be 0 (road or sidewalk), "
+            "LINE_TRACKING_PATH_MASK_CLASS must be 0 (road or sidewalk), "
             "1 (road), or 2 (sidewalk)"
         )
     if path_mask_class == 0:
@@ -482,7 +482,7 @@ def extract_metric_centerline(
 
 
 class LocalPathSmoother:
-    """Time-aware EMA that retains a path briefly between Swin-L updates."""
+    """Time-aware EMA that retains a path briefly between inference updates."""
 
     def __init__(self, config: LocalPathConfig) -> None:
         config.validate()

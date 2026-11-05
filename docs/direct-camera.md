@@ -7,7 +7,7 @@
 | 구성 | 카메라 소유 서비스 | 입력 | 제어기가 받는 결과 |
 | --- | --- | --- | --- |
 | 360° + FCN | `fcn360-road` | USB `/dev/video91` 직접 수집 | 네 방향 원래 분류 격자·촬영 시각 |
-| 전면 + Flyvis | `front-connectome` | A2의 `SWIN_L_IMAGE_TOPIC` 직접 구독 | 학습한 전진·회전·정지 명령·촬영 시각 |
+| 전면 + Flyvis | `front-connectome` | A2의 `LINE_TRACKING_IMAGE_TOPIC` 직접 구독 | 학습한 전진·회전·정지 명령·촬영 시각 |
 | 360° + Flyvis | `connectome360` | USB `/dev/video91` 직접 수집 | 학습한 전진·회전·정지 명령·촬영 시각 |
 
 각 구성은 표의 서비스와 `actual-activate` 두 컨테이너를 사용한다.
@@ -29,7 +29,14 @@ Road 요청은 계속되지만 영상만 없으면 입력을 기다리며, 기�
 제어기의 신선도 검사로 정지한다. 다음 Road 요청에서는 카메라를 다시 연다.
 HTTP에는 영상·PNG가 없고, 명령 또는 작은 분류 격자와 메타데이터만 전달한다.
 `camera_transport=direct`, `camera_topic=null`이 Road 지표에 표시된다.
-Sidewalk 지표는 `camera_transport=ros`, `inference_backend=legacy`다.
+Sidewalk 지표는 `camera_transport=ros`, `inference_backend=r50`다.
+
+Flyvis 이미지의 패키지 설치는 부모 이미지의 pip 인덱스·제약 환경변수와 설정 파일을
+격리하고 PyPI에서 수행한다. 학습 환경에서 사용한 Hydra 1.3.7·OmegaConf 2.3.1·ANTLR
+4.9.3 조합을 고정하며, CUDA PyTorch·torchvision·NumPy는 베이스 이미지의 정확한
+버전 제약을 유지한다. 빌드 중 Flyvis/Hydra/OmegaConf import와 기존 CUDA PyTorch의
+경로·버전·CUDA 버전 유지 여부를 확인한다. 이 설치 단계만 실패한 경우 기본 이미지가
+이미 정상 빌드됐다면 `docker compose build connectome360`부터 다시 실행하면 된다.
 
 ## 360° Road의 하드웨어 디코딩과 CUDA 입력
 

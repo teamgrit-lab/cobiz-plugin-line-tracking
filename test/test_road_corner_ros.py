@@ -20,7 +20,7 @@ def test_task_corner_uses_measured_yaw_and_resets_on_cancel(monkeypatch, mode, s
     monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_MAX_FORWARD_MPS', '.8')
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_STOP_ON_'+check.upper(), 'false')
-    monkeypatch.setattr(debug, 'BestSoFarSegmenter', lambda _: NS(device=NS(type='cuda'), reset=lambda: None,
+    monkeypatch.setattr(debug, 'SegmentationModel', lambda _: NS(device=NS(type='cuda'), reset=lambda: None,
         segment=lambda *_a, **_k: NS(selected_mask=np.ones((360, 640), np.uint8), inference_seconds=.01)))
 
     def estimates(selected, classes, config, vegetation=None, road_hazard_mask=None, road_analysis=None):

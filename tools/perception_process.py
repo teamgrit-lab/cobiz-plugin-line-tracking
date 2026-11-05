@@ -11,11 +11,11 @@ def perception_worker(pipe, config, planner_values):
     try:
         import cv2
         import numpy as np
-        from best_so_far_runtime import BestSoFarSegmenter
+        from segmentation_runtime import SegmentationModel
         from connectome_client import ConnectomeClient
         from surface_path_planner import SurfacePathPlanner
         cv2.setNumThreads(2)
-        model = BestSoFarSegmenter(config)
+        model = SegmentationModel(config)
         planner = SurfacePathPlanner(ConnectomeClient(**planner_values), planner_values['local_config'])
         # Capture the fixed-shape model before announcing readiness. Reset
         # temporal state so the synthetic warmup never supports a live path.

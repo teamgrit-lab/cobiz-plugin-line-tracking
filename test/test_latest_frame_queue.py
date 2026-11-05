@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from swin_l_local_path_debug import (  # noqa: E402
+from line_tracking_runtime import (  # noqa: E402
     FramePacket,
     LatestFrameQueue,
     camera_image_rgb,

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-PROFILE_PATH = Path(__file__).resolve().parents[1]/'environments/dangjin/camera360-profile.json'
+PROFILE_PATH = Path(__file__).resolve().parents[1]/'config/camera360-profile.json'
 
 
 def validate_profile(profile):

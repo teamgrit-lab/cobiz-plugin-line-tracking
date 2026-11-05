@@ -13,8 +13,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-import swin_l_local_path_debug as debug  # noqa: E402
-from swin_l_drive_control import DriveDecision  # noqa: E402
+import line_tracking_runtime as debug  # noqa: E402
+from drive_control import DriveDecision  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -25,7 +25,7 @@ def test_task_control_ignores_external_publisher_count(
     monkeypatch, preexisting_control_publishers
 ):
     # This isolated task/Sport contract scenario does not provide sensor streams.
-    monkeypatch.setitem(debug.ENV, "SWIN_L_APRILTAG_MAX_RANGE_M", "0")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_APRILTAG_MAX_RANGE_M", "0")
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "true")
     published: dict[str, list] = {}
@@ -103,10 +103,10 @@ def test_task_control_ignores_external_publisher_count(
         camera.header.stamp = SimpleNamespace(sec=100, nanosec=0)
         node.on_image(camera)
         node._publish_state()
-        metrics = json.loads(published["/line_tracking/swin_l/metrics"][-1].data)
+        metrics = json.loads(published["/line_tracking/metrics"][-1].data)
         assert metrics["inference_count"] == 0
         assert metrics["inference_enabled"] is False
-        assert "/line_tracking/swin_l/overlay" not in published
+        assert "/line_tracking/overlay" not in published
         checked_classes = []
 
         def readiness(mask_class, _now):
@@ -137,7 +137,7 @@ def test_task_control_ignores_external_publisher_count(
         node.tasks.active = replace(node.tasks.active, started_at=time.monotonic() - 3)
         node.publish_state()
         assert (
-            json.loads(published["/line_tracking/swin_l/metrics"][-1].data)[
+            json.loads(published["/line_tracking/metrics"][-1].data)[
                 "path_mask_class"
             ]
             == 1
@@ -152,7 +152,7 @@ def test_task_control_ignores_external_publisher_count(
         )
         node.publish_state()
         assert (
-            json.loads(published["/line_tracking/swin_l/metrics"][-1].data)[
+            json.loads(published["/line_tracking/metrics"][-1].data)[
                 "path_mask_class"
             ]
             == 2
@@ -194,7 +194,7 @@ def test_task_control_ignores_external_publisher_count(
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(
         debug,
-        "BestSoFarSegmenter",
+        "SegmentationModel",
         lambda _config: SimpleNamespace(
             device=SimpleNamespace(type="cuda"),
             reset=lambda: None,
@@ -205,6 +205,6 @@ def test_task_control_ignores_external_publisher_count(
         ),
     )
     monkeypatch.setattr(debug, "_path_message", lambda *_args: Message())
-    monkeypatch.setitem(debug.ENV, "SWIN_L_PATH_MASK_CLASS", "2")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", "2")
 
     assert debug.run_ros2(debug.parse_args(["task-drive"])) == 0

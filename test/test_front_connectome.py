@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 from connectome_server import encode_image
 from front_connectome_client import front_drive_decision, limit_front_command, validated_command
 from front_connectome_service import FrontService, PROTOCOL
-from swin_l_drive_control import DriveDecision
+from drive_control import DriveDecision
 
 
 def test_single_image_protocol_rejects_pose_masks_surround_and_wrong_mode():

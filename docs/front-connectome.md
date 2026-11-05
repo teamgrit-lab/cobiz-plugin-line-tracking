@@ -49,26 +49,12 @@ MPLBACKEND=Agg .cache/connectome-venv/bin/python tools/train_front_connectome.py
   --exclusions /Volumes/MY_HDD/connectum_data_selections/front-road-only-v2/exclusions.json
 MPLBACKEND=Agg .cache/connectome-venv/bin/python tools/validate_front_connectome.py \
   --model /Volumes/MY_HDD/connectum_models/front-road-v2-road-only-20261027
-MPLBACKEND=Agg .cache/connectome-venv/bin/python tools/dangjin_sim_server.py \
-  --front-model /Volumes/MY_HDD/connectum_models/front-road-v2-road-only-20261027 \
-  --device cpu --road-device mps --port 8773
 ```
 
-학습에는 원본 데이터셋과 저장소의 `.cache/dangjin-connectome-training`, `.cache/dangjin-policy-training`, 초기 차도 가중치가 필요합니다. `training-samples.json`은 정확한 입력 목록입니다. `--stage actor`로 차도 학습 완료 후 행동 학습만 재개할 수 있습니다. 실행 환경 버전은 `provenance.json`에 기록합니다.
-
-브라우저에서 `http://127.0.0.1:8773/` → **로봇 실험** → **추종 시작**을 선택합니다. 전면 모델이 연결되면 360도 미리보기는 숨겨지고 전면 영상만 서버로 전송됩니다. 전체 누락 시 행동 모델이 정지를 학습하며 다음 관측에서 재출발합니다. 완주 여부, 이탈 및 금지구역 접촉은 지도와 충돌 형상을 사용하는 별도 평가에서 기록합니다. 평가가 로봇 위치를 교정하거나 조향 명령을 만들지는 않습니다.
-
-2026-11-03 이후 전면·360도 브라우저 시뮬레이션의 기본 최대속도는 **10.0 m/s**입니다. `--max-speed`를 생략하면 이 상한을 사용하고, 이전 속도를 재현하려면 해당 시험의 속도를 명시합니다. 시뮬레이션의 전진 배율이며 아래 과거 완주 기록과 Jetson 모델의 실제 출력 상한은 별도로 해석합니다.
-
-전면 모델의 **보행 카메라 흔들림**은 기본 켜짐이며, 걸을 때 3D 카메라의 피치가
-위아래 ±5°로 움직입니다. 주기는 1.7 Hz로 가정했고 실제 IMU로 보정한 값은 아닙니다.
-화면 장식이 아니라 기울어진 카메라로 렌더링한 RGB가 그대로 모델에 들어갑니다.
-정지하면 약 0.15초의 감쇠 시정수로 수평으로 돌아가며, 일시 정지는 시뮬레이션 시간을
-고정합니다. 흔들림을 켜면 관측 간격은 0.1초, 끄면 기존 0.5초입니다. 실제 실행 속도는
-추론 시간에 따라 달라집니다. 카메라 각도는 평가 기록에만 저장하며 모델에는 전달하지
-않습니다. 체크를 바꾸면 동일한 검출 누락 시드로 새 시험을 시작합니다.
-기존 아래의 완주 결과는 흔들림 추가 전 시험이며, 이 기능 추가로 가중치를 재학습하지는
-않았습니다. 좌우 회전·롤·높이 진동과 실제 보행 접촉 물리는 포함하지 않습니다.
+실데이터만으로 학습할 때는 시뮬레이터가 필요하지 않습니다. 기존 혼합 학습을
+재현할 때는 `train_front_connectome.py`에 `--simulation-dir environments/dangjin`을
+추가하고 기존 합성 표본 캐시를 준비합니다. `training-samples.json`은 정확한 입력
+목록입니다. 브라우저 시험 자료는 [로컬 시뮬레이션 안내](local-simulation.md)를 참고합니다.
 
 ## Jetson으로 옮긴 뒤 연결
 
@@ -99,14 +85,13 @@ Jetson 저장소의 `.env`에서 다음 항목을 추가하거나 같은 이름�
 COMPOSE_FILE=docker-compose.yml:docker-compose.front-connectome.yml
 CONNECTUM_FRONT_MODEL_DIR=./models/front-road-v2-road-only-20261027
 CONNECTUM_FRONT_SHA256=43cddf61ba3781b7d241f274d9a6259b1409c0541d650dd3d31aa91b35cf6f88
-SWIN_L_IMAGE_TOPIC=/a2/front_camera/res_360p/image_raw
-SWIN_L_BACKEND=pytorch
-SWIN_L_TRT_AUTO_BUILD=false
+LINE_TRACKING_IMAGE_TOPIC=/a2/front_camera/res_360p/image_raw
+LINE_TRACKING_BACKEND=pytorch
 ```
 
 위 `COMPOSE_FILE`은 기본 파일과 전면 커넥톰 파일을 명시적으로 선택합니다.
 장비별 값은 `.env`에 설정합니다. 지정한 모델 폴더를 추론 컨테이너의
-`/front-model`에 읽기 전용으로 연결합니다. 실제 구독 토픽은 `SWIN_L_IMAGE_TOPIC`이
+`/front-model`에 읽기 전용으로 연결합니다. 실제 구독 토픽은 `LINE_TRACKING_IMAGE_TOPIC`이
 결정합니다. `actual-activate`의 기본 토픽은 `/a2/front_camera/image_raw`이므로
 360p 입력을 사용하려면 위 값을 명시합니다. 토픽의 `360p`는 해상도이며 360도
 파노라마 입력을 의미하지 않습니다.
@@ -141,7 +126,7 @@ Cobiz `LINE_TRACKING` 작업의 `payload.selected_mask`로 모델과 제어기�
 | selected_mask | 인식 | 속도·회전 제어 |
 | --- | --- | --- |
 | `1` (Road) | 전면 커넥톰 | 학습된 행동 출력층 |
-| `2` (Sidewalk) | 기존 `SWIN_L_PROFILE` 모델·체크포인트 | 기존 인도 경로 추종·제어기 |
+| `2` (Sidewalk) | 기존 `LINE_TRACKING_PROFILE` 모델·체크포인트 | 기존 인도 경로 추종·제어기 |
 
 이 구성에서는 혼합 모드 `0`을 거부합니다. 전면 Compose 설정은 기본 모드를 `1`로
 지정하므로 값이 생략되면 Road를 사용합니다. 명시적인 `1` 또는 `2`를 보내면 작업마다 자동으로 전환되므로
@@ -164,7 +149,7 @@ Sidewalk는 시작할 수 있습니다. 전면 모델 응답 오류·해시 불�
 확인해야 합니다. 이 전환 기능의 ROS 테스트는 모의 센서/모델을 사용하며 실기 주행
 성공을 뜻하지 않습니다.
 
-전면 서비스가 `SWIN_L_IMAGE_TOPIC`을 직접 구독하고 내부에서 480×270으로 변환합니다.
+전면 서비스가 `LINE_TRACKING_IMAGE_TOPIC`을 직접 구독하고 내부에서 480×270으로 변환합니다.
 카메라는 A2가 제공하는 ROS 입력이므로 이 최초 ROS 전달은 유지하며,
 `actual-activate`를 거치는 영상의 PNG·HTTP 재전송은 제거했습니다.
 제어기는 `http://127.0.0.1:8092/v1/direct-road`에서 명령·원본 촬영 시각만 받습니다.

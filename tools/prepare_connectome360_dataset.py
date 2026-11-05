@@ -13,7 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from dangjin_patrol import track_camera_path
+from camera_trajectory import track_camera_path
 from fcn360_road import FcnRoadPlanner, ROAD
 from local_path import LocalPathConfig
 from surround_camera import load_profile, profile_sha256, project_panorama, view_atlas

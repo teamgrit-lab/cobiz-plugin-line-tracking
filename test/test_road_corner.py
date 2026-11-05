@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 
 from local_path import RoadPathResult, LocalPathEstimate
 from road_corner import CornerConfig, CornerNavigator, detect_corner, _world, _body
-from swin_l_drive_control import DriveConfig, DriveDecision, decide_drive
+from drive_control import DriveConfig, DriveDecision, decide_drive
 
 
 def scene(sign=1, pose=(0., 0., 0.), *, straight=False, observed=True):
@@ -254,7 +254,7 @@ def test_three_meter_camera_blind_zone_keeps_pivot_ground_until_turn_finishes(si
 
 def test_real_curve_does_not_extrapolate_the_far_heading_into_opposite_lateral_motion():
     from local_path import SmoothedPath
-    from swin_l_drive_control import road_path_errors
+    from drive_control import road_path_errors
     x = np.linspace(3., 8., 160)
     p = SmoothedPath(np.column_stack((x, .3*(x-3.)**2)), .95, 0., 'test',
         road_center_tracking=True, road_geometry={'direction_heading_rad': .5,

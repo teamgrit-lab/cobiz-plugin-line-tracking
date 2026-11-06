@@ -421,6 +421,30 @@ def test_cli_output_dir_alias_matches_documented_command(training):
     assert args.output == Path("/tmp/documented-r50-output")
 
 
+def test_local_initialization_requires_manifest_pin(tmp_path):
+    from train_r50_partial import build_parser, check_arguments
+
+    args = build_parser().parse_args([
+        "--init-checkpoint", str(tmp_path), "--device", "mps"])
+    with pytest.raises(ValueError, match="required together"):
+        check_arguments(args)
+
+
+def test_local_initialization_validates_parent_before_training(tmp_path, monkeypatch):
+    import r50_checkpoint
+    from train_r50_partial import build_parser, check_arguments
+
+    seen = []
+    monkeypatch.setattr(r50_checkpoint, "validate_checkpoint",
+                        lambda *a, **k: seen.append((a, k)))
+    args = build_parser().parse_args([
+        "--dataset", str(tmp_path / "data"), "--output", str(tmp_path / "output"),
+        "--init-checkpoint", str(tmp_path / "parent"),
+        "--init-checkpoint-sha256", "b" * 64])
+    check_arguments(args)
+    assert seen == [((tmp_path / "parent", "b" * 64), {"require_pin": True})]
+
+
 def test_amp_overflow_backs_off_without_updating_weights_then_recovers(training):
     parameter = torch.nn.Parameter(torch.tensor([2.0]))
     optimizer = torch.optim.AdamW([parameter], lr=0.01)

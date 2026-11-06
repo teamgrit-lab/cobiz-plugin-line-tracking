@@ -31,13 +31,19 @@ class Connectome360Segmenter(FrontConnectomeSegmenter):
         keys = ['road_sha256', 'policy_sha256', 'encoder_sha256']
         if detector_pin:
             if (model.get('detector_sha256') != detector_pin
-                    or model.get('detector_override') is not True
                     or model.get('runtime_planner') is not False
                     or model.get('road_mask_shape') != [4, 270, 480]
                     or model.get('actor_input_chw') != [4, 32, 64]
                     or model.get('actor_crop_rows') != [135, 257]):
                 raise ValueError('R50 detector override/input contract mismatch')
-            keys = ['detector_sha256', 'policy_sha256', 'training_road_sha256', 'training_encoder_sha256']
+            if model.get('detector_override') is True:
+                keys = ['detector_sha256', 'policy_sha256', 'training_road_sha256', 'training_encoder_sha256']
+            elif (model.get('detector_override') is False
+                  and model.get('policy_schema') == 'r50_360.drive_readout.vision.v1'
+                  and model.get('policy_trained_detector_sha256') == detector_pin):
+                keys = ['detector_sha256', 'policy_sha256', 'policy_trained_detector_sha256']
+            else:
+                raise ValueError('R50 policy must identify its actual training detector')
         for key in keys:
             value = model.get(key, '')
             if len(value) != 64 or any(c not in '0123456789abcdef' for c in value):

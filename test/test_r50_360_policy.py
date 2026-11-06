@@ -18,10 +18,60 @@ from direct_camera_client import DirectCameraClient
 from direct_camera_service import DirectCameraService
 from r50_360_policy_runtime import R50RoadPerception, R50Policy360Runtime
 from surround_camera import load_profile, profile_sha256
+import r50_policy_package
 from test_direct_camera import Source, running
 
 DETECTOR_PIN = 'e'*64
 PACKAGE_PIN = 'a'*64
+
+
+def retrained_package(root):
+    (root/'policy').mkdir()
+    torch.save(dict(schema=r50_policy_package.POLICY_SCHEMA,
+                    detector_manifest_sha256=DETECTOR_PIN,
+                    action_normalization=dict(vx_mps=10., yaw_radps=.35),
+                    state_dict=DriveReadout().state_dict()), root/'policy/drive-readout.pt')
+    (root/'policy/training.json').write_text('{"supervision":"weak operator intent"}')
+    config = dict(schema=r50_policy_package.SCHEMA,
+                  input_contract=dict(panorama_shape_wh=[2880,1440], camera_views=['front','left','rear','right'],
+                      view_shape_wh=[480,270], forward_heading_deg=90, actor_input_chw=[4,32,64], actor_crop_rows=[135,257]),
+                  camera_profile_sha256=profile_sha256(load_profile()),
+                  detector_manifest_sha256=DETECTOR_PIN, policy_trained_detector_sha256=DETECTOR_PIN,
+                  action_normalization=dict(vx_mps=10., yaw_radps=.35),
+                  policy_sha256=sha256(root/'policy/drive-readout.pt'),
+                  policy_training_sha256=sha256(root/'policy/training.json'))
+    (root/'model.json').write_text(json.dumps(config))
+    return config, sha256(root/'model.json')
+
+
+def test_retrained_actor_pins_actual_detector_and_training_artifacts(tmp_path):
+    config, pin = retrained_package(tmp_path)
+    validated = r50_policy_package.load_config(tmp_path, pin, DETECTOR_PIN)
+    actor = r50_policy_package.load_policy(tmp_path, validated)
+    command, _ = actor.infer(np.zeros((4,270,480), np.uint8))
+    assert 0 <= command.vx <= 10 and abs(command.yaw_rate) <= .35
+    assert actor.details['trained_detector_sha256'] == DETECTOR_PIN
+    assert actor.details['detector_override'] is False
+    with pytest.raises(ValueError, match='training pair'):
+        r50_policy_package.load_config(tmp_path, pin, '9'*64)
+    (tmp_path/'policy/training.json').write_text('{}')
+    with pytest.raises(ValueError, match='artifact SHA'):
+        r50_policy_package.load_config(tmp_path, pin, DETECTOR_PIN)
+
+
+def test_retrained_runtime_and_client_accept_only_matched_new_pair(tmp_path, monkeypatch):
+    import r50_360_policy_runtime as runtime
+    config, pin = retrained_package(tmp_path)
+    fake = NS(details={'manifest_sha256': DETECTOR_PIN}, reset=lambda: None)
+    monkeypatch.setattr(runtime, 'R50RoadPerception', lambda *a: fake)
+    model = R50Policy360Runtime('unused', DETECTOR_PIN, tmp_path, pin, device='cpu')
+    assert model.details['detector_override'] is False
+    assert 'training_encoder_sha256' not in model.details
+    client = Connectome360Segmenter.__new__(Connectome360Segmenter)
+    client.expected_sha256, client.detector_sha256 = pin, DETECTOR_PIN
+    client.validate_model(model.details)
+    with pytest.raises(ValueError, match='actual training detector'):
+        client.validate_model(dict(model.details, policy_trained_detector_sha256='f'*64))
 
 
 def identity():

@@ -542,6 +542,7 @@ def save_training_state(path, optimizer, scaler, sampler, *, step, best_loss, co
         "python_rng": random.getstate(),
         "numpy_rng": np.random.get_state(),
         "torch_rng": torch.get_rng_state(),
+        "mps_rng": torch.mps.get_rng_state() if torch.backends.mps.is_available() else None,
         "cuda_rng": torch.cuda.get_rng_state_all()
         if torch.cuda.is_available()
         else None,
@@ -566,6 +567,8 @@ def restore_training_state(path, optimizer, scaler, sampler, *, contract):
     random.setstate(state["python_rng"])
     np.random.set_state(state["numpy_rng"])
     torch.set_rng_state(state["torch_rng"])
+    if state.get("mps_rng") is not None and torch.backends.mps.is_available():
+        torch.mps.set_rng_state(state["mps_rng"])
     if state["cuda_rng"] is not None and torch.cuda.is_available():
         torch.cuda.set_rng_state_all(state["cuda_rng"])
     return state
@@ -596,7 +599,7 @@ def save_model_artifacts(
         )
         validate_checkpoint(temporary)
         if previous.exists():
-            shutil.rmtree(previous)
+            remove_export_tree(previous)
         if directory.exists():
             os.replace(directory, previous)
         try:
@@ -606,8 +609,17 @@ def save_model_artifacts(
                 os.replace(previous, directory)
             raise
         if previous.exists():
-            shutil.rmtree(previous)
+            remove_export_tree(previous)
         return manifest
     finally:
         if temporary.exists():
-            shutil.rmtree(temporary)
+            remove_export_tree(temporary)
+
+
+def remove_export_tree(path):
+    """Ignore vanished AppleDouble entries on exFAT, but propagate other errors."""
+    def onerror(function, filename, exc_info):
+        error = exc_info[1]
+        if not isinstance(error, FileNotFoundError):
+            raise error
+    shutil.rmtree(path, onerror=onerror)

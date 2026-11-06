@@ -44,6 +44,10 @@ def build_parser():
         type=Path,
         help="Local checkpoints/last directory; relative to output if absent in cwd",
     )
+    parser.add_argument("--init-checkpoint", type=Path,
+                        help="Continue fine-tuning a local, hash-pinned R50 export")
+    parser.add_argument("--init-checkpoint-sha256",
+                        help="SHA-256 of the initialization checkpoint manifest")
     parser.add_argument(
         "--max-steps",
         type=int,
@@ -56,7 +60,7 @@ def build_parser():
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--backbone-lr", type=float, default=1e-6)
     parser.add_argument("--unfreeze-last-stage", action="store_true")
-    parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
+    parser.add_argument("--device", choices=("auto", "cuda", "mps", "cpu"), default="auto")
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-augmentation", action="store_true")
@@ -88,6 +92,13 @@ def build_parser():
 
 
 def check_arguments(args):
+    if bool(args.init_checkpoint) != bool(args.init_checkpoint_sha256):
+        raise ValueError("--init-checkpoint and --init-checkpoint-sha256 are required together")
+    if args.init_checkpoint:
+        from r50_checkpoint import validate_checkpoint
+
+        args.init_checkpoint = args.init_checkpoint.expanduser().resolve()
+        validate_checkpoint(args.init_checkpoint, args.init_checkpoint_sha256, require_pin=True)
     for name in ("eval_every", "batch_size", "gradient_accumulation"):
         if getattr(args, name) <= 0:
             raise ValueError(f"--{name.replace('_', '-')} must be positive")
@@ -194,15 +205,15 @@ def run(args):
     if args.dry_run:
         print(json.dumps(data_report, indent=2, allow_nan=False))
         return data_report
-    device = torch.device(
-        "cuda"
-        if args.device == "auto" and torch.cuda.is_available()
-        else "cpu"
-        if args.device == "auto"
-        else args.device
-    )
+    selected_device = args.device
+    if selected_device == "auto":
+        selected_device = "cuda" if torch.cuda.is_available() else (
+            "mps" if torch.backends.mps.is_available() else "cpu")
+    device = torch.device(selected_device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise ValueError("CUDA requested but unavailable")
+    if device.type == "mps" and not torch.backends.mps.is_available():
+        raise ValueError("MPS requested but unavailable")
     random.seed(args.seed)
     np.random.seed(args.seed % 2**32)
     torch.manual_seed(args.seed)
@@ -243,9 +254,15 @@ def run(args):
         "base_model_id": BASE_MODEL_ID,
         "base_model_revision": BASE_MODEL_REVISION,
     }
+    if args.init_checkpoint_sha256:
+        contract["init_checkpoint_manifest_sha256"] = args.init_checkpoint_sha256
     if args.resume:
         validate_checkpoint(args.resume)
         source = str(args.resume)
+        load_options = {"local_files_only": True, "use_safetensors": True}
+        processor_options = {"local_files_only": True}
+    elif args.init_checkpoint:
+        source = str(args.init_checkpoint)
         load_options = {"local_files_only": True, "use_safetensors": True}
         processor_options = {"local_files_only": True}
     else:
@@ -339,6 +356,7 @@ def run(args):
         else "float32",
         "gradient_clip_norm": 1.0,
         "resume_from": str(args.resume) if args.resume else None,
+        "init_checkpoint": str(args.init_checkpoint) if args.init_checkpoint else None,
     }
     write_json(args.output / "run.json", metadata)
     log(
@@ -405,15 +423,15 @@ def run(args):
             )
             last, previous = checkpoints / "last", checkpoints / ".last-previous"
             if previous.exists():
-                shutil.rmtree(previous)
+                training.remove_export_tree(previous)
             if last.exists():
                 os.replace(last, previous)
             os.replace(temporary, last)
             if previous.exists():
-                shutil.rmtree(previous)
+                training.remove_export_tree(previous)
         finally:
             if temporary.exists():
-                shutil.rmtree(temporary)
+                training.remove_export_tree(temporary)
         log("checkpoint", path=str(checkpoints / "last"))
 
     empty_attempts = 0

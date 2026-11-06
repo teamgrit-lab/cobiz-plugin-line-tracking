@@ -1,5 +1,6 @@
-"""R50 four-view Road detection feeding the unchanged 360 learned actor."""
+"""R50 four-view Road detection feeding a pinned retained or retrained actor."""
 from pathlib import Path
+import json
 import time
 
 import cv2
@@ -11,6 +12,7 @@ from connectome360_runtime import package_config
 from connectome_policy import ConnectomeDrivePolicy
 from segmentation_runtime import SegmentationConfig, SegmentationModel
 from r50_checkpoint import FINETUNED_PROFILE
+import r50_policy_package
 
 
 class R50RoadPerception:
@@ -63,23 +65,31 @@ class R50RoadPerception:
 class R50Policy360Runtime:
     def __init__(self, detector_directory, detector_sha256, policy_directory, package_sha256,
                  *, device='cuda'):
-        config = package_config(policy_directory, package_sha256)
+        is_retrained = json.loads((Path(policy_directory)/'model.json').read_text()).get('schema') == r50_policy_package.SCHEMA
+        config = (r50_policy_package.load_config(policy_directory, package_sha256, detector_sha256)
+                  if is_retrained else package_config(policy_directory, package_sha256))
         self.road = R50RoadPerception(detector_directory, detector_sha256, device)
-        self.policy = ConnectomeDrivePolicy.with_detector_override(
-            Path(policy_directory)/'policy', config, self.road.details, device)
+        self.policy = (r50_policy_package.load_policy(policy_directory, config, device)
+                       if is_retrained else ConnectomeDrivePolicy.with_detector_override(
+                           Path(policy_directory)/'policy', config, self.road.details, device))
         if not all(torch.isfinite(v).all() for v in self.policy.model.state_dict().values()):
             raise ValueError('nonfinite retained policy parameters')
         self.details = dict(backend='r50-360-road-policy', weights_sha256=package_sha256,
             detector_sha256=detector_sha256, policy_sha256=config['policy_sha256'],
-            training_road_sha256=config['road_sha256'], training_encoder_sha256=config['encoder_sha256'],
-            detector_override=True, detector=self.road.details,
+            detector_override=not is_retrained, detector=self.road.details,
             camera_views=['front', 'left', 'rear', 'right'],
             camera_profile_sha256=config['camera_profile_sha256'],
             road_mask_shape=[4, 270, 480], actor_input_chw=[4, 32, 64], actor_crop_rows=[135, 257],
-            trained_max_speed_mps=float(config['simulation_max_speed_mps']), head_device=str(device),
+            trained_max_speed_mps=10. if is_retrained else float(config['simulation_max_speed_mps']), head_device=str(device),
             uses_ground_truth_at_runtime=False, pose_input=False, goal_input=False,
             runtime_planner=False, real_robot_validated=False,
             source_package_simulation_only=config.get('simulation_only', True))
+        if is_retrained:
+            self.details.update(policy_schema=r50_policy_package.POLICY_SCHEMA,
+                                policy_trained_detector_sha256=config['policy_trained_detector_sha256'])
+        else:
+            self.details.update(training_road_sha256=config['road_sha256'],
+                                training_encoder_sha256=config['encoder_sha256'])
 
     def reset(self):
         self.road.reset()

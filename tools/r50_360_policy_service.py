@@ -31,11 +31,13 @@ def main():
     print(json.dumps(dict(ready=True, model=model.details)), flush=True)
     profile = load_profile()
 
-    def predict(panorama):
-        _, command, metrics = model.infer_views(project_panorama(panorama, profile))
+    def predict(panorama, stamp_ns=None):
+        _, command, metrics = model.infer_views(project_panorama(panorama, profile),
+                                               source_time_sec=None if stamp_ns is None else stamp_ns / 1e9)
         return dict(command=asdict(command), metrics=metrics)
 
-    serve(DirectCameraService(model, UsbSource(args.video_device), predict), args.port)
+    serve(DirectCameraService(model, UsbSource(args.video_device), predict,
+                             predict_stamped=predict), args.port)
 
 
 if __name__ == '__main__':

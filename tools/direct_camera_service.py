@@ -91,8 +91,10 @@ class RosSource:
 
 
 class DirectCameraService:
-    def __init__(self, model, source, predict, *, idle_sec=5., now_ns=time.time_ns):
+    def __init__(self, model, source, predict, *, idle_sec=5., now_ns=time.time_ns,
+                 predict_stamped=None):
         self.model, self.source, self.predict = model, source, predict
+        self.predict_stamped = predict_stamped
         self.now_ns, self.idle_sec = now_ns, idle_sec
         self.lock = threading.RLock()
         self.stream = None
@@ -140,11 +142,18 @@ class DirectCameraService:
                         or not 0 <= self.now_ns() - stamp <= age * 1e9):
                     return dict(reply, reason='camera_stale_or_repeated')
                 self.last_stamp = stamp
-                output = self.predict(frame)
+                output = (self.predict_stamped(frame, stamp) if self.predict_stamped is not None
+                          else self.predict(frame))
                 if not 0 <= self.now_ns() - stamp <= age * 1e9:
+                    if self.model.details.get('source_timed_policy'):
+                        self.model.reset()  # Discard history from a rejected stale result.
                     return dict(reply, reason='inference_source_stale')
                 return dict(reply, available=True, capture_stamp_ns=stamp,
                             total_seconds=time.perf_counter()-start, **output)
+            except Exception:
+                if self.model.details.get('source_timed_policy'):
+                    self.model.reset()
+                raise
             finally:
                 self.used_at = time.monotonic()
 

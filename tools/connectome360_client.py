@@ -39,9 +39,25 @@ class Connectome360Segmenter(FrontConnectomeSegmenter):
             if model.get('detector_override') is True:
                 keys = ['detector_sha256', 'policy_sha256', 'training_road_sha256', 'training_encoder_sha256']
             elif (model.get('detector_override') is False
-                  and model.get('policy_schema') == 'r50_360.drive_readout.vision.v1'
+                  and model.get('policy_schema') in ('r50_360.drive_readout.vision.v1',
+                                                     'r50_360.drive_readout.front_stop.v2')
                   and model.get('policy_trained_detector_sha256') == detector_pin):
                 keys = ['detector_sha256', 'policy_sha256', 'policy_trained_detector_sha256']
+                if model['policy_schema'] == 'r50_360.drive_readout.front_stop.v2':
+                    # Constants only; importing torch/model implementations in
+                    # the lightweight ROS client would defeat process isolation.
+                    architecture = model.get('stop_architecture')
+                    observation = dict(reference_grid_hw=[8, 16], unknown_columns=[7, 9],
+                        unknown_rows=[5, 8], direction='front', outside_box='observed', road_gap_filling=False)
+                    timing = dict(clock='source_capture_seconds', context_frames=5,
+                        nominal_dt_sec=.4, max_gap_sec=.65, reset_on_missing_timestamp=True, fixed_inference_timer=False)
+                    if (architecture not in ('reset_shared', 'front', 'temporal_front')
+                            or model.get('stop_input_chw') != [4 if architecture == 'reset_shared' else 2, 32, 64]
+                            or model.get('stop_uses_side_views') is not (architecture == 'reset_shared')
+                            or model.get('observation_spec') != observation
+                            or model.get('time_spec') != timing
+                            or model.get('source_timed_policy') is not (architecture == 'temporal_front')):
+                        raise ValueError('R50 front STOP observation/time contract mismatch')
             else:
                 raise ValueError('R50 policy must identify its actual training detector')
         for key in keys:

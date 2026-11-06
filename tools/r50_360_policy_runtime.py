@@ -65,7 +65,7 @@ class R50RoadPerception:
 class R50Policy360Runtime:
     def __init__(self, detector_directory, detector_sha256, policy_directory, package_sha256,
                  *, device='cuda'):
-        is_retrained = json.loads((Path(policy_directory)/'model.json').read_text()).get('schema') == r50_policy_package.SCHEMA
+        is_retrained = json.loads((Path(policy_directory)/'model.json').read_text()).get('schema') in r50_policy_package.PAIR_SCHEMAS
         config = (r50_policy_package.load_config(policy_directory, package_sha256, detector_sha256)
                   if is_retrained else package_config(policy_directory, package_sha256))
         self.road = R50RoadPerception(detector_directory, detector_sha256, device)
@@ -85,16 +85,25 @@ class R50Policy360Runtime:
             runtime_planner=False, real_robot_validated=False,
             source_package_simulation_only=config.get('simulation_only', True))
         if is_retrained:
-            self.details.update(policy_schema=r50_policy_package.POLICY_SCHEMA,
+            self.details.update(policy_schema=self.policy.details['schema'],
                                 policy_trained_detector_sha256=config['policy_trained_detector_sha256'])
+            if config['schema'] == r50_policy_package.FRONT_PAIR_SCHEMA:
+                self.details.update(stop_architecture=config['architecture'],
+                    stop_input_chw=config['stop_input_chw'], stop_uses_side_views=config['stop_uses_side_views'],
+                    observation_spec=config['observation_spec'], time_spec=config['time_spec'],
+                    source_timed_policy=config['architecture'] == 'temporal_front', steering_retrained=False)
         else:
             self.details.update(training_road_sha256=config['road_sha256'],
                                 training_encoder_sha256=config['encoder_sha256'])
 
     def reset(self):
         self.road.reset()
+        if hasattr(self.policy, 'reset'):
+            self.policy.reset()
 
-    def infer_views(self, views):
+    def infer_views(self, views, *, source_time_sec=None):
         masks, perception = self.road.predict_views(views)
-        command, policy = self.policy.infer(masks)
+        command, policy = (self.policy.infer(masks, source_time_sec=source_time_sec)
+                           if self.details.get('policy_schema') == r50_policy_package.FRONT_POLICY_SCHEMA
+                           else self.policy.infer(masks))
         return masks[0], command, dict(perception=perception, policy=policy)

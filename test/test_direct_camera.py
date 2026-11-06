@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'tools'))
 from direct_camera_client import DirectCameraClient
-from direct_camera_service import DirectCameraService, SCHEMA, make_server
+from direct_camera_service import DirectCameraService, RosSource, SCHEMA, make_server
 from drive_control import DriveDecision
 from test_connectome360_runtime import PIN, details
 
@@ -27,6 +27,38 @@ class Source:
 
     def close(self):
         self.closes += 1
+
+
+def test_front_capture_waits_for_new_input_and_wakes_on_arrival():
+    source = RosSource('/front')
+    source.node = object()  # Exercise capture without starting ROS.
+    source.bridge = NS(imgmsg_to_cv2=lambda message, **kw: message.pixels)
+    waiting, completed = threading.Event(), threading.Event()
+    captured = []
+    wait_for = source.lock.wait_for
+    def wait_for_input(predicate, timeout):
+        waiting.set()
+        return wait_for(predicate, timeout=timeout)
+    source.lock.wait_for = wait_for_input
+    def read():
+        captured.append(source.read())
+        completed.set()
+    thread = threading.Thread(target=read)
+    thread.start()
+    try:
+        assert waiting.wait(1.)
+        assert not completed.is_set()
+        with source.lock:
+            stamp = time.time_ns()
+            sec, ns = divmod(stamp, 1_000_000_000)
+            source.message = NS(header=NS(stamp=NS(sec=sec, nanosec=ns)), pixels=object())
+            pixels = source.message.pixels
+            source.lock.notify()
+        assert completed.wait(1.)
+        assert captured == [(pixels, stamp)]
+        assert source.message is None
+    finally:
+        thread.join(1.)
 
 
 def request(now, **changes):
@@ -197,6 +229,7 @@ def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend)
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_STOP_ON_'+check.upper(), 'false')
     side_calls, road_calls = [], []
+    next_request_entered, release_pending = threading.Event(), threading.Event()
     def sidewalk(frame, **kwargs):
         side_calls.append(kwargs['path_mask_class'])
         return NS(selected_mask=np.full((360,640),2,np.uint8), inference_seconds=.01)
@@ -204,6 +237,13 @@ def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend)
         device=NS(type='cuda'), reset=lambda: None, segment=sidewalk))
     def infer(stream, not_before_ns, after_ns, max_age, now_ns):
         road_calls.append((stream, not_before_ns, after_ns))
+        if len(road_calls) == 1:
+            return None  # Camera opening is pending; completion must request again.
+        if len(road_calls) == 3:
+            next_request_entered.set()
+            assert release_pending.wait(3.)
+            return None
+        assert len(road_calls) == 2
         return NS(capture_stamp_ns=now_ns(), inference_seconds=.01,
             front_command=dict(vx=.8,vy=0.,yaw_rate=.08,reason='tracking'), front_metrics={},
             masks=lane().repeat(2,axis=1).repeat(2,axis=2))
@@ -219,6 +259,10 @@ def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend)
         start(ros, 1, 'road')
         ros.now += 2.1
         wait_for_count(ros, 1)
+        assert next_request_entered.wait(3.)  # No timer tick requests the next frame.
+        assert len(road_calls) == 3
+        assert road_calls[0][2] == road_calls[1][2] == 0
+        assert road_calls[2][2] >= road_calls[1][1]
         assert not side_calls
         assert json.loads(ros.published[SPORT][-1].parameter)['x'] > 0
         assert ros.metrics()['camera_transport'] == 'direct'
@@ -235,11 +279,15 @@ def test_direct_road_then_original_sidewalk_and_stale_stop(monkeypatch, backend)
         start(ros, 2, 'sidewalk')
         ros.now += 2.1
         image(ros)
+        release_pending.set()
         wait_for_count(ros, 2)
-        assert side_calls == [2] and len(road_calls) == 1
+        assert side_calls == [2] and len(road_calls) == 3
         assert ros.metrics()['inference_backend'] == 'r50'
         assert ros.metrics()['camera_transport'] == 'ros'
-    ros.run(scenario, '--road-direct-input', '--path-mask-class', '1', '--path-planner', 'local', *args)
+    try:
+        ros.run(scenario, '--road-direct-input', '--path-mask-class', '1', '--path-planner', 'local', *args)
+    finally:
+        release_pending.set()
 
 
 @pytest.mark.parametrize('failure', [False, True])

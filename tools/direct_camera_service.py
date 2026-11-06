@@ -38,7 +38,7 @@ class RosSource:
         self.topic = topic
         self.node = self.subscription = self.thread = None
         self.message = None
-        self.lock = threading.Lock()
+        self.lock = threading.Condition()
 
     def _open(self):
         import rclpy
@@ -54,6 +54,7 @@ class RosSource:
         def receive(message):
             with self.lock:
                 self.message = message
+                self.lock.notify()
         qos = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.subscription = self.node.create_subscription(Image, self.topic, receive, qos)
         self.running = True
@@ -67,6 +68,9 @@ class RosSource:
         if self.node is None:
             self._open()
         with self.lock:
+            # Wait for a frame instead of spinning HTTP requests when inference
+            # completes faster than the camera. New input wakes us immediately.
+            self.lock.wait_for(lambda: self.message is not None, timeout=.2)
             message, self.message = self.message, None
         if message is None:
             return None

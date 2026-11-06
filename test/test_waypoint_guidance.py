@@ -236,7 +236,7 @@ def test_real_worker_follows_waypoint_branch_without_camera_pose_time_matching(m
     from ros_camera_fixture import complete_inference
     monkeypatch.setattr(debug, "ENV", {})
     ros = RosHarness(monkeypatch)
-    args = debug.parse_args(["navigation-worker", "--inference-hz", "1000"])
+    args = debug.parse_args(["navigation-worker"])
     mask = fork_mask(surface, config=path_config_for_mode(debug._local_path_config_from_args(args), surface))
     monkeypatch.setattr(debug, "SegmentationModel", lambda _cfg: SimpleNamespace(
         device=SimpleNamespace(type="cuda"), reset=lambda: None,
@@ -276,7 +276,7 @@ def test_waypoint_path_gaps_follow_env_stop_setting_in_readiness_and_final_outpu
     ros = RosHarness(monkeypatch)
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_PATH_UNAVAILABLE", str(stop_on_missing).lower())
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "false")
-    args = debug.parse_args(["navigation-worker", "--inference-hz", "1000", "--path-planner", "local"])
+    args = debug.parse_args(["navigation-worker", "--path-planner", "local"])
     mask = fork_mask(config=debug._local_path_config_from_args(args))
     monkeypatch.setattr(debug, "SegmentationModel", lambda _cfg: SimpleNamespace(
         device=SimpleNamespace(type="cuda"), reset=lambda: None,

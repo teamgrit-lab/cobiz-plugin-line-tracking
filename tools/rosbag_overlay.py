@@ -60,10 +60,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--output-fps", type=float, default=20.0, help="MP4 playback FPS"
     )
     parser.add_argument(
-        "--inference-hz",
+        "--sample-hz", "--inference-hz", dest="sample_hz",
         type=float,
         default=4.0,
-        help="local-path only; sidewalk always infers every frame",
+        help="offline local-path sampling only; sidewalk always infers every frame",
     )
     parser.add_argument(
         "--open",
@@ -76,8 +76,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(f"input must be an existing .mcap file: {args.input}")
     if args.start_offset < 0 or args.max_frames < 0:
         parser.error("start-offset and max-frames must be non-negative")
-    if args.output_fps <= 0 or args.inference_hz <= 0:
-        parser.error("output-fps and inference-hz must be positive")
+    if args.output_fps <= 0 or args.sample_hz <= 0:
+        parser.error("output-fps and sample-hz must be positive")
     return args
 
 
@@ -128,8 +128,8 @@ def build_debug_arguments(
         str(args.max_frames),
         "--output-fps",
         str(args.output_fps),
-        "--inference-hz",
-        str(args.inference_hz),
+        "--sample-hz",
+        str(args.sample_hz),
     ]
     return arguments
 

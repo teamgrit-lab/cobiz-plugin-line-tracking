@@ -25,32 +25,23 @@ def packet(sequence: int) -> FramePacket:
     )
 
 
-def test_rate_limit_wait_keeps_replacing_with_the_freshest_frame():
+def test_busy_worker_keeps_only_the_freshest_pending_frame():
     queue = LatestFrameQueue()
     queue.put(packet(1))
-    ready_at = time.monotonic() + 0.05
-
-    def replace_pending_frame() -> None:
-        time.sleep(0.01)
-        queue.put(packet(2))
-
-    producer = threading.Thread(target=replace_pending_frame)
-    producer.start()
-    selected = queue.get_latest_at(ready_at)
-    producer.join()
+    queue.put(packet(2))
+    selected = queue.get_latest()
 
     assert selected is not None
     assert selected.sequence == 2
     assert queue.overwritten == 1
 
 
-def test_close_interrupts_rate_limit_wait_without_processing_pending_frame():
+def test_close_interrupts_wait_for_camera_input():
     queue = LatestFrameQueue()
-    queue.put(packet(1))
     selected = []
 
     consumer = threading.Thread(
-        target=lambda: selected.append(queue.get_latest_at(time.monotonic() + 5.0))
+        target=lambda: selected.append(queue.get_latest())
     )
     consumer.start()
     time.sleep(0.01)
@@ -61,12 +52,12 @@ def test_close_interrupts_rate_limit_wait_without_processing_pending_frame():
     assert selected == [None]
 
 
-def test_disabled_queue_waits_for_a_fresh_frame_and_resumes_without_old_deadline():
+def test_disabled_queue_waits_for_a_fresh_frame_and_resumes_immediately():
     queue = LatestFrameQueue(enabled=False)
     assert not queue.put(packet(1))
     selected = []
     consumer = threading.Thread(
-        target=lambda: selected.append(queue.get_latest_at(time.monotonic() + 60.0))
+        target=lambda: selected.append(queue.get_latest())
     )
     consumer.start()
     try:
@@ -85,14 +76,14 @@ def test_disabled_queue_waits_for_a_fresh_frame_and_resumes_without_old_deadline
 def test_pause_discards_pending_frames_and_invalidates_previous_task_results():
     queue = LatestFrameQueue()
     queue.put(packet(1))
-    inflight = queue.get_latest_at(time.monotonic())
+    inflight = queue.get_latest()
     queue.put(packet(2))
     queue.set_enabled(False)
     assert not queue.is_current(inflight)
     assert not queue.put(packet(3))
     queue.set_enabled(True)
     queue.put(packet(4))
-    fresh = queue.get_latest_at(time.monotonic())
+    fresh = queue.get_latest()
     assert fresh.sequence == 4
     assert fresh.generation != inflight.generation
     assert not queue.is_current(inflight)
@@ -102,7 +93,7 @@ def test_close_wakes_worker_while_task_inference_is_disabled():
     queue = LatestFrameQueue(enabled=False)
     selected = []
     consumer = threading.Thread(
-        target=lambda: selected.append(queue.get_latest_at(time.monotonic()))
+        target=lambda: selected.append(queue.get_latest())
     )
     consumer.start()
     queue.close()

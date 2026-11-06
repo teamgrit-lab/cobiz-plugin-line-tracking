@@ -502,7 +502,6 @@ class LatestFrameQueue:
         self._closed = False
         self._enabled = enabled
         self._generation = 0
-        self._resume_immediately = False
         self.overwritten = 0
 
     @property
@@ -516,7 +515,6 @@ class LatestFrameQueue:
             self._generation += 1
             self._enabled = enabled
             self._item = None
-            self._resume_immediately = enabled
             self._condition.notify_all()
 
     def is_current(self, packet: FramePacket) -> bool:
@@ -536,26 +534,15 @@ class LatestFrameQueue:
             self._condition.notify()
             return True
 
-    def get_latest_at(self, ready_at_sec: float) -> FramePacket | None:
-        """Return the freshest frame once the rate-limit deadline is reached.
-
-        Waiting happens while the frame remains in the depth-one queue, so a
-        newer camera callback can replace it. Closing the queue interrupts the
-        wait immediately.
-        """
-
+    def get_latest(self) -> FramePacket | None:
+        """Wait for input, then return the latest frame without a rate delay."""
         with self._condition:
             while not self._closed:
                 if not self._enabled or self._item is None:
                     self._condition.wait()
                     continue
-                remaining = ready_at_sec - time.monotonic()
-                if remaining > 0.0 and not self._resume_immediately:
-                    self._condition.wait(timeout=remaining)
-                    continue
                 item = self._item
                 self._item = None
-                self._resume_immediately = False
                 return item
             return None
 
@@ -740,7 +727,7 @@ def run_mcap(args):
                     smoother.update(estimate, now)
                     updates += 1
                     times.append(result.total_seconds)
-                    next_inference = now + 1 / args.inference_hz
+                    next_inference = now + 1 / args.sample_hz
                 current = smoother.current(now)
                 overlay = render_local_path_overlay(frame, previous_mask, estimate, current, local_config,
                     frame_index=count, inference_count=updates,
@@ -761,7 +748,7 @@ def run_mcap(args):
         report = {"mode": "mcap", "source": str(path), "overlay_mode": args.overlay_mode,
             "start_offset_sec": args.start_offset, "output_fps": args.output_fps,
             "inference_policy": "every_frame" if args.unrestricted_path_mode or not with_path else "bag_time_rate",
-            "requested_inference_hz": args.inference_hz if with_path and not args.unrestricted_path_mode else None,
+            "requested_sample_hz": args.sample_hz if with_path and not args.unrestricted_path_mode else None,
             "image_topic": args.image_topic, "frames_written": count, "segmentation_updates": updates,
             "output": str(args.output.expanduser().resolve()), "model": segmenter.metadata(),
             "path_mask_class": args.path_mask_class if with_path else None,
@@ -1151,17 +1138,14 @@ def run_ros2(args: argparse.Namespace) -> int:
                     )
             self.control_hz = args.output_hz
             self.timer = self.create_timer(1.0 / self.control_hz, self.publish_state)
-            if direct_input:
-                self.direct_timer = self.create_timer(1.0 / args.inference_hz, self.request_direct_road)
             self.started = time.monotonic()
             self.get_logger().info(
                 "Surface local path debug started | image=%s profile=%s "
-                "path_surface=%s inference_hz=%.2f output_hz=%.2f near=%.1fm far=%.1fm"
+                "path_surface=%s inference=latest_frame output_hz=%.2f near=%.1fm far=%.1fm"
                 % (
                     args.image_topic,
                     args.profile,
                     PATH_MASK_CLASSES[args.path_mask_class],
-                    args.inference_hz,
                     self.control_hz,
                     local_config.near_distance_m,
                     local_config.far_distance_m,
@@ -1171,8 +1155,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.get_logger().warning(
                     "LINE_TRACKING_UNRESTRICTED_PATH_MODE is enabled: path valid-ratio "
                     "and temporal smoothing are bypassed; explicit drive stop checks "
-                    "still apply and "
-                    "inference rate limiting remains enabled"
+                    "still apply"
                 )
             if navigation_mode:
                 self.get_logger().info(
@@ -1515,7 +1498,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.request_direct_road()
 
         def request_direct_road(self):
-            # This timer schedules a small request token, never a camera image.
+            # Task activation or worker completion schedules one request token.
             # The same generation queue rejects late results after cancellation.
             with state_lock:
                 if not self.direct_session or not latest.enabled:
@@ -2144,7 +2127,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "path_age_sec": float(path.age_sec) if path else None,
                 "path_duration_sec": local_config.path_duration_sec,
                 "unrestricted_path_mode": False if fcn and mask_class == 1 else args.unrestricted_path_mode,
-                "inference_target_hz": args.inference_hz,
+                "inference_schedule": "latest_frame",
                 "inference_enabled": latest.enabled,
                 "near_distance_m": local_config.near_distance_m,
                 "far_distance_m": local_config.far_distance_m,
@@ -2267,14 +2250,20 @@ def run_ros2(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, stop_on_sigterm)
 
     def worker() -> None:
-        # Path acceptance settings must never disable the live GPU budget.
-        inference_period = 1.0 / args.inference_hz
-        next_allowed = time.monotonic()
         previous_generation: int | None = None
+        previous_packet: FramePacket | None = None
         direct_client = None
         try:
             while rclpy.ok():
-                packet = latest.get_latest_at(next_allowed)
+                # Direct Road owns capture at the inference service. Start its
+                # next request only after this worker has consumed the result
+                # (including camera_pending), never from a periodic timer.
+                if previous_packet is not None and previous_packet.direct_request is not None:
+                    with state_lock:
+                        if latest.is_current(previous_packet):
+                            node.request_direct_road()
+                packet = latest.get_latest()
+                previous_packet = packet
                 if packet is None:
                     break
                 with state_lock:
@@ -2287,9 +2276,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                         fcn.reset()
                     previous_generation = packet.generation
                 inference_started_at = time.monotonic()
-                # Limit start-to-start frequency, including conversion failures.
-                # Slow inference must not incur an extra fixed-period sleep.
-                next_allowed = inference_started_at + inference_period
                 if packet.direct_request is not None:
                     try:
                         from direct_camera_client import DirectCameraClient
@@ -2660,15 +2646,12 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=_env_float("LINE_TRACKING_PATH_DURATION_SEC", 1.50),
     )
     parser.add_argument(
-        "--inference-hz", type=float, default=_env_float("LINE_TRACKING_INFERENCE_HZ", 4.0)
-    )
-    parser.add_argument(
         "--unrestricted-path-mode",
         action=argparse.BooleanOptionalAction,
         default=_env_bool("LINE_TRACKING_UNRESTRICTED_PATH_MODE", True),
         help=(
             "bypass path valid-ratio and temporal smoothing "
-            "restrictions; live inference still obeys --inference-hz"
+            "restrictions"
         ),
     )
     parser.add_argument(
@@ -2722,6 +2705,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     mcap.add_argument("--report", type=Path, default=None)
     mcap.add_argument("--start-offset", type=float, default=0.0)
     mcap.add_argument("--max-frames", type=int, default=200)
+    mcap.add_argument(
+        "--sample-hz", type=float, default=4.0,
+        help="MCAP local-path replay sampling only; ignored in unrestricted mode",
+    )
     mcap.add_argument(
         "--overlay-mode",
         choices=("sidewalk", "local-path"),
@@ -2943,11 +2930,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "LINE_TRACKING_PATH_MASK_CLASS must be 0 (road or sidewalk), "
             "1 (road), or 2 (sidewalk)"
         )
-    if not all(
-        math.isfinite(rate) and rate > 0.0
-        for rate in (args.inference_hz, args.output_fps)
-    ):
-        parser.error("inference/output FPS must be finite and positive")
+    if not math.isfinite(args.output_fps) or args.output_fps <= 0.0:
+        parser.error("output FPS must be finite and positive")
+    if args.mode == "mcap" and (not math.isfinite(args.sample_hz) or args.sample_hz <= 0.0):
+        parser.error("sample-hz must be finite and positive")
     if args.mode in ("ros2", "task-drive", "navigation-worker") and args.output_hz <= 0.0:
         parser.error("output-hz must be positive")
     if args.mode == "mcap" and (args.start_offset < 0.0 or args.max_frames < 0):

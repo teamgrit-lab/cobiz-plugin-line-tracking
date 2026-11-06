@@ -673,7 +673,8 @@ frame to 640x360 before model-specific padding, and the output score map remains
 640x360 for BEV and Path calculation. Latest-frame selection, RGB handling,
 BEV caching, task-selected masks 0/1/2, and Sport control use the shared pipeline.
 CUDA, checkpoint pinning, camera freshness, task lifecycle, and control checks
-still apply. The live inference target remains `LINE_TRACKING_INFERENCE_HZ` (default 4).
+still apply. Live inference processes the latest frame as soon as the previous
+inference finishes, without a configured update interval.
 
 R50 retains its existing label aggregation and cleanup: Bike Lane and Manhole
 join the sidewalk group, while Parking and Service Lane are excluded from the
@@ -696,13 +697,18 @@ uses the configured R50 model, checkpoint pin and geometry for offline inspectio
 
 ## Jetson inference stability
 
-While enabled, live inference obeys `LINE_TRACKING_INFERENCE_HZ`, including when
-`LINE_TRACKING_UNRESTRICTED_PATH_MODE=true`. The latest-frame queue holds one frame;
-it replaces pending frames while waiting for the next inference start. A late
-inference does not trigger a burst of catch-up jobs. Rate limiting reduces
-average load, but cannot guarantee latency or cap instantaneous GPU power.
-The first frame of a newly accepted task does not wait for the previous task's
-rate-limit deadline. Task-driven mode sleeps between tasks; debug mode does not.
+While enabled, live inference processes the latest available frame without a
+configured rate limit. The depth-one queue replaces pending camera frames while
+the worker is busy; old frames never accumulate. Direct-camera Road requests
+start on task activation, then repeat after each result has been processed.
+If no new camera frame is available, capture waits for input with a bounded
+timeout; it does not impose a delay on successful inference. Actual decision
+updates depend on camera and processing latency, and continuous inference may
+increase CPU/GPU load. Task-driven mode sleeps between tasks; debug mode does not.
+`LINE_TRACKING_INFERENCE_HZ` is no longer read or forwarded by Compose; remove it
+from existing `.env` files. Command publication still uses
+`LINE_TRACKING_OUTPUT_HZ` (default 10 Hz). Offline MCAP local-path replay retains
+its separate `--sample-hz` option.
 
 The camera callback validates timestamps, encoding, dimensions, row stride and
 buffer length, then queues the original ROS image message. Only the selected
@@ -730,8 +736,8 @@ Compose defaults the OpenMP, MKL, and OpenBLAS thread pools to two threads.
 Run one tracking model process at a time while measuring Jetson inference speed.
 Existing `.env` values override the common R50 defaults.
 
-For an **inference-only** 1 Hz acceptance run, use debug mode with
-`LINE_TRACKING_INFERENCE_HZ=1.25` to leave scheduling margin. Warm up first, then
+For an **inference-only** acceptance run targeting at least 1 Hz completion,
+use debug mode. Warm up first, then
 measure for at least five minutes under the normal camera and service load:
 
 - `/line_tracking/metrics`: `performance.completion_fps >= 1.0`,

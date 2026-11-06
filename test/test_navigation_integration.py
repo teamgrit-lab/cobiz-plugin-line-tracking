@@ -141,7 +141,7 @@ def test_sidewalk_stop_nav2_and_road_reuse_one_real_worker(monkeypatch, policy):
         assert not ros.published["/task_state"]
 
     ros.rclpy.spin = scenario
-    assert debug.run_ros2(debug.parse_args(["navigation-worker", "--inference-hz", "1000"])) == 0
+    assert debug.run_ros2(debug.parse_args(["navigation-worker"])) == 0
     assert not ros.errors
 
 
@@ -280,7 +280,7 @@ def test_legacy_sidewalk_nav2_road_and_legacy_share_one_model(monkeypatch, polic
         assert len(loads) == 1
 
     ros.rclpy.spin = scenario
-    assert debug.run_ros2(debug.parse_args(["navigation-worker", "--inference-hz", "1000"])) == 0
+    assert debug.run_ros2(debug.parse_args(["navigation-worker"])) == 0
     assert not ros.errors
 
 
@@ -393,5 +393,5 @@ def test_waypoint_capture_stops_real_worker_before_direct_approach_and_next_road
         assert not any(channel == "nav2_goal" for channel, _ in events)
         assert "/api/sport/request" not in ros.published and not ros.published["/task_state"]
     ros.rclpy.spin = scenario
-    assert debug.run_ros2(debug.parse_args(["navigation-worker", "--inference-hz", "1000"])) == 0
+    assert debug.run_ros2(debug.parse_args(["navigation-worker"])) == 0
     assert not ros.errors

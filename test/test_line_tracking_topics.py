@@ -32,10 +32,14 @@ def test_performance_summary_reports_latency_percentiles_and_completion_rate():
     assert summary["processing_p99_ms"] == pytest.approx(348.5)
 
 
-@pytest.mark.parametrize("value", ["nan", "inf", "0", "-1"])
-def test_live_inference_rejects_invalid_rate(value):
+@pytest.mark.parametrize("mode", ["ros2", "task-drive", "navigation-worker"])
+def test_live_inference_has_no_rate_setting(monkeypatch, mode):
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_INFERENCE_HZ", "invalid")
+    args = debug.parse_args([mode])
+    assert not hasattr(args, "inference_hz")
+    assert not hasattr(args, "sample_hz")
     with pytest.raises(SystemExit):
-        debug.parse_args(["ros2", "--inference-hz", value])
+        debug.parse_args([mode, "--inference-hz", "2.5"])
 
 
 def test_task_drive_defaults(monkeypatch):
@@ -109,7 +113,7 @@ def test_all_automatic_stop_defaults_are_false(monkeypatch):
 
 
 @pytest.mark.parametrize("unrestricted", [True, False])
-def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
+def test_debug_mode_processes_latest_input_and_only_publishes_path_metrics(
     monkeypatch,
     unrestricted,
 ):
@@ -143,7 +147,7 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
 
     rclpy = ModuleType("rclpy")
     rclpy.init = lambda **_kwargs: None
-    deadlines = []
+    queue_reads = []
     worker_finished = threading.Event()
 
     class Queue:
@@ -155,9 +159,9 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
         def is_current(self, _packet):
             return self.enabled
 
-        def get_latest_at(self, deadline):
-            deadlines.append(deadline)
-            if len(deadlines) == 1:
+        def get_latest(self):
+            queue_reads.append(True)
+            if len(queue_reads) == 1:
                 return debug.FramePacket(
                     SimpleNamespace(
                         encoding="rgb8", height=12, width=12, step=36,
@@ -220,8 +224,6 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
     args = debug.parse_args(
         [
             "ros2",
-            "--inference-hz",
-            "1.25",
             "--unrestricted-path-mode"
             if unrestricted
             else "--no-unrestricted-path-mode",
@@ -230,8 +232,7 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
     assert not hasattr(args, "overlay_topic")
     assert not hasattr(args, "clearance_topic")
     assert debug.run_ros2(args) == 0
-    assert len(deadlines) == 2
-    assert deadlines[1] - deadlines[0] >= 0.8
+    assert len(queue_reads) == 2
     assert published_topics == [
         args.local_path_topic,
         args.metrics_topic,
@@ -243,6 +244,8 @@ def test_debug_mode_limits_inference_and_only_publishes_path_metrics(
     assert not hasattr(task_args, "clearance_topic")
     assert subscribed_topics == [args.image_topic]
     metrics = json.loads(published_messages[args.metrics_topic][-1].data)
+    assert metrics["inference_schedule"] == "latest_frame"
+    assert "inference_target_hz" not in metrics
     assert metrics["path_tracked"] is False
     assert "lidar" not in metrics
     assert "lidar_topic" not in metrics

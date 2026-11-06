@@ -204,13 +204,13 @@ def test_live_services_forward_unrestricted_path_mode_switch():
     assert "LINE_TRACKING_UNRESTRICTED_PATH_MODE=true" in (ROOT / ".env.example").read_text()
 
 
-def test_live_services_forward_rate_and_cpu_thread_budgets():
+def test_live_services_have_no_inference_rate_and_forward_cpu_thread_budgets():
     import yaml
 
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     for name in ("debugging-line-tracking", "actual-activate"):
         environment = services[name]["environment"]
-        assert "LINE_TRACKING_INFERENCE_HZ" in environment
+        assert "LINE_TRACKING_INFERENCE_HZ" not in environment
         for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
             assert environment[variable] == "${" + variable + ":-2}"
 

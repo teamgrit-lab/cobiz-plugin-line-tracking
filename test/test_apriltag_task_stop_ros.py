@@ -213,7 +213,7 @@ class RosHarness:
         self.rclpy.spin = spin
         assert (
             debug.run_ros2(
-                debug.parse_args(["task-drive", "--inference-hz", "1000", *args])
+                debug.parse_args(["task-drive", *args])
             )
             == 0
         )
@@ -468,9 +468,9 @@ def test_live_callback_queues_messages_and_only_latest_frame_is_decoded(ros, mon
     decode = debug.camera_image_rgb
 
     class GatedQueue(original_queue):
-        def get_latest_at(self, ready_at_sec):
+        def get_latest(self):
             assert release_worker.wait(timeout=3.0)
-            return super().get_latest_at(ready_at_sec)
+            return super().get_latest()
 
         def close(self):
             release_worker.set()

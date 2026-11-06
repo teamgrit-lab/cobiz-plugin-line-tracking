@@ -123,15 +123,15 @@ hazard는 새로 계산하며 Mode 0과 같은 표면의 후보 평가를 공유
 ```dotenv
 LINE_TRACKING_CUDA_GRAPH=true
 CONNECTOME_CUDA_GRAPH=true
-LINE_TRACKING_INFERENCE_HZ=2.5
 LINE_TRACKING_TELEMETRY_HZ=5.0
 LINE_TRACKING_INFERENCE_PROCESS=true
 ```
 
-이 장비의 목표는 매초 최소 1회 새 추론을 완료하는 것이다. 2.5Hz는 마감 여유를
-두기 위한 요청 주기이며 실제 달성률은 완료 간격으로 확인한다. 단순히 요청
-주기를 1Hz로 두면 처리 지연이 더해져 기존 1초 촬영 나이 제한 사이에 정지
-구간이 생길 수 있다. 영상/센서 만료 한계는 늘리지 않는다.
+이 장비의 목표는 매초 최소 1회 새 추론을 완료하는 것이다. 추론 갱신 주기
+설정은 제거했고, 이전 추론 결과 처리가 끝나면 최신 영상으로 바로 다음 추론을
+수행한다. 직접 카메라 입력은 작업 시작 시 첫 요청을 보내고 이후 완료에 맞춰
+이어 요청한다. 새 영상이 없을 때만 입력을 기다린다. 실제 달성률은 완료
+간격으로 확인하며, 영상/센서 만료 한계는 늘리지 않는다.
 
 `LINE_TRACKING_TELEMETRY_HZ`는 Path·metrics에만 적용한다(0이면 기존 매 timer 발행).
 상태 직렬화·Pose 생성·GPU 메모리 조회는 5Hz로 줄이고, 이동 명령과 모든 정지

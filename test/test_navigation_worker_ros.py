@@ -28,7 +28,7 @@ def velocity(ros):
 def run(ros, scenario):
     ros.rclpy.spin = scenario
     assert debug.run_ros2(debug.parse_args([
-        "navigation-worker", "--inference-hz", "1000"])) == 0
+        "navigation-worker"])) == 0
     assert not ros.errors
 
 

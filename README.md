@@ -765,6 +765,15 @@ See [NVIDIA's power and throttling documentation](https://docs.nvidia.com/jetson
 
 ## Offline camera overlay
 
+검증·오버레이 영상은 원본 프레임이 없는 구간을 건너뛰고 실제 프레임만 연결한다.
+`SOURCE FRAME MISSING` 안내 화면이나 이전 영상·예측을 대신 삽입하지 않는다.
+출력 FPS는 유지하므로 영상은 누락 구간만큼 짧아지며, 화면에는 원본 촬영 시각을
+그대로 표시한다. 프레임 로그의 `source_time_sec`/`time_bin`은 원본 위치,
+`output_frame_index`/`output_time_sec`는 각 출력 클립의 재생 위치다.
+누락 기록은 `source_present=false`와 출력 위치 `null`로 남기고, 추론·명령 횟수에서
+제외한다. 영상에서 이미지를 추출하거나 구간 링크를 만들 때는 출력 위치를 사용한다.
+연속 정지 구간 분석은 원본 시각을 기준으로 하며 원본 결손을 넘어 합치지 않는다.
+
 Convert an MCAP camera topic to MP4 without ROS 2:
 
 ```bash

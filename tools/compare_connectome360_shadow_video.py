@@ -80,13 +80,6 @@ class Comparison:
                         (x,1025),cv2.FONT_HERSHEY_SIMPLEX,.52,(225,232,235),1,cv2.LINE_AA)
         return canvas
 
-    def gap(self,clip,stamp):
-        image=self.template.copy()
-        cv2.putText(image,f'{clip} {clock_text(stamp)} - SOURCE FRAME MISSING / NO INFERENCE',
-                    (175,450),cv2.FONT_HERSHEY_SIMPLEX,1.0,(150,190,230),2,cv2.LINE_AA)
-        return image
-
-
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--before',type=Path,required=True)
@@ -137,8 +130,10 @@ def main():
             for time_bin in range(segment['start_bin'],segment['end_bin']):
                 row=lookup.get((segment['recording'],time_bin))
                 if row is None:
-                    frames=[display.gap(segment['recording'],time_bin/5.),single_display.gap(segment['recording'],time_bin/5.)]
                     missing+=1
+                    log.write(json.dumps(dict(recording=segment['recording'],time_bin=time_bin,
+                        source_present=False,output_frame_index=None,output_time_sec=None))+'\n')
+                    continue
                 else:
                     assert row['id'] in old_masks
                     assert digest(args.dataset/row['panorama'])==row['panorama_sha256']
@@ -153,6 +148,7 @@ def main():
                     counts['old_stop']+=c0.reason=='neural_wait';counts['new_stop']+=c1.reason=='neural_wait'
                     def command(c,p):return dict(vx=c.vx,vy=c.vy,yaw_rate=c.yaw_rate,reason=c.reason,stop_probability=p['stop_probability'])
                     log.write(json.dumps(dict(id=row['id'],recording=row['recording'],source_time_sec=row['source_time_sec'],
+                        source_present=True,output_frame_index=index,output_time_sec=index/5.,
                         source_pts=row['source_pts'],split=row['split'],old=command(c0,p0),new=command(c1,p1),
                         old_road_fractions=old.mean(axis=(1,2)).tolist(),new_road_fractions=new.mean(axis=(1,2)).tolist(),
                         mask_disagreement=float((old!=new).mean())))+'\n')
@@ -168,16 +164,19 @@ def main():
         for writer in writers:
             writer.stdin.close()
             if writer.wait():raise RuntimeError('Comparison video encoding failed')
-    assert actual==len(old_masks)==523 and index==600 and missing==77
+    source_bins=sum(segment['end_bin']-segment['start_bin'] for segment in segments)
+    assert actual==len(old_masks)==index and actual+missing==source_bins
     np.savez_compressed(out/'after-predictions.npz',ids=np.asarray(ids),packed_masks=np.stack(packed),
         road_sha256=after['road_sha256'],manifest_sha256=manifest_sha)
     shutil.copy2(args.baseline_preview/'predictions.npz',out/'before-predictions.npz')
     videos={p.name:probe(p) for p in [comparison,single]}
     for info in videos.values():
-        assert info['r_frame_rate']=='5/1' and int(info['nb_frames'])==600 and float(info['duration'])==120
+        assert info['r_frame_rate']=='5/1' and int(info['nb_frames'])==actual
+        assert abs(float(info['duration'])-actual/5.)<1e-3
     report=dict(before_model=str(args.before),after_model=str(args.after),before_hashes=before,after_hashes=after,
         same_original_input_pts=True,same_segments=segments,dataset_manifest_sha256=manifest_sha,
-        actual_frames=actual,source_missing_bins=missing,video_frames=index,videos=videos,
+        actual_frames=actual,source_missing_bins=missing,source_bins=source_bins,
+        missing_source_policy='skip',video_frames=index,videos=videos,
         actor_command_counts=counts,before_threshold=thresholds[0],after_threshold=thresholds[1],accuracy_measured=False,commands_published=False,
         completed_at=datetime.now(ZoneInfo('Asia/Seoul')).isoformat())
     save(out/'complete.json',report);shutil.copy2(__file__,out/Path(__file__).name)
@@ -191,7 +190,7 @@ before-after-shadow-2min-5fps.mp4는 원본 / 기존 모델 / 그림자 증강 �
 
 각 열에 표시한 임계값은 실제 모델에 적용한 값이다. 새 모델의 임계값은 ID482 개발 22장의 원본/합성 그림자 예측으로 선택했다. 이 대표 영상이나 RSSP 평가 라벨은 임계값 선택에 사용하지 않았다.
 
-ID482 00:56–01:26, ID482 07:15–07:45, RSSP00 00:42–01:12, RSSP06 00:50–01:20을 그대로 사용했다. 원본 523개 시점/네 방향 2,092개 입력이 같고, 원본 프레임이 없는 77개 구간은 카드로 표시한다. 이번 비교 입력에 합성 그림자나 검출 누락을 추가하지 않았다. 증강은 학습에서만 사용했다.
+원본 구간과 실제 입력 시점은 기존 비교 대상과 동일하다. 원본 프레임이 없는 구간은 건너뛰고 실제 프레임만 연결하므로 출력 영상은 원본 구간 합계보다 짧다. 화면에는 원본 시각을 유지하고 frames.jsonl의 output_frame_index/output_time_sec로 출력 재생 위치를 기록한다. 이번 비교 입력에 합성 그림자나 검출 누락을 추가하지 않았다. 증강은 학습에서만 사용했다.
 
 shadow-augmented-2min-5fps-overlay.mp4는 새 검출기만 표시한 영상이다. complete.json에 모델 해시와 구간, frames.jsonl에 같은 PTS별 명령·차도 면적, before/after-predictions.npz에 원래 예측 마스크를 보존했다. 실제 영상 구간은 학습에 사용한 부분을 포함하므로 독립적인 정확도 평가는 아니다.
 ''')

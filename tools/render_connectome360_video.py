@@ -1,7 +1,8 @@
 """Render raw Flyvis road predictions on timestamped saved real 360 video frames.
 
 This is offline detection replay, without driving commands or accuracy claims.
-All predicted road pixels are retained. Missing source bins get gap cards.
+All predicted road pixels are retained. Missing source bins are omitted from
+the video; original source timestamps remain in the overlay and frame log.
 """
 import argparse
 from collections import defaultdict
@@ -84,15 +85,6 @@ class Display:
                     (980, 44), cv2.FONT_HERSHEY_SIMPLEX, .7, (235, 235, 235), 1, cv2.LINE_AA)
         return canvas
 
-    def gap(self, recording, stamp):
-        result = self.template.copy()
-        cv2.putText(result, f'{recording}  {clock_text(stamp)}', (610, 300),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (230, 230, 230), 2, cv2.LINE_AA)
-        cv2.putText(result, 'SOURCE FRAME MISSING - NO INFERENCE', (370, 420),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (135, 190, 240), 2, cv2.LINE_AA)
-        return result
-
-
 def open_writer(path):
     return subprocess.Popen(['ffmpeg', '-y', '-nostdin', '-hide_banner', '-loglevel', 'error',
         '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-s', '1920x1080', '-r', '5', '-i', 'pipe:0',
@@ -160,7 +152,8 @@ def main():
     plan = dict(model=str(args.model.resolve()), dataset=str(args.dataset.resolve()),
                 detector_sha256=config['road_sha256'], encoder_sha256=config['encoder_sha256'],
                 dataset_manifest_sha256=manifest_sha, camera_profile_sha256=config['camera_profile_sha256'],
-                sampling_hz=5, mode=args.mode, road_threshold=float(json.loads((args.model/'road/simulation-training.json').read_text())['threshold']),
+                sampling_hz=5, mode=args.mode, missing_source_policy='skip',
+                road_threshold=float(json.loads((args.model/'road/simulation-training.json').read_text())['threshold']),
                 input_representation='saved actual decoded JPEG panoramas and their exact four-view PNG projections',
                 all_predicted_road_pixels_preserved=True, synthetic_detection_faults=False,
                 driving_commands=False, accuracy_measured=False,
@@ -192,8 +185,11 @@ def main():
                 for time_bin in range(segment['start_bin'], segment['end_bin']):
                     row = current.get(time_bin)
                     if row is None:
-                        frame = display.gap(segment['recording'], time_bin/5.)
                         missing += 1
+                        log.write(json.dumps(dict(recording=segment['recording'],
+                            time_bin=time_bin, source_present=False,
+                            output_frame_index=None, output_time_sec=None))+'\n')
+                        continue
                     else:
                         panorama = cv2.imread(str(args.dataset/row['panorama']))
                         views = four_views(args.dataset, row['views_atlas'])
@@ -215,6 +211,7 @@ def main():
                         frame = display.frame(panorama, views, masks, row)
                         log.write(json.dumps(dict(id=row['id'],recording=row['recording'],source_pts=row['source_pts'],
                             source_time_sec=row['source_time_sec'],split=row['split'],time_bin=time_bin,
+                            source_present=True, output_frame_index=actual, output_time_sec=actual/5.,
                             road_fractions=masks.mean(axis=(1,2)).tolist(),
                             cached_prediction=row['id'] in reused, wall_ms=(time.monotonic()-tick)*1000))+'\n')
                         if actual in {0, midpoint}:
@@ -230,13 +227,16 @@ def main():
                 writer.stdin.close()
                 result = writer.wait()
                 if result:raise RuntimeError(f'Video encoder failed: {dest}')
-        expected = segment['end_bin']-segment['start_bin']
+        source_bins = segment['end_bin']-segment['start_bin']
+        assert actual + missing == source_bins
+        expected = actual
         video = probe(dest)
         assert video['codec_name']=='h264' and int(video['nb_frames'])==expected
         assert (int(video['width']),int(video['height']))==(1920,1080)
         total_missing += missing
         clips.append(dict(recording=segment['recording'],file=dest.name,actual_frames=actual,
-                          missing_source_bins=missing,video_frames=expected,duration_sec=expected/5.,ffprobe=video))
+                          missing_source_bins=missing,source_bins=source_bins,
+                          missing_source_policy='skip',video_frames=expected,duration_sec=expected/5.,ffprobe=video))
         write_json(out/'progress.json',dict(completed_clips=clips,actual_frames=total_actual,
                                           elapsed_sec=time.monotonic()-started))
         print('CLIP_COMPLETE',json.dumps(clips[-1]),flush=True)
@@ -260,9 +260,9 @@ def main():
         f'모델: {args.model.name}\n검출기 SHA-256: {config["road_sha256"]}\n\n'
         '위 왼쪽은 실제 파노라마, 위 오른쪽은 네 방향 예측을 파노라마에 합성한 결과다. 아래는 전방 90도·좌측 180도·후방 270도·우측 0도의 실제 모델 입력과 예측이다.\n\n'
         '네 방향 화면의 초록은 각 입력에서 모델이 차도로 예측한 모든 픽셀이다. 파노라마 합성은 각 위치와 가장 가까운 방향의 예측을 사용하며 중첩 구간의 예측을 합집합으로 늘리지 않는다. 풀과 팔의 오검출도 지우지 않았다. 비차도는 원본 색을 유지한다. 상·하단 음영은 투영 영상 밖이라 추론하지 않은 영역이다. 모델은 차도/비차도 이진 출력이므로 식생·연석 등 다른 클래스를 따로 색칠하지 않는다.\n\n'
-        '실제 원본에서 저장해 둔 5 FPS JPEG 파노라마와 동일 시점의 PNG 네 방향 영상을 사용했다. 프레임 파일 해시를 다시 확인했다. ID482는 25:00 미만만 포함한다. 누락된 원본 시간 구간에는 예측을 복제하지 않고 SOURCE FRAME MISSING 카드를 표시한다. 구간별 원본 시간과 train/development/validation/test/gap 분할을 영상과 로그에 표시한다.\n\n'
+        '실제 원본에서 저장해 둔 5 FPS JPEG 파노라마와 동일 시점의 PNG 네 방향 영상을 사용했다. 프레임 파일 해시를 다시 확인했다. ID482는 25:00 미만만 포함한다. 원본 누락 구간은 영상에서 건너뛰고 실제 프레임만 연결한다. 따라서 영상 재생 시간과 원본 시각은 다르다. 원본 시각과 분할은 화면·로그에 유지하며 output_frame_index/output_time_sec가 각 클립의 재생 위치를 가리킨다.\n\n'
         '이번 결과는 녹화 영상의 검출 시각화다. 학습에 사용한 구간을 포함하므로 독립적인 일반화 정확도 평가가 아니다. 주행 헤드·합성 검출 누락·실제 로봇 제어는 실행하지 않았다.\n\n'
-        f'합친 영상: {combined.name}\n실제 추론 시점: {total_actual}\n원본 누락 카드: {total_missing}\n'
+        f'합친 영상: {combined.name}\n실제 추론 시점: {total_actual}\n건너뛴 원본 누락 구간: {total_missing}\n'
         '세부 원본 PTS와 차도 예측 면적은 각 frames.jsonl, 원래 4×270×480 예측은 predictions.npz에 보존했다.\n')
     print(json.dumps(dict(output=str(out),video=str(combined),actual_frames=total_actual,
                           missing_source_bins=total_missing,duration_sec=final['duration']),ensure_ascii=False),flush=True)

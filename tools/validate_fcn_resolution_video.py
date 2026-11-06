@@ -1,8 +1,8 @@
 """Compare three FCNs on actual 360 source frames, strictly before a time cutoff.
 
 One actual decoded frame per occupied 0.2-second timestamp bin is inferred.
-Missing bins receive explicitly marked gap frames in the review video. No
-inference, road labels, or motion commands are invented for source gaps.
+Missing bins are skipped in the review video while original source timestamps
+are retained. No inference, road labels, or motion commands are invented.
 """
 import argparse
 import hashlib
@@ -244,7 +244,8 @@ def main():
         "sampling": "first actual decoded frame in each occupied 0.2s PTS bin; no repeated inference",
         "models": [{"title": t, "path": str(p), "sha256": sha(p)} for t, p in zip(titles, paths)],
         "annotations": "Inherited partial visual labels; ID482 is the FCN training recording, not a blind test",
-        "video": "Full 25-minute source-clock timeline; missing bins marked as source gaps; no audio",
+        "video": "Actual frames only; missing bins skipped; original source times displayed; no audio",
+        "missing_source_policy": "skip",
         "projection": "direct ERP perspective remap, front=90deg, left=180, rear=270, right=0; vertical FOV90",
         "labels": "native class logits argmax over 1..20, nearest cell upsampling; no ego fill, smoothing or planner",
         "optimization": "Identical frozen layers 1-3 shared between the two 1024 models; separate original layer4 and classifiers; same FP32 precision. Image encoding overlaps inference.",
@@ -258,25 +259,22 @@ def main():
                        for t in (0, 60, 180, 300, 420, 540, 660, 780, 900, 1020, 1140, 1260, 1380, 1499)}
     started = time.monotonic()
     next_bin = gap_bins = 0
-    last = np.full((1080, 1920, 3), 30, np.uint8)
     trace = (out / "frames.jsonl").open("w")
     def render_frame(i, row, panorama, render_views, outputs, timings):
-        nonlocal next_bin, gap_bins, last
+        nonlocal next_bin, gap_bins
         stamp = row["source_time_sec"]
         canvas = composite(panorama, render_views, outputs, titles, stamp)
         image_name = f"{i:06d}-pts-{row['source_pts']:010d}.jpg"
         if not cv2.imwrite(str(out / "images-5fps" / image_name), canvas, [cv2.IMWRITE_JPEG_QUALITY, 88]):
             raise OSError(image_name)
         occupied_bin = int(stamp * 5 + 1e-8)
-        for b in range(next_bin, occupied_bin):
-            gap = (last * .35).astype(np.uint8)
-            text(gap, f"SOURCE TIMESTAMP GAP {b/5:.1f}s | NO NEW FRAME / NO INFERENCE", (130, 500), 1.1)
-            encoder.stdin.write(gap.tobytes())
-            gap_bins += 1
+        if occupied_bin < next_bin:
+            raise ValueError("Source timestamp bins must be strictly increasing")
+        gap_bins += occupied_bin - next_bin
         encoder.stdin.write(canvas.tobytes())
         next_bin = occupied_bin + 1
-        last = canvas
         result = {"index": i, "source_pts": row["source_pts"], "source_time_sec": stamp,
+                  "source_present": True, "output_frame_index": i, "output_time_sec": i / 5.,
                   "source_time_bin": occupied_bin, "image": "images-5fps/" + image_name,
                   "recording_seen_in_training": True,
                   "inference_ms_groups": timings,
@@ -334,11 +332,7 @@ def main():
             decoder.stdout.close()
             if decoder.wait() != 0:
                 raise RuntimeError("FFmpeg decode failed")
-            for b in range(next_bin, int(args.cutoff * 5)):
-                gap = (last * .35).astype(np.uint8)
-                text(gap, "SOURCE TIMESTAMP GAP | NO NEW FRAME / NO INFERENCE", (200, 500), 1.1)
-                encoder.stdin.write(gap.tobytes())
-                gap_bins += 1
+            gap_bins += max(0, int(args.cutoff * 5) - next_bin)
             encoder.stdin.close()
             if encoder.wait() != 0:
                 raise RuntimeError("FFmpeg encode failed")
@@ -363,7 +357,9 @@ def main():
     summary = {"samples": len(rows), "views_per_model": len(rows) * 4,
                "first_source_sec": rows[0]["source_time_sec"], "last_source_sec": rows[-1]["source_time_sec"],
                "cutoff_exclusive_sec": args.cutoff, "source_pts_exact_match": True,
-               "source_timestamp_gap_bins": gap_bins, "video_frames": int(args.cutoff * 5),
+               "source_timestamp_gap_bins": gap_bins, "source_bins": int(args.cutoff * 5),
+               "missing_source_policy": "skip", "video_frames": len(rows),
+               "video_duration_sec": len(rows) / 5.,
                "wall_seconds": time.monotonic() - started,
                "inference_ms_groups": {title: {"median": float(np.median(latency[:, j])),
                                                "p95": float(np.percentile(latency[:, j], 95))}
@@ -382,7 +378,7 @@ def main():
         '<h1>FCN 1024×512 파인튜닝 · ID482 25:00 이전</h1>'
         '<p>왼쪽: 512 파인튜닝 / 가운데: 1024 기본 / 오른쪽: 1024 파인튜닝</p>'
         '<p>초록: 차도 · 분홍: 로봇 · 빨강: 식생 · 노랑: 인도 · 보라: 건물. 어두운 극지방: 미관측.</p>'
-        '<p>원본 PTS 기준 5 FPS. 영상의 시간 공백은 어둡게 표시하며 새 추론이 없습니다. ID482는 학습 장면을 포함합니다.</p>'
+        '<p>원본 PTS 기준 5 FPS. 원본 프레임이 없는 구간은 건너뛰고 실제 프레임만 연결합니다. 화면 시각은 원본 기준이며 영상 재생 위치는 output_frame_index/output_time_sec로 기록합니다. ID482는 학습 장면을 포함합니다.</p>'
         '<video controls preload="metadata" src="id482-before25m-comparison-5fps.mp4"></video>'
         '<p><a href="images-5fps/">전체 5 FPS 이미지</a> · <a href="summary.json">추론 기록</a></p>' + images)
     print(f"COMPLETE {out}", flush=True)

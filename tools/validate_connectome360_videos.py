@@ -91,15 +91,6 @@ class DrivingDisplay:
         cv2.circle(out, tuple(points[0]), 4, (235, 240, 240), -1)
         return out
 
-    def gap(self, recording, time_bin):
-        out = self.template.copy()
-        cv2.putText(out, f'{recording} {clock_text(time_bin/5)}', (650, 300),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.1, (230, 230, 230), 2, cv2.LINE_AA)
-        cv2.putText(out, 'SOURCE FRAME MISSING - NO NEW DETECTION / MODEL COMMAND', (180, 440),
-                    cv2.FONT_HERSHEY_SIMPLEX, .93, (150, 190, 235), 2, cv2.LINE_AA)
-        return out
-
-
 def run_worker(output, worker):
     plan = json.loads((output/'plan.json').read_text())
     manifest = output/'manifest.jsonl'
@@ -125,6 +116,8 @@ def run_worker(output, worker):
         if marker.exists():
             record = json.loads(marker.read_text())
             assert record['road_sha256'] == plan['road_sha256'] and record['policy_sha256'] == plan['policy_sha256']
+            if record.get('missing_source_policy') != 'skip':
+                raise ValueError('Existing segment uses another video timeline; choose a fresh output directory')
             completed.append(record)
             all_actual += record['actual_frames']
             continue
@@ -143,10 +136,12 @@ def run_worker(output, worker):
                 for time_bin in range(job['start_bin'], job['end_bin']):
                     row = lookup.get((job['recording'], time_bin))
                     if row is None:
-                        frame = display.gap(job['recording'], time_bin)
                         missing += 1
                         record = dict(recording=job['recording'], time_bin=time_bin, source_present=False,
-                                      detection=None, model_command=None, jetson_capped_command=None)
+                                      detection=None, model_command=None, jetson_capped_command=None,
+                                      output_frame_index=None, output_time_sec=None)
+                        log.write(json.dumps(record, ensure_ascii=False, allow_nan=False)+'\n')
+                        continue
                     else:
                         tick = time.perf_counter()
                         source = Path(row['panorama_absolute'])
@@ -180,6 +175,7 @@ def run_worker(output, worker):
                         speeds.append(capped.vx); yaws.append(capped.yaw_rate); stop_probs.append(policy['stop_probability']); elapsed.append(infer_sec)
                         record = dict(id=row['id'], recording=row['recording'], source_present=True, time_bin=time_bin,
                             source_pts=row['source_pts'], source_time_sec=row['source_time_sec'], time_base=row['time_base'],
+                            output_frame_index=actual, output_time_sec=actual/5.,
                             split=row['split'], source_sha256=row['source_sha256'],
                             source_panorama_sha256=row['panorama_sha256'], input_origin=row['input_origin'],
                             road_fractions=masks.mean(axis=(1, 2)).tolist(), model_command=asdict(raw),
@@ -208,13 +204,16 @@ def run_worker(output, worker):
                     raise RuntimeError('Video encoding failed: '+str(dest))
         assert actual == job['actual_frames']
         info = probe(dest)
-        expected = job['end_bin']-job['start_bin']
+        source_bins = job['end_bin']-job['start_bin']
+        assert actual + missing == source_bins
+        expected = actual
         assert int(info['nb_frames']) == expected and info['r_frame_rate'] == '5/1'
         np.savez_compressed(output/'masks'/(name+'-predictions.npz'), ids=np.asarray(ids),
             packed_masks=np.stack(packed), road_sha256=plan['road_sha256'], model_sha256=plan['model_sha256'],
             validation_manifest_sha256=plan['manifest_sha256'])
         stats = dict(segment=job, video=str(dest.relative_to(output)), actual_frames=actual,
-            missing_source_bins=missing, video_frames=expected, ffprobe=info,
+            missing_source_bins=missing, source_bins=source_bins,
+            missing_source_policy='skip', video_frames=expected, ffprobe=info,
             road_sha256=plan['road_sha256'], policy_sha256=plan['policy_sha256'], counts=dict(counters),
             capped_speed_mean_mps=float(np.mean(speeds)), capped_speed_max_mps=float(np.max(speeds)),
             capped_abs_yaw_mean_radps=float(np.mean(np.abs(yaws))), stop_probability_mean=float(np.mean(stop_probs)),

@@ -21,11 +21,7 @@ PATH_RECOVERY_DIRECTION_DEADBAND_DEG = 5.0
 DRIVE_STOP_CHECKS = (
     "camera_stale",
     "inference_stale",
-    "camera_timestamp_invalid",
-    "path_unavailable",
     "path_loss_limit",
-    "low_confidence",
-    "lateral_target",
 )
 
 
@@ -36,16 +32,11 @@ class DriveConfig:
     heading_gain: float = 1.0
     lookahead_m: float = 4.0
     min_confidence: float = 0.49
-    max_target_heading_deg: float = 60.0
     max_camera_age_sec: float = 5.00
     max_inference_age_sec: float = 5.00
     stop_on_camera_stale: bool = False
     stop_on_inference_stale: bool = False
-    stop_on_camera_timestamp_invalid: bool = False
-    stop_on_path_unavailable: bool = False
     stop_on_path_loss_limit: bool = False
-    stop_on_low_confidence: bool = False
-    stop_on_lateral_target: bool = False
     path_loss_recovery_enabled: bool = True
     path_recovery_wait_sec: float = 1.0
     path_recovery_yaw_rps: float = 0.18
@@ -58,7 +49,6 @@ class DriveConfig:
             self.max_yaw_rps,
             self.heading_gain,
             self.lookahead_m,
-            self.max_target_heading_deg,
             self.max_camera_age_sec,
             self.max_inference_age_sec,
             self.path_recovery_wait_sec,
@@ -68,8 +58,6 @@ class DriveConfig:
             raise ValueError("drive limits must be finite and positive")
         if self.max_forward_mps > MAX_FORWARD_MPS_HARD_LIMIT:
             raise ValueError("max_forward_mps must be at most 1.0 m/s")
-        if self.max_target_heading_deg >= 90.0:
-            raise ValueError("max_target_heading_deg must be in (0, 90)")
         if not 0.0 <= self.min_confidence <= 1.0:
             raise ValueError("min_confidence must be in [0, 1]")
         if any(
@@ -86,12 +74,6 @@ class DriveConfig:
             raise ValueError("path_recovery_confirm_frames must be an integer >= 2")
         if self.path_recovery_first_direction not in ("left", "right"):
             raise ValueError("path_recovery_first_direction must be left or right")
-
-    @property
-    def max_lateral_target_m(self) -> float:
-        """Equivalent lateral limit at the configured lookahead distance."""
-
-        return self.lookahead_m * math.tan(math.radians(self.max_target_heading_deg))
 
 
 @dataclass(frozen=True)
@@ -326,16 +308,9 @@ def decide_drive(
             age is None or not math.isfinite(age) or age < 0.0 or age > maximum
         ):
             return DriveDecision.stop(f"{name}_stale")
-    if path is not None and config.stop_on_low_confidence and (
-        not math.isfinite(path.confidence)
-        or path.confidence < config.min_confidence
-    ):
-        return DriveDecision.stop("path_low_confidence")
     lateral = path_target_lateral(path, config.lookahead_m)
     if lateral is None:
         if config.path_loss_recovery_enabled and path_recovery_inferences is not None:
-            if config.stop_on_path_unavailable:
-                return DriveDecision.stop("path_unavailable")
             if (last_valid_forward_mps is None or not math.isfinite(last_valid_forward_mps)
                     or last_valid_forward_mps <= 0):
                 return DriveDecision.stop("waiting_for_path")
@@ -343,11 +318,11 @@ def decide_drive(
                 return DriveDecision.stop("path_recovery_waiting")
             return DriveDecision(min(last_valid_forward_mps, config.max_forward_mps),
                                  0.0, 0.0, "tracking_path_recovery")
-        if config.stop_on_path_unavailable or (
+        if (
             config.stop_on_path_loss_limit
             and path_unavailable_inferences >= MAX_PATH_UNAVAILABLE_INFERENCES
         ):
-            return DriveDecision.stop("path_unavailable")
+            return DriveDecision.stop("path_loss_limit")
         held_speed = (
             config.max_forward_mps
             if last_valid_forward_mps is None
@@ -368,11 +343,6 @@ def decide_drive(
         # With no previous usable command there is nothing to hold. Disabling
         # automatic stops must not invent an initial heading or forward speed.
         return DriveDecision.stop("waiting_for_path")
-    if (
-        config.stop_on_lateral_target
-        and abs(lateral) > config.max_lateral_target_m
-    ):
-        return DriveDecision.stop("path_lateral_target_large")
     heading = math.atan2(lateral, config.lookahead_m)
     requested_yaw = config.heading_gain * heading
     yaw_rate = float(

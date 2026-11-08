@@ -125,8 +125,7 @@ lease가 만료되면 동일하게 정지하고 ERROR를 보고한다. 모델 �
 
 waypoint 도착·현재 실행기 종료 확인·다음 Mode 실행·최종 task 완료는 navigation 담당이다.
 Navigation 구간의 주행 정지 검사는 단독 LINE_TRACKING과 같은 `.env`의
-`LINE_TRACKING_STOP_ON_CAMERA_STALE/INFERENCE_STALE/CAMERA_TIMESTAMP_INVALID/`
-`PATH_UNAVAILABLE/PATH_LOSS_LIMIT/LOW_CONFIDENCE/LATERAL_TARGET` 값을 사용한다.
+`LINE_TRACKING_STOP_ON_CAMERA_STALE/INFERENCE_STALE/PATH_LOSS_LIMIT` 값을 사용한다.
 이 값을 강제로 true로 바꾸지 않으며 `LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED`도 그대로
 사용한다. 일반적인 waypoint 경로 소실도 같은 정지/유지/복구 정책을 따르고, 확인 중인 갈림길·
 모호한 후보·선택한 갈림길 이탈 등의 제약은 유지한다. 차도의 Connectome 유효성 검사는

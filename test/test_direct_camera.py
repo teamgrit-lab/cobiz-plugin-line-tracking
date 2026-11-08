@@ -201,9 +201,9 @@ def test_usb_capture_without_ros_keeps_original_buffer_time(monkeypatch):
     assert frame.shape == (2,4,3)
 
 
-@pytest.mark.parametrize('change', [dict(capture_stamp_ns=1), dict(capture_stamp_ns=10**20),
-    dict(stream_id='old-task'), dict(classes=[[[3.0]*32]*16]*4), dict(classes=[[[21]*32]*16]*4)])
-def test_client_rejects_untrusted_stamp_identity_and_class_packets(change):
+@pytest.mark.parametrize('change', [dict(stream_id='old-task'),
+    dict(classes=[[[3.0]*32]*16]*4), dict(classes=[[[21]*32]*16]*4)])
+def test_client_rejects_untrusted_identity_and_class_packets(change):
     identity = dict(backend='fcn1024-360', weights_sha256=PIN, input_width=1024, class_grid_shape=[4,16,32])
     service = DirectCameraService(NS(details=identity, reset=lambda: None), Source(None), lambda _: {})
     with running(service) as url:
@@ -215,6 +215,24 @@ def test_client_rejects_untrusted_stamp_identity_and_class_packets(change):
         client._request = forged
         with pytest.raises(ValueError):
             client.infer('task', started, 0, 1.5, time.time_ns)
+
+
+@pytest.mark.parametrize('bad_stamp', [None, 0, 1, 10**20, 5_000_000_001, 4_999_999_999])
+def test_bad_capture_time_is_skipped_and_the_next_current_result_is_usable(bad_stamp):
+    identity = dict(backend='fcn1024-360', weights_sha256=PIN, input_width=1024,
+                    class_grid_shape=[4,16,32])
+    client = DirectCameraClient.__new__(DirectCameraClient)
+    client.url, client.sequence, client.validator = 'http://127.0.0.1:8094/v1/direct-road', 0, None
+    client.pin, client.input_width = PIN, 1024
+    stamp = [bad_stamp]
+    def response(_url, req):
+        return dict(req, model=identity, available=True, capture_stamp_ns=stamp[0],
+                    total_seconds=.01, classes=np.full((4,16,32),3).tolist())
+    client._request = response
+    assert client.infer('task', 4_000_000_000, 4_999_999_999, 1.5, lambda: 5_000_000_000) is None
+    stamp[0] = 5_000_000_000
+    result = client.infer('task', 4_000_000_000, 4_999_999_999, 1.5, lambda: 5_000_000_000)
+    assert result.capture_stamp_ns == stamp[0]
 
 
 @pytest.mark.parametrize('backend', ['connectome360', 'front_connectome', 'fcn360', 'r50_360_policy'])

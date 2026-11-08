@@ -9,8 +9,6 @@ import math
 import threading
 import time
 
-import numpy as np
-
 SCHEMA = 'line_tracking.direct_camera.v1'
 MAX_BODY = 128 * 1024
 

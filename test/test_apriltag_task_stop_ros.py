@@ -532,8 +532,6 @@ def test_invalid_image_metadata_stops_before_queueing(ros, monkeypatch, invalid)
 
 @pytest.fixture
 def path_hold(ros, monkeypatch):
-    for check in ("PATH_UNAVAILABLE", "LOW_CONFIDENCE", "LATERAL_TARGET"):
-        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check, "false")
     state = SimpleNamespace(lost=False, lateral=0.4)
     original = debug.extract_sidewalk_centerline
 
@@ -588,15 +586,13 @@ def test_disabled_path_stop_holds_last_yaw_and_never_reuses_it_in_another_task(r
             path_hold.refresh()
             assert ros.metrics()["drive_reason"] == "tracking_path_hold"
             assert ros.metrics()["path_yaw_held"] is True
-            assert ros.metrics()["stop_checks"]["path_unavailable"] is False
             assert ros.metrics()["path_tracked"] is False
             assert ros.published["/line_tracking/local_path"][-1].poses == []
             assert json.loads(ros.published[SPORT][-1].parameter) == previous
             assert node.tasks.active is not None
-        assert {key: ros.metrics()["stop_checks"][key] for key in ("camera_freshness", "inference_freshness", "path_available", "low_confidence", "lateral_target", "apriltag")} == {
+        assert {key: ros.metrics()["stop_checks"][key] for key in ("camera_freshness", "inference_freshness", "path_available", "apriltag")} == {
             "camera_freshness": True, "inference_freshness": True,
-            "path_available": False, "low_confidence": False,
-            "lateral_target": False, "apriltag": True,
+            "path_available": False, "apriltag": True,
         }
 
         # A new usable path replaces the saved turn.
@@ -627,11 +623,9 @@ def test_disabled_path_stop_holds_last_yaw_and_never_reuses_it_in_another_task(r
 
 
 @pytest.mark.parametrize("sign", [-1, 1])
-def test_live_turn_slows_on_first_result_and_stops_beyond_sixty_degrees(
+def test_live_turn_slows_and_keeps_tracking_beyond_sixty_degrees(
     ros, path_hold, monkeypatch, sign
 ):
-    for check in ("PATH_UNAVAILABLE", "LOW_CONFIDENCE", "LATERAL_TARGET"):
-        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check, "true")
 
     def scenario(node):
         ros.establish_tracking(detection_heartbeat=False)
@@ -653,16 +647,15 @@ def test_live_turn_slows_on_first_result_and_stops_beyond_sixty_degrees(
         ros.now = 4.0
         path_hold.lateral = sign * 4.0 * math.tan(math.radians(60.1))
         path_hold.refresh()
-        assert ros.metrics()["drive_reason"] == "path_lateral_target_large"
-        assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
+        assert ros.metrics()["drive_reason"] == "tracking_slow_turn"
+        assert 0 < json.loads(ros.published[SPORT][-1].parameter)["x"] < 0.1
 
-        # A new permitted target resumes on this tick without a confirmation phase.
+        # A new target takes effect on this tick without a confirmation phase.
         ros.now = 4.2
         path_hold.lateral = sign * 4.0 * math.tan(math.radians(59.9))
         path_hold.refresh()
         assert ros.metrics()["drive_reason"] == "tracking_slow_turn"
         assert 0 < json.loads(ros.published[SPORT][-1].parameter)["x"] < 0.1
-        assert node.tasks.unsafe_since is None
         node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "tag-stop-1"})))
         assert node.last_valid_yaw_rate is None
         assert node.last_valid_forward_mps is None
@@ -707,7 +700,7 @@ def test_enabled_task_timeout_stops_and_clears_held_yaw(ros, path_hold):
 
 
 @pytest.mark.parametrize("recover", [False, True])
-def test_fifth_missing_path_inference_stops_then_recovers_or_aborts(ros, path_hold, recover):
+def test_fifth_missing_path_inference_pauses_without_aborting(ros, path_hold, recover):
     def scenario(node):
         ros.establish_tracking(detection_heartbeat=False)
         path_hold.lost = True
@@ -716,7 +709,7 @@ def test_fifth_missing_path_inference_stops_then_recovers_or_aborts(ros, path_ho
             path_hold.refresh()
             assert ros.metrics()["path_unavailable_inferences"] == count
             assert ros.metrics()["path_unavailable_limit"] == 5
-            expected = "tracking_path_hold" if count < 5 else "path_unavailable"
+            expected = "tracking_path_hold" if count < 5 else "path_loss_limit"
             assert ros.metrics()["drive_reason"] == expected
             # Repeated 10 Hz control output is not another completed inference.
             for _ in range(10):
@@ -732,7 +725,6 @@ def test_fifth_missing_path_inference_stops_then_recovers_or_aborts(ros, path_ho
             path_hold.refresh()
             assert ros.metrics()["path_unavailable_inferences"] == 0
             assert ros.metrics()["drive_reason"] == "tracking"
-            assert node.tasks.unsafe_since is None
             path_hold.lost = True
             ros.now = 3.5
             path_hold.refresh()
@@ -741,8 +733,9 @@ def test_fifth_missing_path_inference_stops_then_recovers_or_aborts(ros, path_ho
         else:
             ros.now = 5.2
             node.publish_state()
-            assert ros.task_state()["type"] == "TASK_ABORTED"
-            assert ros.task_state()["reason"] == "unsafe:path_unavailable"
+            assert ros.task_state()["type"] == "TASK_STARTED"
+            assert node.tasks.active is not None
+            assert ros.metrics()["drive_reason"] == "path_loss_limit"
             assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
 
     ros.run(scenario)
@@ -762,7 +755,7 @@ def test_missing_path_streak_counts_inferences_between_control_ticks_and_resets(
         path_hold.refresh(publish=False)
         node.publish_state()
         assert ros.metrics()["path_unavailable_inferences"] == 5
-        assert ros.metrics()["drive_reason"] == "path_unavailable"
+        assert ros.metrics()["drive_reason"] == "path_loss_limit"
         node.on_task_event(Message(json.dumps({"type": "TASK_ABORTED", "task_id": "tag-stop-1"})))
         ros.now += 1.1
         node.publish_state()
@@ -779,8 +772,6 @@ def test_missing_path_streak_counts_inferences_between_control_ticks_and_resets(
 
 @pytest.mark.parametrize("mask_class", [0, 1, 2])
 def test_missing_path_streak_uses_the_task_selected_surface(ros, monkeypatch, mask_class):
-    for check in ("PATH_UNAVAILABLE", "LOW_CONFIDENCE", "LATERAL_TARGET"):
-        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check, "false")
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_MASK_CLASS", str(mask_class))
     initial_label = 1 if mask_class == 1 else 2
     mask = np.full((360, 640), initial_label, np.uint8)
@@ -812,14 +803,14 @@ def test_missing_path_streak_uses_the_task_selected_surface(ros, monkeypatch, ma
         node.publish_state()
         assert ros.metrics()["path_mask_class"] == mask_class
         assert ros.metrics()["path_unavailable_inferences"] == 5
-        assert ros.metrics()["drive_reason"] == "path_unavailable"
+        assert ros.metrics()["drive_reason"] == "path_loss_limit"
         assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
 
     ros.run(scenario)
 
 
 @pytest.mark.parametrize("fault", [
-    "camera_stale", "inference_stale", "camera_timestamp_invalid", "camera_conversion_error",
+    "camera_stale", "inference_stale", "camera_conversion_error",
 ])
 def test_enabled_sensor_stops_apply_during_path_hold(ros, path_hold, monkeypatch, fault):
     def scenario(node):
@@ -899,7 +890,7 @@ def test_enabled_apriltag_stop_applies_during_path_hold(ros, path_hold):
 
 
 @pytest.mark.parametrize("from_payload", [False, True])
-def test_combined_surface_tracks_either_class_and_stops_on_background(
+def test_combined_surface_tracks_either_class_and_holds_on_background(
     ros, monkeypatch, from_payload
 ):
     mask = np.ones((360, 640), np.uint8)
@@ -957,9 +948,10 @@ def test_combined_surface_tracks_either_class_and_stops_on_background(
             path = ros.published["/line_tracking/local_path"][-1]
             move = json.loads(ros.published[SPORT][-1].parameter)
             if surface == 0:
-                assert metrics["drive_reason"] == "path_unavailable"
+                assert metrics["drive_reason"] == "tracking_path_hold"
                 assert path.poses == []
-                assert move == ZERO
+                assert move["x"] > 0
+                assert node.tasks.active is not None
             else:
                 assert metrics["drive_reason"] == "tracking"
                 assert len(path.poses) == 20
@@ -1055,8 +1047,7 @@ def test_candidate_hard_stops_immediately_and_confirms_after_full_window(
 def test_disabled_quality_and_tag_stops_preserve_enabled_camera_stop_and_cancel(
     ros, monkeypatch
 ):
-    for check in ("LOW_CONFIDENCE", "LATERAL_TARGET", "APRILTAG"):
-        monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check, "false")
+    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_APRILTAG", "false")
 
     def scenario(node):
         ros.detect(tag_id=7, frame=1)
@@ -1075,12 +1066,10 @@ def test_disabled_quality_and_tag_stops_preserve_enabled_camera_stop_and_cancel(
             and json.loads(message.parameter)["x"] == 0.5
             for message in ros.published[SPORT][command_start:]
         )
-        assert {key: ros.metrics()["stop_checks"][key] for key in ("camera_freshness", "inference_freshness", "path_available", "low_confidence", "lateral_target", "apriltag")} == {
+        assert {key: ros.metrics()["stop_checks"][key] for key in ("camera_freshness", "inference_freshness", "path_available", "apriltag")} == {
             "camera_freshness": True,
             "inference_freshness": True,
-            "path_available": True,
-            "low_confidence": False,
-            "lateral_target": False,
+            "path_available": False,
             "apriltag": False,
         }
 
@@ -1790,31 +1779,22 @@ def test_disabled_path_limits_hold_command_beyond_fifth_inference(
     ros.run(scenario)
 
 
-@pytest.mark.parametrize('enabled', [False, True])
-def test_timestamp_stop_switch_independently_accepts_or_rejects_zero_stamp(
-    ros, automatic_stops_off, monkeypatch, enabled,
+def test_ros_zero_stamp_does_not_abort_when_camera_freshness_is_disabled(
+    ros, automatic_stops_off,
 ):
-    monkeypatch.setitem(debug.ENV, 'LINE_TRACKING_STOP_ON_CAMERA_TIMESTAMP_INVALID', str(enabled))
-
     def scenario(node):
         ros.start()
-        node.on_image(Message())  # zero source timestamp
+        node.on_image(Message())
         deadline = time.perf_counter() + 3.0
         while True:
             node.publish_state()
-            if enabled or ros.metrics()['inference_count'] == 1:
+            if ros.metrics()['inference_count'] == 1:
                 break
             assert time.perf_counter() < deadline
             time.sleep(0.001)
-        assert ros.metrics()['inference_count'] == (0 if enabled else 1)
-        assert ros.metrics()['drive_reason'] == ('camera_timestamp_invalid' if enabled else 'tracking')
-        if enabled:
-            assert json.loads(ros.published[SPORT][-1].parameter) == ZERO
-            ros.now = 0.1
-            ros.camera_ready()
-            node.publish_state()
-            assert ros.metrics()['drive_reason'] == 'tracking'
-
+        assert ros.metrics()['drive_reason'] == 'tracking'
+        assert node.tasks.active is not None
+        assert json.loads(ros.published[SPORT][-1].parameter)['x'] > 0
     ros.run(scenario)
 
 

@@ -268,13 +268,11 @@ def test_real_worker_follows_waypoint_branch_without_camera_pose_time_matching(m
     assert not ros.errors
 
 
-@pytest.mark.parametrize("stop_on_missing", [False, True])
-def test_waypoint_path_gaps_follow_env_stop_setting_in_readiness_and_final_output(monkeypatch, stop_on_missing):
+def test_waypoint_path_gaps_hold_the_previous_command_without_aborting(monkeypatch):
     from test_apriltag_task_stop_ros import Message, RosHarness, debug
     from ros_camera_fixture import complete_inference
     monkeypatch.setattr(debug, "ENV", {})
     ros = RosHarness(monkeypatch)
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_PATH_UNAVAILABLE", str(stop_on_missing).lower())
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "false")
     args = debug.parse_args(["navigation-worker", "--path-planner", "local"])
     mask = fork_mask(config=debug._local_path_config_from_args(args))
@@ -307,9 +305,9 @@ def test_waypoint_path_gaps_follow_env_stop_setting_in_readiness_and_final_outpu
         result = complete_inference(node, ros)
         assert result["waypoint_guidance"]["reason"] == "waypoint_path_unavailable"
         output = json.loads(ros.published["/line_tracking/command"][-1].data)
-        assert (output["vx"] == 0) is stop_on_missing, (
-            result["drive_reason"], node.last_valid_yaw_rate, node.drive_config)
-        assert result["drive_reason"] == ("path_unavailable" if stop_on_missing else "tracking_path_hold")
+        assert output["vx"] > 0
+        assert result["drive_reason"] == "tracking_path_hold"
+        assert node.tasks.active is not None
     ros.rclpy.spin = scenario
     assert debug.run_ros2(args) == 0
     assert not ros.errors

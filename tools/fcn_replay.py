@@ -59,7 +59,7 @@ class FcnDrive:
         config = LocalPathConfig()
         self.planner = FcnRoadPlanner(config, height)
         self.smoother = LocalPathSmoother(config)
-        self.drive = DriveConfig(max_forward_mps=1., stop_on_path_unavailable=True)
+        self.drive = DriveConfig(max_forward_mps=1.)
         self.max_speed_mps = max_speed
         self.details = dict(backend="fcn360-path-controller", planner_revision=PLANNER_REVISION,
                             fixed_front_robot_revision=FRONT_ROBOT_REVISION, map_assistance=False,

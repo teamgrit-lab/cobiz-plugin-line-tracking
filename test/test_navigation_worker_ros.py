@@ -71,7 +71,7 @@ def test_shared_worker_runs_legacy_tasks_then_navigation_with_one_model(monkeypa
         ros.camera_ready()
         node.publish_state()
         assert json.loads(ros.published[SPORT][-1].parameter)["x"] > 0
-        assert not node.drive_config.stop_on_path_unavailable  # legacy settings restored
+        assert not node.drive_config.stop_on_path_loss_limit  # legacy settings restored
         send(ros, session="conflict")
         assert status(ros)["state"] == "REJECTED"
         assert node.tasks.active.key == "legacy"
@@ -86,7 +86,7 @@ def test_shared_worker_runs_legacy_tasks_then_navigation_with_one_model(monkeypa
         ros.camera_ready()
         node.publish_state()
         assert velocity(ros)["vx"] > 0
-        assert not node.drive_config.stop_on_path_unavailable
+        assert not node.drive_config.stop_on_path_loss_limit
         assert len(ros.published[SPORT]) == sport_count
         assert len(loads) == 1
     run(ros, scenario)

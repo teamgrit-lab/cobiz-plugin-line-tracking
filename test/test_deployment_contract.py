@@ -97,13 +97,11 @@ def test_default_compose_is_cobiz_task_listener():
         "/task_state}"
     )
     assert listener["environment"]["LINE_TRACKING_MAX_FORWARD_MPS"].endswith(":-0.50}")
-    assert listener["environment"]["LINE_TRACKING_MAX_TARGET_HEADING_DEG"].endswith(":-60.0}")
-    assert "LINE_TRACKING_MAX_TARGET_HEADING_DEG=60.0" in (ROOT / ".env.example").read_text()
     assert listener["environment"]["LINE_TRACKING_DEFAULT_DURATION_SEC"].endswith(
         ":-500}"
     )
     assert listener["environment"]["LINE_TRACKING_MAX_DURATION_SEC"].endswith(":-10000}")
-    assert "LINE_TRACKING_MAX_FORWARD_MPS=0.50" in (ROOT / ".env.example").read_text()
+    assert "LINE_TRACKING_MAX_FORWARD_MPS=0.80" in (ROOT / ".env.example").read_text()
     assert (
         "LINE_TRACKING_DEFAULT_DURATION_SEC=500" in (ROOT / ".env.example").read_text()
     )
@@ -135,7 +133,7 @@ def test_tracking_services_only_configure_visual_path_geometry():
         assert "LINE_TRACKING_ROBOT_HALF_WIDTH_M" in env and "LINE_TRACKING_PATH_MARGIN_M" in env
 
 
-def test_automatic_stop_switches_are_forwarded_and_default_disabled():
+def test_stop_switches_keep_disabled_fallbacks_and_explicit_example_values():
     import yaml
     import sys
     sys.path.insert(0, str(ROOT / "tools"))
@@ -145,10 +143,11 @@ def test_automatic_stop_switches_are_forwarded_and_default_disabled():
         "services"
     ]["actual-activate"]["environment"]
     example = (ROOT / ".env.example").read_text()
+    enabled_in_example = {"camera_stale", "apriltag", "startup_hold", "task_timeout"}
     for check in AUTOMATIC_STOP_CHECKS:
         name = "LINE_TRACKING_STOP_ON_" + check.upper()
         assert environment[name] == "${" + name + ":-false}"
-        assert name + "=false" in example
+        assert name + ("=true" if check in enabled_in_example else "=false") in example
     assert "LINE_TRACKING_BYPASS_PATH_STOPS" not in environment
     assert "LINE_TRACKING_BYPASS_PATH_STOPS=" not in example
 

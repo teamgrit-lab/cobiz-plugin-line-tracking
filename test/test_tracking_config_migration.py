@@ -37,6 +37,15 @@ def test_migration_rejects_conflicting_old_and_new_keys():
         validate_environment({'SWIN_L_DEVICE': 'cuda'})
 
 
+def test_removed_stop_settings_are_purged_without_changing_remaining_controls():
+    retired = ('STOP_ON_CAMERA_TIMESTAMP_INVALID', 'STOP_ON_PATH_UNAVAILABLE',
+               'STOP_ON_LOW_CONFIDENCE', 'STOP_ON_UNSAFE_TIMEOUT', 'STOP_ON_LATERAL_TARGET',
+               'UNSAFE_TIMEOUT_SEC', 'MAX_TARGET_HEADING_DEG')
+    retained = 'LINE_TRACKING_STOP_ON_CAMERA_STALE=true\nLINE_TRACKING_MAX_FORWARD_MPS=0.80\n'
+    original = ''.join('LINE_TRACKING_' + key + '=true\n' for key in retired) + retained
+    assert migrate(original) == retained
+
+
 def test_write_creates_private_backup_and_keeps_output_free_of_values(tmp_path):
     env = tmp_path / '.env'
     original = 'SWIN_L_MODEL_ID=/models/private/best\nSWIN_L_DEVICE=cuda\n'

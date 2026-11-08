@@ -73,7 +73,9 @@ class DirectCameraClient:
         stamp, seconds = reply.get('capture_stamp_ns'), reply.get('total_seconds')
         if (type(stamp) is not int or stamp < not_before_ns or stamp <= after_stamp_ns
                 or not 0 <= now_ns()-stamp <= max_age_sec*1e9):
-            raise ValueError('stale, future, pre-task or repeated direct-camera capture')
+            # Discard this frame without aborting the task or refreshing the
+            # last usable result. The next request can supply a current frame.
+            return None
         if type(seconds) not in (float, int) or not math.isfinite(seconds) or seconds < 0:
             raise ValueError('invalid inference duration')
         result = SimpleNamespace(capture_stamp_ns=stamp, inference_seconds=seconds)

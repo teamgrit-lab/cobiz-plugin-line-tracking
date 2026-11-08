@@ -17,8 +17,6 @@ def run_recovery(monkeypatch, scenario, *, extra_args=()):
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED", "true")
     for check in debug.AUTOMATIC_STOP_CHECKS:
         monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_" + check.upper(), "false")
-    # Exercise the short task safety timeout while running the longer search.
-    monkeypatch.setitem(debug.ENV, "LINE_TRACKING_STOP_ON_UNSAFE_TIMEOUT", "true")
     good = np.zeros((360, 640), np.uint8)
     good[:, :320] = 2
     detection = NS(mask=good.copy())

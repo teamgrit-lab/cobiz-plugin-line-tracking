@@ -76,9 +76,6 @@ def test_preview_yaw_is_bounded_and_keeps_available_path():
     )
     low_confidence_path = SmoothedPath(path.points_xy, 0.4, 0.1, path.source)
     assert preview_yaw(low_confidence_path, config) == preview_yaw(path, config)
-    assert preview_yaw(
-        low_confidence_path, replace(config, stop_on_low_confidence=True)
-    ) is None
 
 
 def test_preview_yaw_uses_endpoint_when_path_does_not_reach_lookahead():

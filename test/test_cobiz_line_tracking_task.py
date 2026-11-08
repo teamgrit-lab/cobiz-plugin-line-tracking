@@ -209,16 +209,14 @@ def test_invalid_duration_rejected(duration):
     assert tasks.active is None
 
 
-def test_sustained_unsafe_state_aborts_but_short_blockage_pauses():
-    tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=10, max_duration_sec=10))
-    tasks.handle_event(event(), now=0, rejection_reason=None)
+def test_prolonged_wait_does_not_abort_an_active_task():
+    tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=100, max_duration_sec=100))
+    tasks.handle_event(event(), now=0)
     assert tasks.tick(now=2.1, drive_reason="tracking") is None
-    assert tasks.tick(now=3, drive_reason="path_unavailable") is None
-    assert tasks.tick(now=4, drive_reason="tracking") is None
-    assert tasks.tick(now=5, drive_reason="camera_stale") is None
-    stopped = tasks.tick(now=7.1, drive_reason="camera_stale")
-    assert stopped["type"] == "TASK_ABORTED"
-    assert stopped["reason"] == "unsafe:camera_stale"
+    for now in (3, 5, 20, 60):
+        assert tasks.tick(now=now, drive_reason="waiting_for_path") is None
+        assert tasks.active is not None
+    assert tasks.tick(now=61, drive_reason="tracking") is None
 
 
 @pytest.mark.parametrize("reason", ["tracking_path_hold", "tracking_slow_turn", "tracking_path_recovery"])
@@ -237,7 +235,7 @@ def test_held_or_slow_turn_remains_permitted_motion_until_task_duration_ends(rea
     "path_recovery_confirming",
     "fcn_side_recovery",
 ])
-def test_search_can_finish_before_unsafe_timeout_but_honors_task_deadline(reason):
+def test_search_waits_until_the_enabled_task_deadline(reason):
     tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=50, max_duration_sec=50))
     tasks.handle_event(event(), now=0)
     assert tasks.tick(now=2.1, drive_reason="tracking") is None
@@ -248,13 +246,13 @@ def test_search_can_finish_before_unsafe_timeout_but_honors_task_deadline(reason
     assert terminal["reason"] == "tracking_unavailable:" + reason
 
 
-def test_exhausted_search_still_obeys_unsafe_timeout():
+def test_exhausted_search_does_not_abort_the_task():
     tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=50, max_duration_sec=50))
     tasks.handle_event(event(), now=0)
     tasks.tick(now=2.1, drive_reason="tracking")
-    assert tasks.tick(now=3., drive_reason="path_recovery_exhausted") is None
-    terminal = tasks.tick(now=5.1, drive_reason="path_recovery_exhausted")
-    assert terminal["reason"] == "unsafe:path_recovery_exhausted"
+    for now in (3., 5.1, 40.):
+        assert tasks.tick(now=now, drive_reason="path_recovery_exhausted") is None
+        assert tasks.active is not None
 
 
 def test_slow_turn_can_start_tracking_after_startup_hold():
@@ -262,26 +260,26 @@ def test_slow_turn_can_start_tracking_after_startup_hold():
     tasks.handle_event(event(), now=0)
     assert tasks.tick(now=2.1, drive_reason="tracking_slow_turn") is None
     assert tasks.tracking_seen is True
-    assert tasks.tick(now=3.0, drive_reason="path_lateral_target_large") is None
-    result = tasks.tick(now=5.1, drive_reason="path_lateral_target_large")
-    assert result["reason"] == "unsafe:path_lateral_target_large"
+    assert tasks.tick(now=3.0, drive_reason="waiting_for_path") is None
+    assert tasks.tick(now=5.1, drive_reason="waiting_for_path") is None
+    assert tasks.active is not None
 
 
 def test_startup_hold_aborts_at_deadline_when_never_ready():
     tasks = LineTrackingTasks(_enabled_policy(default_duration_sec=10, max_duration_sec=10))
     tasks.handle_event(event(), now=0, rejection_reason=None)
-    assert tasks.tick(now=1.99, drive_reason="path_unavailable") is None
-    stopped = tasks.tick(now=2.0, drive_reason="path_unavailable")
+    assert tasks.tick(now=1.99, drive_reason="waiting_for_path") is None
+    stopped = tasks.tick(now=2.0, drive_reason="waiting_for_path")
     assert stopped["type"] == "TASK_ABORTED"
-    assert stopped["reason"] == "startup:path_unavailable"
+    assert stopped["reason"] == "startup:waiting_for_path"
 
 
 def test_never_tracked_cannot_report_completed():
     tasks = LineTrackingTasks(
-        _enabled_policy(default_duration_sec=3, max_duration_sec=10, unsafe_timeout_sec=5)
+        _enabled_policy(default_duration_sec=3, max_duration_sec=10)
     )
     tasks.handle_event(event(), now=0, rejection_reason=None)
-    result = tasks.tick(now=3.1, drive_reason="path_unavailable")
+    result = tasks.tick(now=3.1, drive_reason="waiting_for_path")
     assert result["type"] == "TASK_ABORTED"
 
 
@@ -314,7 +312,6 @@ def test_default_policy_never_automatically_aborts_or_expires():
     for now in (0.1, 2.1, 4, 10001):
         assert tasks.tick(now=now, drive_reason='waiting_for_path') is None
         assert tasks.active is not None
-        assert tasks.unsafe_since is None
     assert tasks.tick(now=10002, drive_reason='tracking') is None
     assert tasks.tracking_seen is True
     result = tasks.handle_event({**event(), 'type': 'TASK_ABORTED'}, now=10003)
@@ -334,7 +331,6 @@ def test_startup_hold_is_independent_of_readiness_and_timeouts(hold):
 
 @pytest.mark.parametrize(('check', 'reason'), [
     ('startup_unready', 'startup:waiting_for_path'),
-    ('unsafe_timeout', 'unsafe:waiting_for_path'),
     ('task_timeout', 'tracking_unavailable:waiting_for_path'),
 ])
 def test_lifecycle_guards_can_be_reenabled_independently(check, reason):

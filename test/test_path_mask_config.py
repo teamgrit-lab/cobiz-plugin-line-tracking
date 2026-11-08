@@ -133,7 +133,9 @@ def test_task_paths_are_independent_and_active_task_selects_its_own_path():
     config = LocalPathConfig()
     smoothers = {key: LocalPathSmoother(config) for key in (0, 1, 2)}
 
-    estimates = debug.update_path_smoothers(mask, smoothers, config, 10.0)
+    estimates = debug.extract_path_estimates(mask, tuple(smoothers), config)
+    for mask_class, smoother in smoothers.items():
+        smoother.update(estimates[mask_class], 10.0)
     road = smoothers[1].current(10.1)
     sidewalk = smoothers[2].current(10.1)
     combined = smoothers[0].current(10.1)

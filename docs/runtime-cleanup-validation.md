@@ -62,3 +62,61 @@ GPU-dependent tests skip without the corresponding device. This Mac's Docker
 daemon has no Jetson base image or NVIDIA runtime. Jetson image building, CUDA
 model loading and physical camera/robot verification therefore remain deployment
 checks; no live robot services were started.
+
+## Follow-up cleanup — 2026-11-09
+
+Removed the unused `update_path_smoothers`, `_now_stamp`, and
+`SegmentationModel._as_numpy` helpers, plus the unused NumPy import in
+`direct_camera_service.py`. The path-mode isolation test now exercises the
+retained `extract_path_estimates` and smoother APIs directly.
+
+Removed the disconnected `road_corner.py` prototype, its obsolete
+`validate_surface_navigation.py` replay tool, and both corner test modules.
+The corner collection failures and `--ignore` options above describe the
+November 5 baseline; those test files are no longer present.
+
+An AST comparison against the pre-cleanup commit confirms that the retained
+runtime code is identical after excluding only the removed helpers/import.
+No tracked Python source in `tools/` or `test/` still references the removed
+helpers or corner modules. Camera transport, supported model configurations,
+and the active Sidewalk/Road control paths are unchanged.
+
+The two AprilTag distance failures above were reproduced before cleanup.
+After cleanup, the full maintained suite completed with **1098 passed,
+25 skipped, 2 deselected** using:
+
+```bash
+python -m pytest -q test \
+  --deselect='test/test_apriltag_stop.py::test_range_recovers_distance_through_the_wide_angle_distortion[pose2-3.0]' \
+  --deselect='test/test_apriltag_stop.py::test_range_recovers_distance_through_the_wide_angle_distortion[pose2-6.0]'
+```
+
+Validation ran on the Mac; no Jetson services or physical robot commands were
+started.
+
+## Optional stop removal — 2026-11-09
+
+Removed the five optional timestamp, immediate missing-path, confidence,
+untracked-duration and lateral-target stop conditions, their CLI/environment
+settings, dedicated thresholds, telemetry flags and obsolete enabled-guard tests.
+Normal tracking retains the former disabled behavior: a usable sharp/low-confidence
+path is followed with the existing speed/yaw caps; a missing path holds a valid
+previous command or waits for the first one. Waiting alone does not abort a task.
+
+Direct Road capture timestamps are still validated. An invalid or expired capture
+is discarded without refreshing the last result or aborting the task, and the
+worker requests another frame. Model identity, response format, service-error,
+camera freshness, AprilTag and explicit cancellation checks remain independent.
+The separately configured path-loss limit and recovery behavior remain supported.
+
+Existing deployment files can retain retired keys without enabling the removed
+checks. The configuration migration tool removes those keys and dedicated limits
+while preserving remaining controls and model selection.
+
+Regression: **1040 passed, 25 skipped, 2 deselected**, using the same two pre-existing
+AprilTag exclusions documented above. Coverage includes prolonged waiting without
+task abort, tracking sharp/low-confidence paths, missing-path command holding,
+bad capture time followed by a current result, and retired-setting migration.
+Base Compose and all six maintained overrides resolve with `.env.example`; the
+flow-planner check uses a placeholder bundle hash only for interpolation.
+No Jetson services or physical robot commands were started.

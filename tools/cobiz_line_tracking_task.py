@@ -1,4 +1,4 @@
-"""ROS-independent Cobiz LINE_TRACKING task lifecycle and safety timeout."""
+"""ROS-independent Cobiz LINE_TRACKING task lifecycle and optional task deadline."""
 
 from __future__ import annotations
 
@@ -13,16 +13,9 @@ from typing import Any, Mapping
 ACTION_NAME = "LINE_TRACKING"
 TRACKING_REASONS = frozenset(("tracking", "tracking_slow_turn", "tracking_path_hold",
                               "tracking_path_recovery"))
-PATH_RECOVERY_REASONS = frozenset((
-    "path_recovery_waiting", "path_recovery_scan_left", "path_recovery_hold_left",
-    "path_recovery_scan_right", "path_recovery_hold_right", "path_recovery_return",
-    "path_recovery_confirming",
-    "fcn_side_recovery",
-))
 TASK_STOP_CHECKS = (
     "startup_hold",
     "startup_unready",
-    "unsafe_timeout",
     "task_timeout",
 )
 _TASK_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
@@ -38,19 +31,16 @@ _ROUTES = {
 class TaskPolicy:
     default_duration_sec: float = 500.0
     max_duration_sec: float = 10000.0
-    unsafe_timeout_sec: float = 2.0
     startup_hold_sec: float = 2.0
     default_selected_mask: int = 2
     stop_on_startup_hold: bool = False
     stop_on_startup_unready: bool = False
-    stop_on_unsafe_timeout: bool = False
     stop_on_task_timeout: bool = False
 
     def validate(self) -> None:
         values = (
             self.default_duration_sec,
             self.max_duration_sec,
-            self.unsafe_timeout_sec,
             self.startup_hold_sec,
         )
         if not all(math.isfinite(value) and value > 0 for value in values):
@@ -165,7 +155,6 @@ class LineTrackingTasks:
         self.policy.validate()
         self.active: ActiveTask | None = None
         self.tracking_seen = False
-        self.unsafe_since: float | None = None
         self._recent_ids: deque[str] = deque(maxlen=256)
 
     def _remember(self, key: str) -> None:
@@ -242,7 +231,6 @@ class LineTrackingTasks:
             raw_id, key, device_id, device_name, now, duration, selected_mask
         )
         self.tracking_seen = False
-        self.unsafe_since = None
         return self._state(self.active, "TASK_STARTED")
 
     def tick(self, *, now: float, drive_reason: str) -> dict[str, Any] | None:
@@ -262,17 +250,6 @@ class LineTrackingTasks:
         tracked_before_this_tick = self.tracking_seen
         if drive_reason in TRACKING_REASONS:
             self.tracking_seen = True
-            self.unsafe_since = None
-        elif self.tracking_seen and drive_reason in PATH_RECOVERY_REASONS:
-            # A bounded search is intentional activity after tracking has begun.
-            # Do not let the shorter unsafe timeout abort it before the scan ends.
-            self.unsafe_since = None
-        elif not self.policy.stop_on_unsafe_timeout:
-            self.unsafe_since = None
-        elif self.unsafe_since is None:
-            self.unsafe_since = now
-        elif now - self.unsafe_since >= self.policy.unsafe_timeout_sec:
-            return self.finish("TASK_ABORTED", f"unsafe:{drive_reason}")
         if self.policy.stop_on_task_timeout and elapsed >= active.duration_sec:
             if tracked_before_this_tick and drive_reason in TRACKING_REASONS:
                 return self.finish("TASK_COMPLETED")
@@ -288,5 +265,4 @@ class LineTrackingTasks:
         result = self._state(active, state_type, reason)
         self.active = None
         self.tracking_seen = False
-        self.unsafe_since = None
         return result

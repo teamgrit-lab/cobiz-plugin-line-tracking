@@ -74,10 +74,7 @@ def choose_surface(
                 estimate.points_xy[:, 1],
             )
         )
-        if (
-            not math.isfinite(lateral)
-            or abs(lateral) > drive_config.max_lateral_target_m
-        ):
+        if not math.isfinite(lateral):
             continue
         return name, estimate
     return None

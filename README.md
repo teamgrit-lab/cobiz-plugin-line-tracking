@@ -119,7 +119,6 @@ LINE_TRACKING_APRILTAG_MAX_AGE_SEC=1.0
 LINE_TRACKING_APRILTAG_CONFIRM_WINDOW_SEC=1.0
 LINE_TRACKING_APRILTAG_CONFIRM_MIN_HITS=3
 LINE_TRACKING_MAX_FORWARD_MPS=0.50
-LINE_TRACKING_MAX_TARGET_HEADING_DEG=60.0
 ```
 
 ## 갈림길에서 좌우 경로 우선
@@ -160,8 +159,8 @@ LINE_TRACKING_BRANCH_HOLD_SEC=1.50
   기본 1.5초가 지나고 새 추론 3회에서 단일 통로가 확인되면 선택 상태를 해제한다.
   작업 시작·종료 시 초기화하며, 도로·보도·통합 마스크의 상태는 각각 독립적이다.
 - 선택된 가지가 사라지거나 대응이 모호하면 `branch_path_lost` 또는
-  `branch_match_ambiguous`로 정지한다. `LINE_TRACKING_STOP_ON_PATH_UNAVAILABLE=false`
-  등 일반 정지 설정으로 이 분기 보호를 우회하지 않는다. 선택 경로가 다시 확인되면
+  `branch_match_ambiguous`로 정지한다. 일반 정지 설정으로 이 분기 보호를 우회하지 않는다.
+  선택 경로가 다시 확인되면
   재개하며, 복구되지 않으면 작업 취소/재시작으로 선택 상태를 초기화할 수 있다.
 - 분기 중앙선은 선택된 구간의 여유 범위 안에서 공간적으로 다듬고, 점 사이의 선분도
   마스크 내부인지 확인한다. 두 가지를 평균 내는 시간 평활화는 적용하지 않는다.
@@ -184,9 +183,8 @@ LINE_TRACKING_BRANCH_HOLD_SEC=1.50
 
 급하게 꺾어야 할수록 전진 속도를 줄인다. 목표 방향은 기존 방식대로
 `heading = atan2(y_at_lookahead, lookahead)`로 계산하며 기본 lookahead는 4m다.
-허용 목표각은 좌우 각각 **60° 이하**로, 이전 횡방향 ±0.75m 제한을 대체한다.
-각도 제한이 켜져 있을 때 60°를 초과하면 `path_lateral_target_large`로 정지한다.
-60°는 Path 목표각이며 회전 속도는 기존 **±0.18rad/s(약 ±10.31°/초)**다.
+목표 방향이 크게 벗어나더라도 그 이유만으로 정지하지 않고 전진을 감속하면서
+회전한다. 회전 속도는 기존 **±0.18rad/s(약 ±10.31°/초)**다.
 
 ```text
 requested_yaw = heading_gain × heading_radians
@@ -213,33 +211,33 @@ forward_speed = max_forward × max_yaw / max(max_yaw, abs(requested_yaw))
 오류·프로세스 종료 시 정지는 항상 유지한다.
 
 감속 중 `drive_reason`은 `tracking_slow_turn`이며 정상 추종으로 처리한다.
-metrics의 `turn_speed_control`에서 목표각, 허용각, 전진·회전 명령을 확인할 수 있다.
-60°에서 전방 4m 기준 횡방향 한계는 약 6.93m다. 현재 BEV 반폭 4m와 Path 추출
-범위는 그대로이므로 허용각을 높여도 카메라가 60° 또는 90° 코너의 Path를 추가로
-검출하게 되지는 않는다. 감속은 코너 통과나 도로 경계 안의 주행을 보장하지 않는다.
+metrics의 `turn_speed_control`에서 목표각과 전진·회전 명령을 확인할 수 있다.
+현재 BEV 반폭 4m와 Path 추출 범위는 그대로다. 감속은 코너 통과나 도로 경계 안의
+주행을 보장하지 않는다.
 
-Jetson 적용 시 사용자가 `.env`의 `LINE_TRACKING_MAX_TARGET_HEADING_DEG=60.0`을
-확인하고 `docker compose up -d --build actual-activate`로 빌드·재생성한다.
+Jetson에는 `docker compose up -d --build actual-activate`로 빌드·재생성하여 적용한다.
 제거된 `LINE_TRACKING_ADAPTIVE_CONTROL`, `LINE_TRACKING_TURN_*` 등 예전 설정은
 사용하지 않는다. 모델/백엔드 설정은 유지한다.
 
 ## 자동 정지 설정
 
 모든 자동 정지 조건은 **`true`=사용, `false`=해제**이며 기본값은 전부 `false`다.
-기존 조건과 임계값은 유지하고, 각 조건의 적용 여부만 독립적으로 선택한다.
+이는 값을 지정하지 않은 코드 기본값이다. 운영 예제 `.env.example`은 전진 상한
+0.80m/s와 카메라 신선도·AprilTag·시작 대기·작업 시간 제한을 활성화한 값을 제공한다.
+남아 있는 조건의 적용 여부를 독립적으로 선택한다. 영상 시각 오류, 즉시 경로 소실,
+낮은 경로 신뢰도, 큰 횡방향 목표, 추종 불가 상태의 지속 시간만으로 정지·중단하는
+선택적 검사는 제거했다. 이 상태만으로 작업을 중단하지 않는다.
+제거된 환경변수가 기존 `.env`에 남아 있어도 읽지 않으며, 설정 마이그레이션 도구는
+해당 항목과 전용 임계값을 삭제한다. Road 직접 입력에서는 시각이 잘못된 프레임을
+버리고 다시 요청한다. 별도 영상 신선도 검사와 모델·응답 형식 검증은 유지한다.
 
 ```dotenv
 LINE_TRACKING_STOP_ON_CAMERA_STALE=false
 LINE_TRACKING_STOP_ON_INFERENCE_STALE=false
-LINE_TRACKING_STOP_ON_CAMERA_TIMESTAMP_INVALID=false
-LINE_TRACKING_STOP_ON_PATH_UNAVAILABLE=false
 LINE_TRACKING_STOP_ON_PATH_LOSS_LIMIT=false
-LINE_TRACKING_STOP_ON_LOW_CONFIDENCE=false
-LINE_TRACKING_STOP_ON_LATERAL_TARGET=false
 LINE_TRACKING_STOP_ON_APRILTAG=false
 LINE_TRACKING_STOP_ON_STARTUP_HOLD=false
 LINE_TRACKING_STOP_ON_STARTUP_UNREADY=false
-LINE_TRACKING_STOP_ON_UNSAFE_TIMEOUT=false
 LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 ```
 
@@ -249,15 +247,10 @@ LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 |---|---|
 | `CAMERA_STALE` | 카메라 수신/원본 시각 기준 5초 초과, 이력 없음 또는 잘못된 나이이면 정지 |
 | `INFERENCE_STALE` | 추론 완료/추론 원본 이미지 시각 기준 5초 초과, 이력 없음 또는 잘못된 나이이면 정지 |
-| `CAMERA_TIMESTAMP_INVALID` | 0 이하, 50ms 초과 미래, 5초 초과 과거, 중복·역순 이미지 시각을 거절하고 정지 |
-| `PATH_UNAVAILABLE` | 유한한 x/y 목표점을 만들 수 없으면 즉시 정지 |
-| `PATH_LOSS_LIMIT` | 선택한 Path가 연속 5회 추론에서 없으면 정지. 즉시 정지를 꺼도 독립 적용 |
-| `LOW_CONFIDENCE` | 신뢰도 0.49 미만 또는 NaN/Inf이면 정지. unrestricted 모드에서도 적용 |
-| `LATERAL_TARGET` | 목표각 절댓값이 설정 허용각(기본 60°)을 초과하면 정지 |
+| `PATH_LOSS_LIMIT` | 선택한 Path가 연속 5회 추론에서 없으면 정지. 기본값은 false |
 | `APRILTAG` | 후보 검출 즉시 정지하고, 1초 확인 창에서 같은 ID의 새 프레임 3회 확인 시 작업 완료 |
 | `STARTUP_HOLD` | 작업 시작 후 2초간 0 속도로 대기 |
 | `STARTUP_UNREADY` | 시작 2초 이후에도 추종을 한 번도 시작하지 못했다면 작업 중단 |
-| `UNSAFE_TIMEOUT` | 추종할 수 없는 상태가 연속 2초 지속되면 작업 중단 |
 | `TASK_TIMEOUT` | 요청한 작업 시간 도달 시 정지·종료. 기본 500초, 최대 10000초 |
 
 `LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED=true`가 기본값이다. 주행 중 영상 검출에서
@@ -308,23 +301,21 @@ LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 계속 생성되는 차도/인도 오분류 자체를 판별하거나 수정하지는 않는다.
 
 복구를 끄려면 `LINE_TRACKING_PATH_LOSS_RECOVERY_ENABLED=false` 또는
-`--no-path-loss-recovery-enabled`를 사용한다. 영상 전용 모드의 기존 명령 유지 동작에서는 `PATH_UNAVAILABLE=false`, `PATH_LOSS_LIMIT=true`이면 실패 1–4회는
-마지막 전진·회전 명령을 유지하고 5회째 정지한다. 둘 다 `false`이면 그 명령을 유지한다.
-`PATH_UNAVAILABLE=true`는 자동 탐색보다 우선하여 즉시 정지하고 탐색을 시작하지 않는다.
+`--no-path-loss-recovery-enabled`를 사용한다. 기존 명령 유지 동작에서
+`PATH_LOSS_LIMIT=true`이면 실패 1–4회는 마지막 전진·회전 명령을 유지하고 5회째
+`path_loss_limit`로 정지한다. `PATH_LOSS_LIMIT=false`이면 그 명령을 유지한다.
 복구가 활성화된 영상 경로 소실에는 3회 실패 정지 후 위 탐색 절차를 적용한다.
 확정한 분기 경로의 소실, 명시적 취소 및 처리 오류의 정지 조건도
 유지한다. 탐색 도중 카메라·추론 입력이 오래되거나 센서 오류가 있으면 자동
 정지한다. 이 탐색 정지는 일반 주행의 센서 정지 스위치와 독립적이다. 센서 오류는 영상
 검출 실패 횟수를 증가시키지 않으며, 탐색이 진행 중이거나 실패한 뒤에는 저장된 전진
-명령을 되살리지 않는다. `UNSAFE_TIMEOUT=true`여도 정상 대기·탐색·확인에는 2초 제한을
-적용하지 않지만 센서/장애물/분기 정지 및 탐색 실패에는 적용한다. `TASK_TIMEOUT=true`의
-작업 종료 시간은 탐색 중에도 유지한다.
+명령을 되살리지 않는다. 대기·탐색·복구 실패가 오래 지속되어도 그 이유만으로 작업을
+중단하지 않는다. `TASK_TIMEOUT=true`의 작업 종료 시간은 탐색 중에도 유지한다.
 
 `STARTUP_HOLD=false`이면 별도의 2초 시작 대기는 없지만, 작업 수락 후 새 영상의
 첫 추론과 경로 계산이 끝나기 전까지는 0 속도로 대기한다. 모델은 메모리에 유지하며
 작업 전·종료 후에는 영상 추론을 수행하지 않는다. `STARTUP_UNREADY=true`이면
 이 첫 추론 대기 시간도 기존의 시작 제한 시간에 포함된다.
-`STARTUP_UNREADY`와 `UNSAFE_TIMEOUT`은 서로 독립적인 중단 조건이다.
 `TASK_TIMEOUT=false`이면 payload의 `duration_sec`에 도달해도 작업은 계속된다.
 명시적 취소, 처리 오류·프로세스 종료, 또는 별도로 켠 자동 종료 조건이 작업을 끝낸다.
 
@@ -336,11 +327,11 @@ LINE_TRACKING_STOP_ON_TASK_TIMEOUT=false
 기존 역방향 설정 `LINE_TRACKING_BYPASS_PATH_STOPS`와 `--bypass-path-stops`는
 제거했다. 기존 `.env`에서 해당 키를 삭제하고 위 설정으로 교체한다. 직접 실행 환경에
 옛 키가 남아 있으면 설정 오류로 안내하며, Compose는 그 키를 전달하지 않는다.
-기존 `.env`에 명시한 `STOP_ON_*=true`는 계속 적용되므로 전부 해제하려면 기존 값도
+남아 있는 `.env`의 `STOP_ON_*=true`는 계속 적용되므로 전부 해제하려면 기존 값도
 `false`로 변경한다. 코드를 반영한 이미지를 빌드하고 서비스를 재생성해야 적용된다.
 CLI는 `--stop-on-camera-stale`처럼 켜고 `--no-stop-on-camera-stale`처럼 끈다.
 
-metrics의 `stop_checks`에 12개 설정을 표시한다. `path_yaw_held`,
+metrics의 `stop_checks`에 남은 7개 설정을 표시한다. `path_yaw_held`,
 `path_unavailable_inferences`, `path_unavailable_limit`(`5`)로 명령 유지와 실패 횟수를
 확인한다. `path_recovery`에는 탐색 활성 여부(`active`), 단계(`phase`), 영상 검출 실패
 횟수(`failed_inferences`), 정지 기준(`limit=3`), 대기·회전 설정(`wait_sec`, `yaw_rps`,
@@ -502,7 +493,6 @@ usable rows are sufficient. No path is produced when fewer than two rows have
 a qualifying region, including when the selected class is absent from the
 ROI. An invalid new estimate clears the previous path. Valid-ratio filtering,
 temporal smoothing, and the smoother's hold expiry are bypassed in this mode.
-The independent `STOP_ON_LOW_CONFIDENCE=true` drive check still applies at 0.49.
 Sparse semantic observations can be extrapolated over
 the full forward range; neither fitting nor gap filling establishes obstacle
 clearance. With unrestricted mode disabled, the default valid-row requirement
@@ -546,16 +536,13 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 |---|---|
 | `camera_stale` | 카메라 나이 검사 실패. 저장한 전진·회전 명령 삭제 |
 | `inference_stale` | 추론 나이 검사 실패. 저장한 전진·회전 명령 삭제 |
-| `camera_timestamp_invalid` | 이미지 시각 검사 실패. 콜백에서 0 속도 전송 및 저장 명령 삭제. 이후 새 유효 프레임의 추론 성공까지 정지하며, 카메라 검사도 켜져 있으면 보통 `camera_stale`로 표시 |
 | `camera_conversion_error` | 메타데이터 검사 또는 선택 프레임 변환 예외. 모든 자동 조건이 꺼져도 정지 및 저장 명령 삭제. 새 유효 프레임의 추론 성공까지 유지하며 `camera_fault_reason`으로 확인 |
-| `path_unavailable` | 즉시 Path 정지 또는 5회 실패 제한이 활성화되어 정지 |
+| `path_loss_limit` | 별도 5회 실패 제한이 활성화된 상태에서 정지 |
 | `waiting_for_path` | Path 정지는 꺼져 있지만 현재 작업에 저장된 유효 명령도 없어 0 속도 대기 |
 | `path_recovery_waiting` | 영상 경로 검출 3회 연속 실패로 정지한 뒤 기본 1초 대기 |
 | `path_recovery_hold_left`, `path_recovery_hold_right` | ±90° 끝에서 해당 방향의 새 영상 결과를 기다리며 정지 |
 | `path_recovery_confirming` | 재발견한 경로를 새 프레임으로 연속 확인하며 정지 |
 | `path_recovery_exhausted` | 좌우 탐색 후 원래 방향에서 정지. 새 경로 연속 확인 시 재개 가능 |
-| `path_low_confidence` | 신뢰도 0.49 미만 또는 NaN/Inf |
-| `path_lateral_target_large` | 목표각 절댓값이 허용각(기본 60°) 초과 |
 | `apriltag_verifying` | 후보 확인 중. `StopMove`와 0 속도로 정지 |
 
 ### 정지가 작업 중단으로 이어지는 조건
@@ -563,8 +550,7 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 | `/task_state.reason` | 조건과 결과 |
 |---|---|
 | `startup:<사유>` | `STOP_ON_STARTUP_UNREADY=true`이고 시작 후 2초가 지났는데 추종 또는 허용된 명령 유지가 한 번도 시작되지 못한 경우 `TASK_ABORTED`. 시작 대기 설정과 독립적으로 적용 |
-| `unsafe:<사유>` | `STOP_ON_UNSAFE_TIMEOUT=true`이고 추종할 수 없는 상태가 연속 `LINE_TRACKING_UNSAFE_TIMEOUT_SEC`(기본 2초) 지속되면 `TASK_ABORTED`. 이유가 바뀌어도 그 사이 정상 추종/허용된 회전 유지가 없으면 타이머는 계속 진행 |
-| `tracking_unavailable:<사유>` | `STOP_ON_TASK_TIMEOUT=true`이고 작업 제한 시간에 도달했지만 정상 완료 조건(이전에 추종했고 현재도 추종/허용된 회전 유지 중)을 만족하지 못하면 `TASK_ABORTED`. 앞의 startup/unsafe 조건이 먼저 충족되면 그 사유가 우선 |
+| `tracking_unavailable:<사유>` | `STOP_ON_TASK_TIMEOUT=true`이고 작업 제한 시간에 도달했지만 정상 완료 조건(이전에 추종했고 현재도 추종/허용된 회전 유지 중)을 만족하지 못하면 `TASK_ABORTED`. 앞의 startup 조건이 먼저 충족되면 그 사유가 우선 |
 | `task_aborted_by_server` | 현재 task ID에 대한 서버의 `TASK_ABORTED` 이벤트 수신. 즉시 정지 요청 후 작업 중단 |
 | `inference_error` | 모델 추론 또는 Path 처리 워커에서 예외. 정지 요청, 작업 중단 후 ROS 종료. 예외로 전달된 CUDA OOM도 여기에 포함 |
 | `publish_error` | 제어 타이머에서 명령·Path·metrics 발행 등을 처리하다 예외. 정지 재시도 후 작업 중단 |
@@ -572,12 +558,10 @@ does not repair an inaccurate path or guarantee a sharp bend can be followed.
 | `sigterm` | SIGTERM 수신 시 활성 작업을 중단하고 정지 요청 후 종료 |
 | `shutdown` | Ctrl+C 또는 ROS 실행 종료의 정리 단계에서 아직 활성인 작업을 중단하고 정지 요청 |
 
-예를 들어 즉시 Path 정지는 끄고 `PATH_LOSS_LIMIT`과 `UNSAFE_TIMEOUT`을 켜면,
-5회째 Path 실패에서 정지하고 그 상태가 2초 지속될 때 `unsafe:path_unavailable`로
-중단된다. 중단 전에 유효 Path가 돌아오면 실패 횟수와 unsafe 타이머가 초기화된다.
-중단된 작업은 Path가 돌아와도 자동 재시작하지 않는다. 두 설정 모두 `false`이면
-이 실패 횟수나 타이머로 정지·중단하지 않는다. AprilTag 정지를 켠 경우에는
-확인 창을 먼저 처리하므로 일반 작업 타이머의 판정 시점이 늦춰질 수 있다.
+`PATH_LOSS_LIMIT=true`이면 5회째 경로 실패에서 정지하지만, 정지가 오래 지속된다는
+이유로 작업을 중단하지 않는다. 유효 경로가 돌아오면 실패 횟수가 초기화되고 재개한다.
+AprilTag 정지를 켠 경우에는 확인 창을 먼저 처리하므로 일반 작업 타이머의 판정 시점이
+늦춰질 수 있다.
 
 ### 오류가 아닌 정지·정상 완료
 

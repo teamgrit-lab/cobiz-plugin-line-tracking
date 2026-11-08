@@ -316,20 +316,6 @@ def _waiting_planner_status(args, mask_class):
     return {'backend': backend, 'ready': False, 'reason': backend+'_waiting'}
 
 
-def update_path_smoothers(
-    selected_mask: np.ndarray,
-    smoothers: dict[int, LocalPathSmoother],
-    config: LocalPathConfig,
-    timestamp_sec: float,
-) -> dict[int, LocalPathEstimate | None]:
-    """Keep all configured surface candidates current from one inference."""
-
-    estimates = extract_path_estimates(selected_mask, tuple(smoothers), config)
-    for mask_class, smoother in smoothers.items():
-        smoother.update(estimates[mask_class], timestamp_sec)
-    return estimates
-
-
 def _parse_polygon(value: str) -> tuple[float, ...]:
     try:
         values = tuple(
@@ -393,7 +379,6 @@ def _local_path_config_from_args(args: argparse.Namespace) -> LocalPathConfig:
 def _drive_config_from_args(args: argparse.Namespace) -> DriveConfig:
     config = DriveConfig(
         max_forward_mps=args.max_forward_mps,
-        max_target_heading_deg=args.max_target_heading_deg,
         path_loss_recovery_enabled=args.path_loss_recovery_enabled,
         path_recovery_wait_sec=args.path_recovery_wait_sec,
         path_recovery_yaw_rps=args.path_recovery_yaw_rps,
@@ -760,10 +745,6 @@ def run_mcap(args):
     return 0
 
 
-def _now_stamp(node: Any) -> Any:
-    return node.get_clock().now().to_msg()
-
-
 def _stamp_ns(header: Any) -> int:
     """Require a usable source timestamp for live driving freshness checks."""
 
@@ -982,7 +963,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                     TaskPolicy(
                         default_duration_sec=args.default_task_duration_sec,
                         max_duration_sec=args.max_task_duration_sec,
-                        unsafe_timeout_sec=args.unsafe_timeout_sec,
                         default_selected_mask=args.path_mask_class,
                         **{
                             "stop_on_" + name: getattr(args, "stop_on_" + name)
@@ -1328,7 +1308,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.tasks.active = ActiveTask(key, key, None, None, now,
                         args.max_task_duration_sec, context["selected_mask"])
                     self.tasks.tracking_seen = False
-                    self.tasks.unsafe_since = None
                     self.publish_zero_move("segment_start")
                     self.set_task_inference(True)
                     self.navigation_status("ACCEPTED")
@@ -1651,7 +1630,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     path = None
             if decision.reason in (
                 "camera_stale", "inference_stale",
-                "camera_timestamp_invalid", "camera_conversion_error",
+                "camera_conversion_error",
             ) or decision.reason.startswith("branch_"):
                 self.last_valid_yaw_rate = None
                 self.last_valid_forward_mps = None
@@ -1892,25 +1871,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             try:
                 source_stamp_ns = _stamp_ns(message.header) if task_mode else None
                 if fcn is not None and self.fcn_session_start_ns is not None and source_stamp_ns < self.fcn_session_start_ns:
-                    return
-                if task_mode and self.drive_config.stop_on_camera_timestamp_invalid and (
-                    not _live_source_stamp(
-                        source_stamp_ns,
-                        self.get_clock().now().nanoseconds,
-                        self.drive_config.max_camera_age_sec,
-                    )
-                    or (
-                        state["last_image_stamp_ns"] is not None
-                        and source_stamp_ns <= state["last_image_stamp_ns"]
-                    )
-                ):
-                    with state_lock:
-                        state["last_image_at"] = None
-                        state["camera_fault_reason"] = "camera_timestamp_invalid"
-                        state["camera_fault_min_sequence"] = state["sequence"]
-                    self.last_valid_yaw_rate = None
-                    self.last_valid_forward_mps = None
-                    self.publish_drive(DriveDecision.stop("camera_timestamp_invalid"))
                     return
                 validate_camera_image(message, self.bridge)
                 self.accept_image(message, source_stamp_ns)
@@ -2176,7 +2136,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                         math.degrees(math.atan2(lateral, self.drive_config.lookahead_m))
                         if lateral is not None else None
                     ),
-                    "max_target_heading_deg": self.drive_config.max_target_heading_deg,
                     "command_forward_mps": drive_decision.vx,
                     "command_yaw_deg_sec": math.degrees(drive_decision.yaw_rate),
                 }
@@ -2214,12 +2173,8 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "camera_freshness": self.drive_config.stop_on_camera_stale,
                     "inference_freshness": self.drive_config.stop_on_inference_stale,
                     "path_available": (
-                        self.drive_config.stop_on_path_unavailable
-                        or (
-                            self.drive_config.stop_on_path_loss_limit
-                            and self.path_unavailable_inferences
-                            >= MAX_PATH_UNAVAILABLE_INFERENCES
-                        )
+                        self.drive_config.stop_on_path_loss_limit
+                        and self.path_unavailable_inferences >= MAX_PATH_UNAVAILABLE_INFERENCES
                     ),
                 })
                 metrics["camera_fault_reason"] = state["camera_fault_reason"]
@@ -2827,12 +2782,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 "--path-recovery-confirm-frames", type=int,
                 default=_env_int("LINE_TRACKING_PATH_RECOVERY_CONFIRM_FRAMES", 2),
             )
-            live.add_argument(
-                "--max-target-heading-deg",
-                type=float,
-                default=_env_float("LINE_TRACKING_MAX_TARGET_HEADING_DEG", 60.0),
-                help="Maximum absolute path target bearing; independent of yaw rate",
-            )
         if mode in ("task-drive", "navigation-worker"):
             live.add_argument(
                 "--task-event-topic",
@@ -2851,11 +2800,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 "--max-task-duration-sec",
                 type=float,
                 default=_env_float("LINE_TRACKING_MAX_DURATION_SEC", 10000.0),
-            )
-            live.add_argument(
-                "--unsafe-timeout-sec",
-                type=float,
-                default=_env_float("LINE_TRACKING_UNSAFE_TIMEOUT_SEC", 2.0),
             )
         if mode == "navigation-worker":
             live.add_argument("--segment-command-topic", default="/line_tracking/segment_command")
@@ -2921,9 +2865,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error(str(error))
     if args.mode == "task-drive" and "LINE_TRACKING_BYPASS_PATH_STOPS" in ENV:
         parser.error(
-            "LINE_TRACKING_BYPASS_PATH_STOPS was removed; remove it and use "
-            "LINE_TRACKING_STOP_ON_PATH_UNAVAILABLE / PATH_LOSS_LIMIT / "
-            "LOW_CONFIDENCE / LATERAL_TARGET (true=enabled, false=disabled)"
+            "LINE_TRACKING_BYPASS_PATH_STOPS was removed; remove it. "
+            "The separate LINE_TRACKING_STOP_ON_PATH_LOSS_LIMIT option remains available."
         )
     if args.path_mask_class not in PATH_MASK_CLASSES:
         parser.error(

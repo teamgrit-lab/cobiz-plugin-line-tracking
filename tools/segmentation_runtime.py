@@ -383,10 +383,6 @@ class SegmentationModel:
         elif self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
 
-    @staticmethod
-    def _as_numpy(tensor: torch.Tensor) -> np.ndarray:
-        return tensor.detach().float().cpu().numpy()
-
     def _refine_road_components(
         self,
         road: np.ndarray,

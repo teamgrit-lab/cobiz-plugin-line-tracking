@@ -32,7 +32,7 @@ def test_performance_summary_reports_latency_percentiles_and_completion_rate():
     assert summary["processing_p99_ms"] == pytest.approx(348.5)
 
 
-@pytest.mark.parametrize("mode", ["ros2", "task-drive", "navigation-worker"])
+@pytest.mark.parametrize("mode", ["ros2", "task-drive"])
 def test_live_inference_has_no_rate_setting(monkeypatch, mode):
     monkeypatch.setitem(debug.ENV, "LINE_TRACKING_INFERENCE_HZ", "invalid")
     args = debug.parse_args([mode])
@@ -40,6 +40,12 @@ def test_live_inference_has_no_rate_setting(monkeypatch, mode):
     assert not hasattr(args, "sample_hz")
     with pytest.raises(SystemExit):
         debug.parse_args([mode, "--inference-hz", "2.5"])
+
+
+def test_retired_worker_mode_is_not_an_accepted_runtime_entrypoint():
+    with pytest.raises(SystemExit) as error:
+        debug.parse_args(["navigation-worker"])
+    assert error.value.code == 2
 
 
 def test_task_drive_defaults(monkeypatch):

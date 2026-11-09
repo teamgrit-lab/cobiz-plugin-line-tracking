@@ -22,8 +22,7 @@ sidewalk``, every camera frame is inferred without path processing.
 The ``ros2`` mode publishes only path and metrics topics. The
 task-driven mode retains the loaded model but only processes camera frames
 while a Cobiz task is accepted, and publishes direct Unitree Sport Move requests.
-The navigation-worker mode reuses that engine with leased internal commands and
-no Cobiz task or direct Sport ownership. Live modes require Jetson ROS/PyTorch.
+Live modes require Jetson ROS/PyTorch.
 """
 
 from __future__ import annotations
@@ -67,7 +66,6 @@ from segmentation_runtime import (
 )
 from cobiz_line_tracking_task import (
     TASK_STOP_CHECKS,
-    TRACKING_REASONS,
     ActiveTask,
     LineTrackingTasks,
     TaskPolicy,
@@ -75,8 +73,6 @@ from cobiz_line_tracking_task import (
 )
 from connectome_client import ConnectomeClient, ConnectomePathTracker, reference_stop_reason
 from connectome_surface import PlannerConfig
-from navigation_segment import NavigationSegment
-from standalone_control import StandaloneControl
 from segmentation_utils import upscale_mask
 from local_path import (
     DEFAULT_ROI_POLYGON,
@@ -99,7 +95,6 @@ from perception_process import PerceptionProcess
 from surface_path_planner import SurfacePathPlanner, uses_connectome
 from fcn360_road import FcnRoadPlanner, mask_topic, read_masks, side_recovery_yaw
 from surface_segmenter import FrontRoadInferenceError, SurfaceSegmenter
-from waypoint_guidance import WaypointGuide
 from r50_checkpoint import validate_checkpoint
 from drive_control import (
     DRIVE_STOP_CHECKS,
@@ -271,14 +266,6 @@ def active_path_mask_class(active_task: ActiveTask | None, default: int) -> int:
     """Use the Cobiz task's class only for the lifetime of that task."""
 
     return active_task.selected_mask if active_task is not None else default
-
-
-def _waypoint_stop_reason(status):
-    """Keep branch constraints; ordinary missing paths use configured stop/recovery."""
-    if status.get("ready"):
-        return None
-    reason = status.get("reason", "waypoint_waiting")
-    return None if reason in ("waypoint_waiting", "waypoint_path_unavailable") else reason
 
 
 def extract_path_estimates(selected_mask, mask_classes, config):
@@ -854,24 +841,7 @@ def run_ros2(args: argparse.Namespace) -> int:
             "and a Jetson-compatible PyTorch/Transformers environment"
         ) from error
 
-    navigation_mode = args.mode == "navigation-worker"
-    task_mode = args.mode in ("task-drive", "navigation-worker")
-    legacy_flags = ({"stop_on_" + name: getattr(args, "stop_on_" + name)
-                     for name in AUTOMATIC_STOP_CHECKS} if task_mode else {})
-    if task_mode:
-        legacy_flags["path_loss_recovery_enabled"] = args.path_loss_recovery_enabled
-
-    def configure_flags(surface):
-        for name, value in legacy_flags.items():
-            setattr(args, name, value)
-        if surface:
-            # Motion stop/recovery settings are shared with LINE_TRACKING.
-            # The parent Navigation task still owns segment completion.
-            for name in (*TASK_STOP_CHECKS, "apriltag"):
-                setattr(args, "stop_on_" + name, False)
-
-    if navigation_mode:
-        configure_flags(True)
+    task_mode = args.mode == "task-drive"
     Request = None
     if task_mode:
         try:
@@ -887,8 +857,6 @@ def run_ros2(args: argparse.Namespace) -> int:
         _validate_task_drive_preflight(args)
     local_config = _local_path_config_from_args(args)
     planner = _surface_planner_from_args(args, local_config)
-    waypoint_guide = WaypointGuide(local_config, PlannerConfig(
-        half_width_m=args.robot_half_width_m, margin_m=args.path_margin_m))
     # Morphology must not create an all-core OpenCV pool alongside the ROS
     # sensor executor and CUDA worker. Match the existing CPU thread budget.
     cv2.setNumThreads(2)
@@ -915,7 +883,6 @@ def run_ros2(args: argparse.Namespace) -> int:
         "path_unavailable_inferences": {mask_class: 0 for mask_class in smoothers},
         "path_recovery_inferences": {key: 0 for key in smoothers},
         "semantic_path_missing": {key: False for key in smoothers},
-        "waypoint_guidance": {},
         "performance_inference_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_processing_seconds": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
         "performance_completion_times": deque(maxlen=PERFORMANCE_SAMPLE_WINDOW),
@@ -939,7 +906,6 @@ def run_ros2(args: argparse.Namespace) -> int:
     class DebugNode(Node):
         def __init__(self) -> None:
             super().__init__(
-                "line_tracking_navigation_worker" if navigation_mode else
                 "line_tracking_task_drive" if task_mode else "line_tracking_runtime"
             )
             if (
@@ -1051,23 +1017,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 reliability=ReliabilityPolicy.RELIABLE,
             )
             self.command_publisher = None
-            self.navigation = NavigationSegment() if navigation_mode else None
-            self.standalone = StandaloneControl() if navigation_mode else None
-            self.pending_standalone_report = None
-            self.released_sport_publisher = None
-            self.navigation_status_publisher = None
-            if navigation_mode:
-                self.command_publisher = self.create_publisher(
-                    String, args.segment_velocity_topic, self.command_qos)
-                self.navigation_status_publisher = self.create_publisher(
-                    String, args.segment_status_topic, output_qos)
-                self.create_subscription(String, args.segment_command_topic,
-                                         self.on_navigation_command, output_qos)
-                self.navigation_velocity_publisher = self.command_publisher
-                self.task_request_publisher = self.create_publisher(
-                    String, "/line_tracking/task_request", output_qos)
-                self.create_subscription(String, "/line_tracking/task_control",
-                                         self.on_task_control, output_qos)
             self.task_state_publisher = (
                 self.create_publisher(String, args.task_state_topic, output_qos)
                 if task_mode
@@ -1137,12 +1086,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     "and temporal smoothing are bypassed; explicit drive stop checks "
                     "still apply"
                 )
-            if navigation_mode:
-                self.get_logger().info(
-                    "Navigation surface worker ready; model loaded, inference paused; "
-                    "no Cobiz task subscription or direct Sport publisher"
-                )
-            elif task_mode:
+            if task_mode:
                 self.get_logger().info(
                     "Cobiz LINE_TRACKING task listener ready; model loaded, camera "
                     "inference paused until task acceptance; Sport publisher absent"
@@ -1181,12 +1125,9 @@ def run_ros2(args: argparse.Namespace) -> int:
                     self.abort_active_task("slam_stop_publish_error")
 
         def stop_slam_localization(self, *, force: bool = False) -> None:
-            # STOP must name SLAM's retained Navigation session, not this task.
-            # Navigation-owned segments still need localization for guidance.
+            # STOP must name SLAM's retained localization session, not this task.
             now = time.monotonic()
-            if (self.tasks is None or self.tasks.active is None
-                    or self.slam_localization is None
-                    or (navigation_mode and not self.standalone.ready(now))):
+            if (self.tasks is None or self.tasks.active is None or self.slam_localization is None):
                 return
             if (not force and self.last_slam_stop_at is not None
                     and now - self.last_slam_stop_at < 1.0):
@@ -1195,136 +1136,12 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "command": "STOP", **self.slam_localization, "grace_sec": 0})))
             self.last_slam_stop_at = now
 
-        def configure_worker_owner(self, surface):
-            configure_flags(surface)
-            self.drive_config = _drive_config_from_args(args)
-            self.path_search = PathLossRecovery(self.drive_config, output_hz=args.output_hz)
-            self.tasks.policy = replace(self.tasks.policy, **{
-                "stop_on_" + name: getattr(args, "stop_on_" + name) for name in TASK_STOP_CHECKS})
-
-        def request_task_control(self, command=None):
-            self.task_request_publisher.publish(String(data=json.dumps(
-                self.standalone.request(self.get_clock().now().nanoseconds / 1e9, command))))
-
-        def on_task_control(self, message):
-            try:
-                body = json.loads(message.data)
-            except (TypeError, ValueError):
-                return
-            with state_lock:
-                effect = self.standalone.receive(body, time.monotonic(),
-                                                self.get_clock().now().nanoseconds / 1e9)
-                if effect in ("REJECTED", "LOST"):
-                    self.abort_active_task(body.get("reason") or "standalone_control_lost")
-                elif effect == "START":
-                    try:
-                        self.configure_worker_owner(False)
-                        self.tasks.active = replace(self.tasks.active, started_at=time.monotonic())
-                        self.stop_slam_localization(force=True)
-                        self.command_publisher = self.create_publisher(
-                            Request, args.sport_request_topic, self.command_qos)
-                        self.apriltags.begin_task(
-                            ids=self.latest_apriltag_ids if args.stop_on_apriltag else (),
-                            frame_key=self.latest_apriltag_frame_key, now=time.monotonic())
-                        if not self.publish_hard_stop("standalone_start"):
-                            raise RuntimeError("initial hard stop publication failed")
-                        self.set_task_inference(True)
-                        self.publish_task_state(self.pending_standalone_report)
-                        self.pending_standalone_report = None
-                    except Exception as error:
-                        self.get_logger().error(f"standalone control start failed: {error}")
-                        self.abort_active_task("control_publisher_error")
-
-        def on_shared_task_event(self, event, now):
-            releasing = self.released_sport_publisher is not None
-            rejection = ("navigation_segment_busy" if self.navigation.active is not None else
-                         "control_release_pending" if releasing else None)
-            previous = self.tasks.active
-            body = self.tasks.handle_event(event, now=now, rejection_reason=rejection)
-            if body is None:
-                return
-            if body["type"] == "TASK_STARTED":
-                self.set_task_inference(False)
-                self.apriltags.reset_task()
-                self.terminal_apriltag_status = None
-                self.apriltag_confirmed_range_m = None
-                self.apriltag_window_resolved_at = None
-                self.pending_standalone_report = body
-                self.standalone.begin(self.tasks.active.key, now)
-                self.request_task_control()
-                return
-            if previous is not None and self.tasks.active is None:
-                self.apriltags.reset_task()
-                self.release_task_control("task_aborted_by_server")
-            self.publish_task_state(body)
-
-        def navigation_status(self, state, *, context=None, reason=""):
-            context = context or self.navigation.active
-            if context is not None:
-                self.navigation_status_publisher.publish(String(data=json.dumps({
-                    **self.navigation.identity(context), "protocol": 1, "state": state,
-                    "stamp_sec": self.get_clock().now().nanoseconds / 1e9, "reason": reason,
-                    "waypoint_guidance": bool(context.get("guidance")),
-                })))
-
-        def stop_navigation_segment(self, reason="", *, error=False, context=None):
-            with state_lock:
-                context = context or self.navigation.active
-                self.set_task_inference(False)
-                self.tasks.active = None
-                if context is not None:
-                    zero = self.navigation.velocity(drive_to_sport_move(vx=0, vy=0, yaw_rate=0),
-                        stamp=self.get_clock().now().nanoseconds / 1e9, context=context)
-                    self.command_publisher.publish(String(data=json.dumps(zero)))
-                self.navigation.close(reason, error=error)
-                self.navigation_status("ERROR" if error else "STOPPED", context=context, reason=reason)
-
-        def on_navigation_command(self, message):
-            try:
-                body = json.loads(message.data)
-            except (ValueError, TypeError):
-                return
-            if not isinstance(body, dict):
-                return
-            now = time.monotonic()
-            with state_lock:
-                if (body.get("command") == "START" and
-                        (self.standalone.context is not None or self.released_sport_publisher is not None)):
-                    effect = NavigationSegment().handle(body, now=now,
-                        ros_now=self.get_clock().now().nanoseconds / 1e9)
-                    if effect is not None:
-                        self.navigation.remember(effect, "REJECTED", "standalone_task_busy")
-                        self.navigation_status("REJECTED", context=effect, reason="standalone_task_busy")
-                    return
-                effect = self.navigation.handle(body, now=now,
-                    ros_now=self.get_clock().now().nanoseconds / 1e9)
-                if effect is None:
-                    return
-                if effect["effect"] == "START":
-                    self.set_task_inference(False)
-                    self.configure_worker_owner(True)
-                    context = self.navigation.active
-                    key = context["session_id"] + ":" + context["segment_id"]
-                    self.tasks.active = ActiveTask(key, key, None, None, now,
-                        args.max_task_duration_sec, context["selected_mask"])
-                    self.tasks.tracking_seen = False
-                    self.publish_zero_move("segment_start")
-                    self.set_task_inference(True)
-                    self.navigation_status("ACCEPTED")
-                elif effect["effect"] == "STOP":
-                    self.stop_navigation_segment(context=effect)
-                else:
-                    self.navigation_status(effect["state"], context=effect,
-                                           reason=effect.get("reason", ""))
 
         def publish_zero_move(self, reason: str) -> None:
             self.publish_drive(DriveDecision.stop(reason))
 
         def publish_hard_stop(self, reason: str) -> bool:
             if self.command_publisher is None:
-                return True
-            if navigation_mode and not (self.standalone.context and self.standalone.granted):
-                self.publish_zero_move(reason)
                 return True
             assert Request is not None
             succeeded = True
@@ -1354,8 +1171,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 return
             body = self.tasks.finish("TASK_COMPLETED", reason)
             self.set_task_inference(False)
-            if navigation_mode:
-                self.release_task_control(reason)
             self.last_valid_yaw_rate = None
             self.last_valid_forward_mps = None
             if body is not None:
@@ -1461,7 +1276,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 }
                 state["path_recovery_inferences"] = {key: 0 for key in smoothers}
                 state["semantic_path_missing"] = {key: False for key in smoothers}
-                state['waypoint_guidance'] = {}
                 for key in (
                     "performance_inference_seconds", "performance_processing_seconds",
                     "performance_completion_times",
@@ -1491,29 +1305,15 @@ def run_ros2(args: argparse.Namespace) -> int:
             self.set_task_inference(False)
             self.last_valid_yaw_rate = None
             self.last_valid_forward_mps = None
-            if navigation_mode and self.standalone.context is not None:
-                self.publish_hard_stop(reason)
-                self.request_task_control("RELEASE")
-                if self.command_publisher is not self.navigation_velocity_publisher:
-                    self.released_sport_publisher = self.command_publisher
-                    self.stop_until = time.monotonic() + 1.0
-                self.command_publisher = self.navigation_velocity_publisher
-                self.standalone.close()
-                self.pending_standalone_report = None
-                self.configure_worker_owner(True)
-            elif self.command_publisher is not None:
+            if self.command_publisher is not None:
                 self.publish_hard_stop(reason)
                 self.stop_until = time.monotonic() + 1.0
 
         def abort_active_task(self, reason: str) -> None:
-            if navigation_mode and self.standalone.context is None:
-                self.stop_navigation_segment(reason, error=True)
-                return
             if self.tasks is None:
                 return
-            kind = "TASK_REJECTED" if self.pending_standalone_report is not None else "TASK_ABORTED"
             self.release_task_control(reason)
-            body = self.tasks.finish(kind, reason)
+            body = self.tasks.finish("TASK_ABORTED", reason)
             if body is not None:
                 self.apriltags.reset_task()
                 self.apriltag_window_resolved_at = None
@@ -1548,13 +1348,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                     mask_class
                 ]
             clock_now_ns = self.get_clock().now().nanoseconds
-            if self.navigation and self.navigation.active and self.navigation.active.get("guidance"):
-                with state_lock:
-                    _, reason = self.navigation.target_at(clock_now_ns / 1e9)
-                    guidance_status = state['waypoint_guidance']
-                reason = reason or _waypoint_stop_reason(guidance_status)
-                if reason:
-                    return None, DriveDecision.stop(reason)
             camera_age_sec = _effective_source_age_sec(
                 last_image_at, last_image_stamp_ns, now, clock_now_ns
             )
@@ -1650,10 +1443,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 self.get_logger().warning("ignored malformed /task_event JSON")
                 return
             now = time.monotonic()
-            if navigation_mode:
-                with state_lock:
-                    self.on_shared_task_event(event, now)
-                return
             rejection_reason = None
             if args.front_connectome_url or args.connectome360_url or fcn is not None:
                 try:
@@ -1728,21 +1517,6 @@ def run_ros2(args: argparse.Namespace) -> int:
             if task_mode and not rclpy.ok():
                 # A callback interrupted by SIGTERM can resume after its stop.
                 decision = DriveDecision.stop("shutdown")
-            standalone_ready = (navigation_mode and self.standalone.context is not None
-                                and self.standalone.granted)
-            if standalone_ready and not self.standalone.ready(time.monotonic()):
-                decision = DriveDecision.stop("standalone_control_lease_expired")
-            if navigation_mode and not standalone_ready and (self.navigation.active is None
-                                    or self.navigation.expired(time.monotonic())):
-                decision = DriveDecision.stop("navigation_lease_expired")
-            if (self.navigation and self.navigation.active and self.navigation.active.get('guidance')
-                    and (decision.vx or decision.vy or decision.yaw_rate)):
-                with state_lock:
-                    _, reason = self.navigation.target_at(self.get_clock().now().nanoseconds / 1e9)
-                    guidance = state['waypoint_guidance']
-                reason = reason or _waypoint_stop_reason(guidance)
-                if reason:
-                    decision = DriveDecision.stop(reason)
             if (fcn is not None and active is not None and active.selected_mask == 1
                     and (decision.vx or decision.vy or decision.yaw_rate)):
                 now = time.monotonic()
@@ -1796,11 +1570,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                     decision = DriveDecision.stop(reason)
             assert Request is not None
             move = drive_to_sport_move(vx=decision.vx, vy=decision.vy, yaw_rate=decision.yaw_rate)
-            if navigation_mode and not standalone_ready:
-                packet = self.navigation.velocity(move, stamp=self.get_clock().now().nanoseconds / 1e9)
-                if packet is not None:
-                    self.command_publisher.publish(String(data=json.dumps(packet)))
-                return decision
             message = populate_move_request(
                 Request(),
                 move,
@@ -1932,20 +1701,6 @@ def run_ros2(args: argparse.Namespace) -> int:
 
         def _publish_state(self) -> None:
             now = time.monotonic()
-            if navigation_mode:
-                if self.released_sport_publisher is not None:
-                    self.released_sport_publisher.publish(populate_move_request(
-                        Request(), drive_to_sport_move(vx=0, vy=0, yaw_rate=0)))
-                    if now >= self.stop_until:
-                        self.destroy_publisher(self.released_sport_publisher)
-                        self.released_sport_publisher = None
-                failure = self.standalone.failure(now)
-                if failure:
-                    self.abort_active_task(failure)
-                if self.standalone.context is not None:
-                    self.request_task_control()
-            if navigation_mode and self.navigation.expired(now):
-                self.stop_navigation_segment("navigation_lease_expired", error=True)
             self.stop_slam_localization()
             tag_status = None
             if self.apriltags is not None:
@@ -1976,17 +1731,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     if startup_hold
                     else ready_decision
                 )
-                if navigation_mode and self.pending_standalone_report is not None:
-                    drive_decision = DriveDecision.stop("standalone_control_pending")
-                elif navigation_mode and self.standalone.context is None:
-                    if task_active is not None:
-                        drive_decision = self.publish_drive(drive_decision)
-                        self.navigation_status(
-                            "READY" if drive_decision.reason in TRACKING_REASONS else "WAITING",
-                            reason=drive_decision.reason)
-                    else:
-                        drive_decision = DriveDecision.stop("segment_idle")
-                elif task_mode:
+                if task_mode:
                     if task_active is not None:
                         lifecycle_now = (
                             self.apriltag_window_resolved_at
@@ -2096,12 +1841,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                 "drive_reason": drive_decision.reason if drive_decision else None,
                 "ready_reason": self.last_ready_reason if task_mode else None,
                 "task_active": self.tasks.active is not None if self.tasks else None,
-                "navigation_worker": navigation_mode,
-                "waypoint_guidance": dict(state['waypoint_guidance']),
-                "standalone_task_control": (dict(self.standalone.context,
-                    granted=self.standalone.granted) if self.standalone and self.standalone.context else None),
-                "navigation_segment": (self.navigation.identity(self.navigation.active)
-                    if self.navigation and self.navigation.active else None),
                 "performance": performance,
                 "pipeline_timing": pipeline_timing,
                 "cuda_memory": (dict(segmenter.cuda_memory) if args.inference_process
@@ -2279,17 +2018,10 @@ def run_ros2(args: argparse.Namespace) -> int:
                         continue
                     requested_mode = active_path_mask_class(
                         node.tasks.active if node.tasks else None, args.path_mask_class)
-                    guided = bool(node.navigation and node.navigation.active
-                                  and node.navigation.active.get('guidance'))
-                    guidance_packet, guidance_reason = (node.navigation.guidance_at(
-                        node.get_clock().now().nanoseconds / 1e9)
-                        if guided else (None, None))
-                    target_xy = guidance_packet['target_xy'] if guidance_packet else None
-                    guidance_kwargs = guidance_packet or {}
                 kwargs = {"color_order": "rgb", "path_mask_class": requested_mode}
                 if uses_learned_road_policy(args, requested_mode):
                     kwargs['source_stamp'] = _stamp_ns(packet.source_header) / 1e9
-                if planner or guided:
+                if planner:
                     kwargs['detect_road_hazards'] = True
                 if packet.fcn_masks:
                     estimate, fcn_metrics = fcn.plan(masks, stamp=_stamp_ns(packet.source_header)/1e9,
@@ -2301,7 +2033,7 @@ def run_ros2(args: argparse.Namespace) -> int:
                     segmentation_finished_at = time.monotonic()
                 elif args.inference_process:
                     response = segmenter.infer(frame_rgb, _stamp_ns(packet.source_header)/1e9,
-                                               packet.generation, packet.sequence, mode=requested_mode, **guidance_kwargs)
+                                               packet.generation, packet.sequence, mode=requested_mode)
                     result = response['result']
                     segmentation_finished_at = response['segmentation_finished_at']
                     estimates = response['estimates']
@@ -2334,21 +2066,13 @@ def run_ros2(args: argparse.Namespace) -> int:
                     estimates = planner.plan(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR),
                         result.selected_mask, getattr(result, 'road_hazard_mask', np.zeros_like(result.selected_mask)),
                         _stamp_ns(packet.source_header)/1e9, packet.generation, packet.sequence, mode=requested_mode,
-                        building=getattr(result, 'road_building_mask', None), **guidance_kwargs)
-                elif target_xy is not None:
-                    estimates = {key: None for key in smoothers}
-                    estimates[requested_mode] = waypoint_guide.local_plan(result.selected_mask,
-                        getattr(result, 'road_hazard_mask', np.zeros_like(result.selected_mask)),
-                        requested_mode, _stamp_ns(packet.source_header)/1e9, packet.generation, target_xy,
-                        robot_pose=guidance_packet['robot_pose'])
+                        building=getattr(result, 'road_building_mask', None))
                 elif (args.connectome360_url or direct_input) and requested_mode == 1:
                     # The actor supplies velocity directly. Do not derive a
                     # geometric path from an atlas or invent one for telemetry.
                     estimates = {key: None for key in smoothers}
                 else:
                     estimates = extract_path_estimates(result.selected_mask, tuple(smoothers), local_config)
-                if guidance_reason:
-                    estimates = {key: None for key in smoothers}
                 path_updated_at = time.monotonic()
                 recovery_enabled = task_mode and node.drive_config.path_loss_recovery_enabled
                 semantic_missing = {key: recovery_enabled and estimates[key] is None for key in smoothers}
@@ -2363,10 +2087,6 @@ def run_ros2(args: argparse.Namespace) -> int:
                                                    'reason': fcn_metrics['path_status']}
                     state['front_command'] = result.front_command if uses_learned_road_policy(args, requested_mode) else None
                     state['front_metrics'] = result.front_metrics if uses_learned_road_policy(args, requested_mode) else {}
-                    state['waypoint_guidance'] = (
-                        {'ready': False, 'reason': guidance_reason} if guidance_reason else
-                        dict(planner.metrics.get('waypoint_guidance', {})) if planner else
-                        dict(waypoint_guide.metrics)) if guided else {}
                     for mask_class, smoother in smoothers.items():
                         if (uses_connectome(mask_class, planner is not None, state['planner_status'])
                                 != isinstance(smoother, ConnectomePathTracker)):
@@ -2676,7 +2396,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "task-drive",
             "wait for a Cobiz LINE_TRACKING task before direct Unitree Sport control",
         ),
-        ("navigation-worker", "execute leased internal navigation segments without Sport/task ownership"),
     ):
         live = subparsers.add_parser(mode, help=help_text)
         _add_common_arguments(live)
@@ -2696,7 +2415,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             choices=("best_effort", "reliable"),
             default=_env("LINE_TRACKING_INPUT_RELIABILITY", "best_effort"),
         )
-        if mode in ("task-drive", "navigation-worker"):
+        if mode == "task-drive":
             for check in AUTOMATIC_STOP_CHECKS:
                 live.add_argument(
                     "--stop-on-" + check.replace("_", "-"),
@@ -2782,7 +2501,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 "--path-recovery-confirm-frames", type=int,
                 default=_env_int("LINE_TRACKING_PATH_RECOVERY_CONFIRM_FRAMES", 2),
             )
-        if mode in ("task-drive", "navigation-worker"):
+        if mode == "task-drive":
             live.add_argument(
                 "--task-event-topic",
                 default=_env("LINE_TRACKING_TASK_EVENT_TOPIC", "/task_event"),
@@ -2801,10 +2520,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 type=float,
                 default=_env_float("LINE_TRACKING_MAX_DURATION_SEC", 10000.0),
             )
-        if mode == "navigation-worker":
-            live.add_argument("--segment-command-topic", default="/line_tracking/segment_command")
-            live.add_argument("--segment-status-topic", default="/line_tracking/segment_status")
-            live.add_argument("--segment-velocity-topic", default="/line_tracking/command")
     from migrate_tracking_config import validate_environment
     try:
         validate_environment(ENV)
@@ -2841,8 +2556,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 or args.inference_process or args.front_connectome_url):
             parser.error('FCN requires task-drive, Road or Sidewalk, local planner, and exclusive Road backend')
     if args.front_connectome_url:
-        if args.path_mask_class not in (1, 2) or args.path_planner != 'local' or args.inference_process or args.mode == 'navigation-worker':
-            parser.error('front/sidewalk routing requires explicit mask 1 or 2, local planner and no inference process/navigation worker')
+        if args.path_mask_class not in (1, 2) or args.path_planner != 'local' or args.inference_process:
+            parser.error('front/sidewalk routing requires explicit mask 1 or 2, local planner and no inference process')
         if not math.isfinite(args.front_connectome_timeout_sec) or args.front_connectome_timeout_sec <= 0:
             parser.error('positive front connectome timeout required')
     if not math.isfinite(args.telemetry_hz) or not 0 <= args.telemetry_hz <= 50:
@@ -2877,7 +2592,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("output FPS must be finite and positive")
     if args.mode == "mcap" and (not math.isfinite(args.sample_hz) or args.sample_hz <= 0.0):
         parser.error("sample-hz must be finite and positive")
-    if args.mode in ("ros2", "task-drive", "navigation-worker") and args.output_hz <= 0.0:
+    if args.mode in ("ros2", "task-drive") and args.output_hz <= 0.0:
         parser.error("output-hz must be positive")
     if args.mode == "mcap" and (args.start_offset < 0.0 or args.max_frames < 0):
         parser.error("start-offset and max-frames must be non-negative")

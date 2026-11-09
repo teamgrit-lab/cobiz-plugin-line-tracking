@@ -120,3 +120,24 @@ bad capture time followed by a current result, and retired-setting migration.
 Base Compose and all six maintained overrides resolve with `.env.example`; the
 flow-planner check uses a placeholder bundle hash only for interpolation.
 No Jetson services or physical robot commands were started.
+
+## Navigation integration removal — 2026-11-09
+
+Removed the Navigation Compose override, worker mode, segment/lease and shared
+ownership code, map/pose-based waypoint guidance, dedicated documentation and
+tests. Runtime/container entrypoints retain `ros2` inspection and `task-drive`;
+the offline runtime also retains `mcap`. A regression test verifies that the
+retired worker mode cannot be selected.
+
+Standalone LINE_TRACKING still accepts CoBiz tasks directly, keeps models loaded,
+and handles Road/Sidewalk camera and model routing, path tracking, AprilTag and
+task cancellation as before. The task-drive SLAM STOP behavior and its tests are
+retained. No weights, camera profiles, speed limits or deployment model selections
+were changed. The optional flow planner retains its local road/sidewalk geometry
+and building-cost behavior; only external waypoint/pose inputs were removed.
+
+Regression: **982 passed, 19 skipped, 2 deselected**, using the two pre-existing
+AprilTag exclusions above. The base Compose file and five supported Road overrides
+resolve with `.env.example`; shell syntax and tracked Python syntax checks pass.
+The flow-planner configuration check uses a placeholder bundle hash only for
+interpolation. No Jetson services or physical robot commands were started.

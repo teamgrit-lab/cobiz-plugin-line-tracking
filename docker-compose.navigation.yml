@@ -1,6 +1,0 @@
-# Reuse the existing Jetson model/configuration as a navigation-owned worker.
-# Add after docker-compose.yml and, when used, docker-compose.connectome-flow-planner.yml.
-services:
-  actual-activate:
-    environment:
-      LINE_TRACKING_MODE: navigation-worker

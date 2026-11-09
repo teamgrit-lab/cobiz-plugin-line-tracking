@@ -1,10 +1,8 @@
 # cobiz-plugin-line-tracking
 
-For waypoint-controlled execution from `teamgrit-navigation`, use the new
-[`navigation-worker` integration](docs/navigation.md). It reuses this engine and
-publishes leased internal commands for Navigation segments. The same worker also accepts
-standalone `LINE_TRACKING` tasks with their existing Sport/task lifecycle after acquiring
-exclusive control from Navigation; the model stays loaded across both task types.
+Run standalone `LINE_TRACKING` tasks for Sidewalk and Road with `actual-activate`.
+The model stays loaded between tasks; inference starts only after task acceptance.
+Road model overrides add the selected detector/policy service.
 
 Optional R50-mask + pretrained Flyvis centre-path generation is documented in
 [docs/connectome.md](docs/connectome.md). Its separate planner service returns
@@ -355,12 +353,11 @@ directory and configure the camera and path geometry. The container's AprilTag
 detector supplies `/detections`; `teamgrit-slam` is not required for tag completion.
 
 단독 `LINE_TRACKING` 작업을 시작하면 `/grit_slam/localization/status`에 보존된
-Navigation 세션의 `task_id`와 `map_uuid`로 `STOP`, `grace_sec: 0`을 보낸다.
+기존 SLAM 세션의 `task_id`와 `map_uuid`로 `STOP`, `grace_sec: 0`을 보낸다.
 SLAM이 `STOPPED` 또는 `ERROR`를 보고할 때까지 1초 간격으로 재요청하며, 작업 중
-새 `STARTING`/`READY` 상태가 도착해도 즉시 정지를 요청한다. `navigation-worker`는
-단독 작업의 제어권을 승인받은 뒤에만 요청한다. 작업 종료 시 SLAM을 자동 재시작하지
-않으며, 지도 자세가 필요한 Navigation 소유 구간은 SLAM을 유지한다. SLAM이 없는
-환경에서는 상태를 기다리며 작업 시작을 차단하지 않는다.
+새 `STARTING`/`READY` 상태가 도착해도 즉시 정지를 요청한다. 작업 종료 시 SLAM을
+자동 재시작하지 않는다. SLAM이 없는 환경에서는 상태를 기다리며 작업 시작을
+차단하지 않는다.
 
 ```bash
 cp .env.example .env

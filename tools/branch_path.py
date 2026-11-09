@@ -259,7 +259,6 @@ class BranchSelector:
         self._single_hits = 0
         self._locked_at = 0.0
         self._last_update = -math.inf
-        self._base_pose = None
         self._status = {
             "preference": self.config.branch_preference,
             "state": "idle",
@@ -274,26 +273,12 @@ class BranchSelector:
     def metrics(self) -> dict:
         return dict(self._status)
 
-    def update(self, estimate: LocalPathEstimate | None, now: float, *, target_xy=None, robot_pose=None) -> BranchChoice:
-        if self.config.branch_preference == "center" and target_xy is None:
+    def update(self, estimate: LocalPathEstimate | None, now: float) -> BranchChoice:
+        if self.config.branch_preference == "center":
             return BranchChoice(estimate)
-        self._status["preference"] = "waypoint" if target_xy is not None else self.config.branch_preference
+        self._status["preference"] = self.config.branch_preference
         fresh = math.isfinite(now) and now > self._last_update
         if fresh:
-            if robot_pose is not None and self._base_pose is not None:
-                before, after = self._base_pose, robot_pose
-                def rebase(path):
-                    if path is None:
-                        return None
-                    def transform(points):
-                        c, s = math.cos(before[2]), math.sin(before[2])
-                        world = points @ np.array([[c, s], [-s, c]]) + before[:2]
-                        c, s = math.cos(after[2]), math.sin(after[2])
-                        return (world-after[:2]) @ np.array([[c, -s], [s, c]])
-                    return replace(path, centers=transform(path.centers), points=transform(path.points))
-                self._locked, self._pending = rebase(self._locked), rebase(self._pending)
-                self._alternatives = tuple(rebase(path) for path in self._alternatives)
-            self._base_pose = robot_pose
             self._last_update = now
         observation = estimate.branch_observation if estimate is not None else None
         detected = observation is not None and bool(observation.branches)
@@ -414,28 +399,12 @@ class BranchSelector:
         if not candidates:
             self._pending, self._hits = None, 0
             return stop("branch_no_usable_path")
-        if target_xy is not None:
-            # Compare bearings at one common forward range. A longer visible
-            # arm must not win merely because its endpoint is farther ahead.
-            end_x = min(path.centers[-1, 0] for _, path in candidates)
-            target_heading = math.atan2(target_xy[1], target_xy[0])
-            def score(item):
-                y = np.interp(end_x, item[1].centers[:, 0], item[1].centers[:, 1])
-                heading = math.atan2(y, end_x)
-                return abs(math.atan2(math.sin(heading-target_heading), math.cos(heading-target_heading)))
-            ranked = sorted(candidates, key=score)
-            if len(ranked) > 1 and score(ranked[1]) - score(ranked[0]) < math.radians(3):
-                self._pending, self._hits = None, 0
-                return stop("waypoint_branch_ambiguous")
-            heading, preferred = ranked[0]
-            applied, selected_reason = True, "waypoint_branch_selected"
-        else:
-            # Robot coordinates are y-left: larger bearings select the left arm.
-            choose = max if self.config.branch_preference == "left" else min
-            heading, preferred = choose(candidates, key=lambda item: item[0])
-            applied = heading == choose(observation.headings)
-            selected_reason = (f"{self.config.branch_preference}_branch_selected"
-                               if applied else f"{self.config.branch_preference}_unusable_fallback")
+        # Robot coordinates are y-left: larger bearings select the left arm.
+        choose = max if self.config.branch_preference == "left" else min
+        heading, preferred = choose(candidates, key=lambda item: item[0])
+        applied = heading == choose(observation.headings)
+        selected_reason = (f"{self.config.branch_preference}_branch_selected"
+                           if applied else f"{self.config.branch_preference}_unusable_fallback")
         if fresh:
             self._hits = (
                 self._hits + 1

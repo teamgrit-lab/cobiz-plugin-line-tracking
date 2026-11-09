@@ -35,8 +35,7 @@ def perception_worker(pipe, config, planner_values):
             estimates = planner.plan(cv2.cvtColor(request['rgb'], cv2.COLOR_RGB2BGR),
                 result.selected_mask, result.road_hazard_mask,
                 request['stamp'], request['generation'], request['sequence'], mode=request['mode'],
-                building=getattr(result, 'road_building_mask', None), target_xy=request.get('target_xy'),
-                robot_pose=request.get('robot_pose'))
+                building=getattr(result, 'road_building_mask', None))
             memory = {}
             if model.device.type == 'cuda':
                 import torch
@@ -85,10 +84,9 @@ class PerceptionProcess:
     def reset(self):
         self.needs_reset = True
 
-    def infer(self, rgb, stamp, generation, sequence, *, mode=2, target_xy=None, robot_pose=None):
+    def infer(self, rgb, stamp, generation, sequence, *, mode=2):
         self.pipe.send({'rgb': rgb, 'stamp': stamp, 'generation': generation,
-                        'sequence': sequence, 'reset': self.needs_reset, 'mode': mode,
-                        'target_xy': target_xy, 'robot_pose': robot_pose})
+                        'sequence': sequence, 'reset': self.needs_reset, 'mode': mode})
         self.needs_reset = False
         reply = self._receive(self.timeout)
         if (reply.get('sequence') != sequence or reply.get('generation') != generation

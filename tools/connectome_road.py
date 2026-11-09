@@ -2,7 +2,7 @@
 
 The optical-flow-pretrained connectome is not a pretrained road classifier.
 Offline road supervision updates only the convolutional readout.
-Detection receives camera pixels only. Map/pose guidance belongs to the planner.
+Detection receives camera pixels only; map and pose are not detector inputs.
 """
 from pathlib import Path
 import hashlib

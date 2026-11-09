@@ -70,7 +70,6 @@ mode="${LINE_TRACKING_MODE:-ros2}"
 case "${mode}" in
   ros2) ;;
   task-drive) ;;
-  navigation-worker) ;;
   *)
     echo "[line-tracking] unsupported LINE_TRACKING_MODE: ${mode}" >&2
     exit 1

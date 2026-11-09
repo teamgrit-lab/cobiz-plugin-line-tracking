@@ -1,18 +1,17 @@
-"""Standalone tasks stop the retained Navigation localization session."""
+"""Standalone tasks stop the retained SLAM localization session."""
 
 import json
 
 import pytest
 
 from test_apriltag_task_stop_ros import Message, RosHarness, SPORT, debug
-from test_navigation_worker_ros import grant_legacy, legacy, run, send
 
 
 STATUS = "/grit_slam/localization/status"
 COMMAND = "/grit_slam/localization/command"
 
 
-def localization(ros, state="READY", task_id="navigation-1", map_uuid="map-1"):
+def localization(ros, state="READY", task_id="localization-1", map_uuid="map-1"):
     ros.subscriptions[STATUS](Message(json.dumps({
         "state": state, "task_id": task_id, "map_uuid": map_uuid,
     })))
@@ -22,7 +21,7 @@ def commands(ros):
     return [json.loads(message.data) for message in ros.published[COMMAND]]
 
 
-def stop(task_id="navigation-1", map_uuid="map-1"):
+def stop(task_id="localization-1", map_uuid="map-1"):
     return dict(command="STOP", task_id=task_id, map_uuid=map_uuid, grace_sec=0)
 
 
@@ -66,17 +65,17 @@ def test_late_slam_status_and_restarts_are_stopped_only_during_task(monkeypatch)
         localization(ros, "STARTING")
         assert commands(ros) == [stop()]
         localization(ros, "STOPPED")
-        localization(ros, task_id="navigation-2", map_uuid="map-2")
-        assert commands(ros) == [stop(), stop("navigation-2", "map-2")]
+        localization(ros, task_id="localization-2", map_uuid="map-2")
+        assert commands(ros) == [stop(), stop("localization-2", "map-2")]
         node.on_task_event(Message(json.dumps({
             "type": "TASK_ABORTED", "task_id": "tag-stop-1",
         })))
-        localization(ros, task_id="navigation-3", map_uuid="map-3")
+        localization(ros, task_id="localization-3", map_uuid="map-3")
         ros.now = 1.1
         node.publish_state()
-        assert commands(ros) == [stop(), stop("navigation-2", "map-2")]
+        assert commands(ros) == [stop(), stop("localization-2", "map-2")]
         ros.start(task_id="next-task")
-        assert commands(ros)[-1] == stop("navigation-3", "map-3")
+        assert commands(ros)[-1] == stop("localization-3", "map-3")
         assert all(command["command"] == "STOP" for command in commands(ros))
 
     ros.run(scenario)
@@ -85,9 +84,9 @@ def test_late_slam_status_and_restarts_are_stopped_only_during_task(monkeypatch)
 @pytest.mark.parametrize("raw", [
     "invalid-json", "null", "[]", "42", "{}",
     '{"state":"READY","map_uuid":"map-1"}',
-    '{"state":"READY","task_id":"navigation-1"}',
+    '{"state":"READY","task_id":"localization-1"}',
     '{"state":"READY","task_id":true,"map_uuid":"map-1"}',
-    '{"state":"READY","task_id":"navigation-1","map_uuid":[]}',
+    '{"state":"READY","task_id":"localization-1","map_uuid":[]}',
 ])
 def test_malformed_status_cannot_replace_known_session(monkeypatch, raw):
     ros = RosHarness(monkeypatch)
@@ -118,33 +117,6 @@ def test_inactive_localization_and_rejected_tasks_do_not_send_stop(monkeypatch, 
         assert commands(ros) == []
 
     ros.run(scenario)
-
-
-@pytest.mark.parametrize("granted", [False, True])
-def test_shared_worker_stops_slam_only_after_standalone_grant(monkeypatch, granted):
-    ros = RosHarness(monkeypatch)
-
-    def scenario(node):
-        localization(ros)
-        send(ros)  # Navigation-owned segments require SLAM guidance.
-        localization(ros)
-        node.publish_state()
-        assert commands(ros) == []
-        send(ros, "STOP")
-        legacy(ros)
-        localization(ros)
-        node.publish_state()
-        assert commands(ros) == []
-        grant_legacy(ros, "GRANTED" if granted else "REJECTED")
-        assert commands(ros) == ([stop()] if granted else [])
-        if granted:
-            topics = [topic for topic, _ in ros.events]
-            assert topics.index(COMMAND) < topics.index(SPORT)
-            legacy(ros, "TASK_ABORTED")
-            localization(ros, task_id="next-navigation")
-            assert commands(ros) == [stop()]
-
-    run(ros, scenario)
 
 
 def test_slam_publication_failure_aborts_motion(monkeypatch):

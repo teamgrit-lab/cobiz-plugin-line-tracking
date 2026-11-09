@@ -68,29 +68,6 @@ def test_commands_do_not_require_motion_sensors_or_restart_acceleration(monkeypa
     ros.run(scenario, '--path-planner', planner, '--path-mask-class', str(mode))
 
 
-@pytest.mark.parametrize('mask', [1, 2])
-def test_navigation_worker_does_not_require_motion_sensors_and_keeps_stop(monkeypatch, mask):
-    from test_navigation_worker_ros import run, send, velocity
-    ros = setup(monkeypatch)
-
-    def scenario(node):
-        ros.now = 2.1
-        send(ros, mask=mask)
-        complete_inference(node, ros)
-        first = velocity(ros)
-        assert first['vx'] > 0
-        assert '/dog_odom' not in ros.subscriptions
-        assert '/dog_imu_raw' not in ros.subscriptions
-        ros.now += .4
-        node.publish_state()
-        assert velocity(ros)['vx'] == first['vx']
-        send(ros, 'STOP', mask=mask)
-        assert velocity(ros)['vx'] == velocity(ros)['yaw_rate'] == 0
-        assert SPORT not in ros.published
-
-    run(ros, scenario)
-
-
 def test_process_results_keep_parent_cancellation_without_motion_gates(monkeypatch):
     ros = setup(monkeypatch)
     closed = []
